@@ -115,6 +115,8 @@ lf service systemd   # print a unit that keeps `lf run` running (or: launchd)
 
 lf web               # dashboard at http://127.0.0.1:7433, until Ctrl-C
 lf web --port 8080   # a different port
+lf web --listen 0.0.0.0:7433 --token-file ~/.loompa-forge/web-token \
+  --allowed-host tools.example   # on a headless box, reached from a tailnet (see below)
 ```
 
 Inside a task's window, `id` defaults to that task, so an interactive
@@ -167,6 +169,44 @@ with the install command to copy, and **Use this one** to make one the default)
 above what `lf doctor` finds (tmux, git, task files), with a banner when
 something needs attention. lf doesn't run the installs for you: they're global
 `npm install -g` commands and each agent needs you to sign in once.
+
+### On a headless box (your tailnet)
+
+By default `lf web` and `lf start` bind to 127.0.0.1 only: the dashboard exists
+in your machine's loopback, checked with a loopback `Host` requirement (which
+defeats DNS rebinding), a per-run token POSTs must carry, and a loopback
+`Origin`. On a server without a screen there's nothing to open 127.0.0.1, so
+`--listen` names the address to bind instead (`0.0.0.0:7433` for every
+interface). A non-loopback bind refuses to start without two more things:
+
+- `--token-file <path>` (or `--token <value>`, but the file keeps the secret
+  out of argv, shell history and `ps`): a shared secret every request must
+  carry — `Authorization: Bearer <t>`. Make the file 0600 and put a long
+  random string in it, e.g. `openssl rand -hex 16 > ~/.loompa-forge/web-token`.
+- `--allowed-host <name>` (repeatable): the exact `Host` the browser sends
+  when it reaches the dashboard; requests with any other Host are rejected.
+  An entry alone allows any port on that host; `host:port` pins the port.
+
+The first page load may pass the token as `?token=<t>`; the page keeps it in
+memory only (never localStorage or a cookie) and strips it from the URL, then
+sends it with every request. The per-run token and Origin checks POSTs already
+had stay in place on top of that.
+
+On the headless box:
+
+```sh
+lf web --listen 0.0.0.0:7433 --token-file ~/.loompa-forge/web-token \
+  --allowed-host tools-your-hostname.ts.net --no-open
+```
+
+From another machine on the tailnet, open
+`http://tools-your-hostname.ts.net:7433/?token=<the file's content>` once;
+from then on `http://tools-your-hostname.ts.net:7433` works on its own while
+that browser tab is open. (`lf start` takes the same flags, and its runner
+stops with the dashboard, as always.) The dashboard speaks plain HTTP: put
+`tailscale serve` in front of it if you want HTTPS. And the quietest pattern
+is still SSH: `ssh -L 7433:127.0.0.1:7433 your-box`, with `lf web` keeping
+every original protection untouched.
 
 A task that is still *Waiting* has an **Edit** button: change what it does, the
 project, when it starts, or what happens when it's done (not once it has
