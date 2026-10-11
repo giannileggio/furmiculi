@@ -345,7 +345,25 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const TOKEN = document.querySelector('meta[name="lf-token"]').content;
+// The token: embedded at startup (loopback mode) or taken from `?token=` on
+// the first load of a remote dashboard, so it stays in memory only — never
+// localStorage or a cookie — and is then stripped from the address bar.
+const TOKEN = (() => {
+  const given = new URLSearchParams(location.search).get("token");
+  if (given) {
+    const url = new URL(location.href);
+    url.searchParams.delete("token");
+    history.replaceState(null, "", url);
+    return given;
+  }
+  return document.querySelector('meta[name="lf-token"]').content;
+})();
+// Sent with every request: the per-run token (defeats cross-site forgery)
+// and, on a remote dashboard, the bearer token the server gates on.
+const AUTH = () => ({
+  "X-LF-Token": TOKEN, Authorization: `Bearer ${TOKEN}`,
+  Authorization: `Bearer ${TOKEN}`,
+});
 const STAT_LABELS = [
   ["pending", "Waiting"], ["running", "Working"], ["done", "Done"],
   ["failed", "Failed"], ["cancelled", "Cancelled"], ["needs_review", "Needs review"],
@@ -483,7 +501,7 @@ const SCHEDULE_COLS = [
 async function refresh() {
   let state;
   try {
-    const res = await fetch("/api/state");
+    const res = await fetch("/api/state", { headers: AUTH() });
     state = await res.json();
   } catch (e) {
     return; // keep showing the last good state
@@ -557,7 +575,7 @@ async function showLogs(id) {
   logsBody.textContent = "loading…";
   logsOverlay.classList.add("active");
   try {
-    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/logs`);
+    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/logs`, { headers: AUTH() });
     const data = await res.json();
     logsBody.textContent = res.ok ? (data.log || "(empty)") : `error: ${data.error}`;
   } catch (e) {
@@ -581,7 +599,7 @@ async function runAction(id, action) {
   try {
     const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/${action}`, {
       method: "POST",
-      headers: { "X-LF-Token": TOKEN, ...(body ? { "Content-Type": "application/json" } : {}) },
+      headers: { "X-LF-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, ...(body ? { "Content-Type": "application/json" } : {}) },
       body,
     });
     const data = await res.json();
@@ -625,7 +643,7 @@ async function runnerAction(what, btn) {
   if (what === "stop" && !confirm("Stop the runner? Work already underway keeps going, but nothing new starts until you turn it back on.")) return;
   btn.disabled = true;
   try {
-    const res = await fetch(`/api/runner/${what}`, { method: "POST", headers: { "X-LF-Token": TOKEN } });
+    const res = await fetch(`/api/runner/${what}`, { method: "POST", headers: { "X-LF-Token": TOKEN, Authorization: `Bearer ${TOKEN}` } });
     const data = await res.json();
     if (!res.ok) toast(data.error || `couldn't ${what} the runner`);
     else toast(what === "start" ? "Runner started" : "Runner stopped", true);
@@ -644,12 +662,12 @@ const agentList = document.getElementById("agent-list");
 const ICONS = { ok: "✓", warn: "⚠", fail: "✗" };
 
 async function loadSetup() {
-  const res = await fetch("/api/doctor");
+  const res = await fetch("/api/doctor", { headers: AUTH() });
   return (await res.json()).checks;
 }
 
 async function loadAgents() {
-  const res = await fetch("/api/agents");
+  const res = await fetch("/api/agents", { headers: AUTH() });
   return (await res.json()).agents;
 }
 
@@ -690,7 +708,7 @@ async function useAgent(name, btn) {
   try {
     const res = await fetch("/api/agents/default", {
       method: "POST",
-      headers: { "X-LF-Token": TOKEN, "Content-Type": "application/json" },
+      headers: { "X-LF-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({ agent: name }),
     });
     const data = await res.json();
@@ -821,7 +839,7 @@ function closeForm() {
 
 async function editTask(id) {
   try {
-    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}`);
+    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}`, { headers: AUTH() });
     const data = await res.json();
     if (!res.ok) { toast(data.error || "can't edit that task"); refresh(); return; }
     openForm("task", data);
@@ -831,7 +849,7 @@ async function editTask(id) {
 async function scheduleAction(id, verb) {
   if (verb === "edit") {
     try {
-      const res = await fetch(`/api/schedules/${encodeURIComponent(id)}`);
+      const res = await fetch(`/api/schedules/${encodeURIComponent(id)}`, { headers: AUTH() });
       const data = await res.json();
       if (!res.ok) { toast(data.error || "can't edit that schedule"); return; }
       openForm("schedule", data);
@@ -840,7 +858,7 @@ async function scheduleAction(id, verb) {
   }
   if (verb === "delete" && !confirm(`Delete the schedule ${id}? Tasks it already added stay in the queue.`)) return;
   try {
-    const res = await fetch(`/api/schedules/${encodeURIComponent(id)}/${verb}`, { method: "POST", headers: { "X-LF-Token": TOKEN } });
+    const res = await fetch(`/api/schedules/${encodeURIComponent(id)}/${verb}`, { method: "POST", headers: { "X-LF-Token": TOKEN, Authorization: `Bearer ${TOKEN}` } });
     const data = await res.json();
     if (!res.ok) toast(`${id}: ${data.error || "failed"}`);
   } catch (e) { toast(`${id}: ${e}`); }
@@ -867,7 +885,7 @@ $("f-prompt").addEventListener("keydown", (e) => {
 async function post(path, body) {
   const res = await fetch(path, {
     method: "POST",
-    headers: { "X-LF-Token": TOKEN, "Content-Type": "application/json" },
+    headers: { "X-LF-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   return { ok: res.ok, data: await res.json() };

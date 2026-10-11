@@ -7,13 +7,29 @@
 //! `POST /api/tasks/<id>/edit` for a task that hasn't started, schedule
 //! create/edit/pause/resume/delete under `/api/schedules`, `POST
 //! /api/runner/{start,stop}`, and `GET /api/doctor` and `/api/agents` (plus
-//! `POST /api/agents/default`) for the setup views. Only binds to 127.0.0.1, but a web page you visit can still send
-//! requests there, so every request must carry a loopback `Host` (defeats DNS
-//! rebinding), and POSTs a per-run token that only the dashboard page itself
-//! can read (defeats cross-site forgery) and a loopback `Origin`, if any.
+//! `POST /api/agents/default`) for the setup views.
+//!
+//! Two ways to listen, both guarded:
+//!
+//! - **Loopback (the default, `127.0.0.1:<port>`).** A web page you visit can
+//!   still send requests there, so every request must carry a loopback `Host`
+//!   (defeats DNS rebinding), and POSTs a per-run token that only the
+//!   dashboard page itself can read (defeats cross-site forgery) and a
+//!   loopback `Origin`, if any.
+//! - **Remote (`--listen` with a non-loopback address, e.g. `0.0.0.0:7433`).**
+//!   For a headless box reached from browsers on other machines (a tailnet).
+//!   Every request — not just POSTs — must carry a shared bearer token
+//!   (`Authorization: Bearer …`; the first page load may pass it as
+//!   `?token=`, which the page keeps in memory only and strips from the URL),
+//!   and every `Host` must match one exact `--allowed-host` entry (defeats
+//!   DNS rebinding over the wide bind). The per-run POST token and Origin
+//!   checks stay on top of the bearer gate. A non-loopback bind refuses to
+//!   start without a token and an allowlist.
 
 use std::cmp::Reverse;
 use std::io::{IsTerminal, Read};
+use std::path::PathBuf;
+
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -34,9 +50,26 @@ use crate::task::{Status, Task, fmt_cost, fmt_tokens, now};
 
 #[derive(clap::Args)]
 pub struct WebArgs {
-    /// Port to listen on.
+    /// Port to listen on (ignored when --listen names the port itself).
     #[arg(long, default_value_t = 7433)]
     port: u16,
+    /// Address to bind, e.g. `0.0.0.0:7433` to serve other machines (a
+    /// tailnet). Default, and unless the address is non-loopback, loopback
+    /// checks apply unchanged.
+    #[arg(long)]
+    listen: Option<String>,
+    /// File with the bearer token for `--listen` (created/made 0600 by the
+    /// operator; read once at startup, kept out of argv).
+    #[arg(long)]
+    token_file: Option<PathBuf>,
+    /// Bearer token for `--listen`, right on the command line (--token-file
+    /// is preferred: command lines end up in shell history and ps output).
+    #[arg(long)]
+    token: Option<String>,
+    /// Host an HTTP `Host` header must carry exactly to be served, for
+    /// non-loopback `--listen` binds. Repeatable. `host` or `host:port`.
+    #[arg(long = "allowed-host")]
+    allowed_hosts: Vec<String>,
     /// Don't open the dashboard in a browser.
     #[arg(long)]
     no_open: bool,
@@ -57,6 +90,11 @@ struct Ctx<'a> {
     index: String,
     /// The git repo `lf web` was started in, offered first in the new-task form.
     cwd_repo: Option<String>,
+    /// A non-loopback bind: requests additionally need the bearer token and
+    /// an allowlisted `Host`.
+    remote: bool,
+    /// Exact `Host` allowlist for a remote bind.
+    allowed_hosts: Vec<String>,
 }
 
 struct Reply {
@@ -79,42 +117,150 @@ fn json_reply(status: u16, body: String) -> Reply {
 
 pub fn serve(home: &Home, args: WebArgs) -> Result<()> {
     home.ensure_initialized()?;
-    let (server, addr) = bind(&args)?;
-    run_server(home, server, &addr, &args)
+    let serving = setup(&args)?;
+    let server = bind(&serving)?;
+    run_server(home, server, &serving, &args)
 }
 
 /// `lf start`: the runner and the dashboard in one command. The runner
 /// stops when the dashboard does, so there's nothing to clean up.
 pub fn start(home: &Home, args: WebArgs) -> Result<()> {
     home.ensure_initialized()?;
-    let (server, addr) = bind(&args)?;
+    let serving = setup(&args)?;
+    let server = bind(&serving)?;
     let _runner = if home.runner_alive() {
         println!("The runner is already running.");
         None
     } else {
         Some(spawn_runner(home)?)
     };
-    run_server(home, server, &addr, &args)
+    run_server(home, server, &serving, &args)
 }
 
-fn bind(args: &WebArgs) -> Result<(Server, String)> {
-    let addr = format!("127.0.0.1:{}", args.port);
-    let server = Server::http(&addr).map_err(|e| {
+/// How the dashboard listens. `remote` is a wide, headless-style bind:
+/// requests then have to prove themselves with a bearer token and an
+/// allowlisted `Host`, on top of the loopback-era checks.
+#[derive(Debug)]
+struct Serving {
+    addr: String,
+    remote: bool,
+    /// Shared secret for a remote bind; None on the loopback default, where
+    /// the per-run token in the page is the only secret.
+    bearer: Option<String>,
+    /// Exact `Host` allowlist for a remote bind.
+    allowed_hosts: Vec<String>,
+}
+
+fn setup(args: &WebArgs) -> Result<Serving> {
+    let addr = args
+        .listen
+        .clone()
+        .unwrap_or_else(|| format!("127.0.0.1:{}", args.port));
+    let remote = !is_loopback_authority(host_of(&addr));
+    let bearer = match (&args.token_file, &args.token) {
+        (Some(path), None) => Some(read_token_file(path)?),
+        (None, Some(t)) => Some(t.clone()),
+        (Some(_), Some(_)) => {
+            anyhow::bail!("give the token one way: --token-file or --token, not both")
+        }
+        (None, None) => None,
+    };
+    if remote {
+        let Some(bearer) = bearer else {
+            anyhow::bail!(
+                "{addr} is not a loopback bind: browsers on other machines could reach it, \
+                 so it needs a shared secret. Give one with --token-file <file> (preferred) \
+                 or --token <value>, and set --allowed-host to the names those browsers use"
+            );
+        };
+        if args.allowed_hosts.is_empty() {
+            anyhow::bail!(
+                "{addr} is not a loopback bind: without --allowed-host no Host header \
+                 could ever be trusted, so every request would be rejected. Name the \
+                 hosts that should be allowed, e.g. --allowed-host tools.example"
+            );
+        }
+        Ok(Serving {
+            addr,
+            remote: true,
+            bearer: Some(bearer),
+            allowed_hosts: args.allowed_hosts.clone(),
+        })
+    } else {
+        Ok(Serving {
+            addr,
+            remote: false,
+            bearer: None,
+            allowed_hosts: Vec::new(),
+        })
+    }
+}
+
+/// Reads the token file: one line, trimmed. It should be 0600; a group- or
+/// world-readable one is refused, the way a shared secret shouldn't sit.
+fn read_token_file(path: &std::path::Path) -> Result<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("reading {}", contract_tilde(path)))?;
+    let mode = std::fs::metadata(path)
+        .with_context(|| format!("checking {}", contract_tilde(path)))?
+        .permissions()
+        .mode();
+    if mode & 0o077 != 0 {
+        anyhow::bail!(
+            "{} must be readable only by you (chmod 600): a token the whole group \
+             or everyone can read isn't a secret",
+            contract_tilde(path)
+        );
+    }
+    let token = raw.trim();
+    if token.is_empty() {
+        anyhow::bail!(
+            "{} is empty: put a token in it (any long random string)",
+            contract_tilde(path)
+        );
+    }
+    Ok(token.to_string())
+}
+
+/// `127.0.0.1:7433`, `0.0.0.0:7433`, `[::1]:7433` — the host part alone.
+fn host_of(addr: &str) -> &str {
+    match addr.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(rest),
+        None => match addr.rsplit_once(':') {
+            // `127.0.0.1:7433`, but not bare IPv6 (`::1` is handled exactly
+            // by the match in `is_loopback_authority`).
+            Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
+                host
+            }
+            _ => addr,
+        },
+    }
+}
+
+fn bind(serving: &Serving) -> Result<Server> {
+    let addr = &serving.addr;
+    Server::http(addr.as_str()).map_err(|e| {
         anyhow::anyhow!(
             "couldn't listen on {addr}: {e}. If `lf web` or `lf start` is already running, \
-             open http://{addr}; otherwise pick another port with --port"
+             open http://{addr}; otherwise pick another address with --listen"
         )
-    })?;
-    Ok((server, addr))
+    })
 }
 
-fn run_server(home: &Home, server: Server, addr: &str, args: &WebArgs) -> Result<()> {
+fn run_server(home: &Home, server: Server, serving: &Serving, args: &WebArgs) -> Result<()> {
     // Ctrl-C / SIGTERM request a clean stop: the signal handler only sets a
     // flag, so the request loop is unblocked below instead of dying in the
     // middle of a request.
     run::install_shutdown_handler();
     let server = Arc::new(server);
-    let token = random_token()?;
+    // On a remote bind the shared secret is the token: the page holds it in
+    // memory (from `?token=` on first load) and sends it as both the bearer
+    // and the POST token. On loopback it stays the per-run random token.
+    let token = match &serving.bearer {
+        Some(b) => b.clone(),
+        None => random_token()?,
+    };
     let cwd_repo = std::env::current_dir()
         .ok()
         .and_then(|cwd| crate::git::repo_root(&cwd).ok())
@@ -124,9 +270,23 @@ fn run_server(home: &Home, server: Server, addr: &str, args: &WebArgs) -> Result
         index: INDEX_HTML.replace("__LF_TOKEN__", &token),
         token,
         cwd_repo,
+        remote: serving.remote,
+        allowed_hosts: serving.allowed_hosts.clone(),
     };
+    let addr = &serving.addr;
     let url = format!("http://{addr}");
     println!("Dashboard: {url}  (Ctrl-C to stop)");
+    if serving.remote {
+        println!(
+            "Serving other machines: every request needs the bearer token, and a Host of {}.",
+            serving
+                .allowed_hosts
+                .iter()
+                .map(|h| h.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        );
+    }
     if !args.no_open && std::io::stdout().is_terminal() {
         open_browser(&url);
     }
@@ -235,13 +395,24 @@ fn handle(ctx: &Ctx, mut request: Request) {
     let host = header("Host");
     let origin = header("Origin");
     let token = header(TOKEN_HEADER);
+    let authorization = header("Authorization");
     let is_post = *request.method() == Method::Post;
 
-    let result = if !host.as_deref().is_some_and(is_loopback_authority) {
-        reply(403, "text/plain", "forbidden: not a loopback host")
+    let result = if !host.as_deref().is_some_and(|h| hosts_ok(ctx, h)) {
+        if ctx.remote {
+            reply(403, "text/plain", "forbidden: not an allowed host")
+        } else {
+            reply(403, "text/plain", "forbidden: not a loopback host")
+        }
+    } else if !bearer_ok(ctx, request.method(), &url, authorization.as_deref()) {
+        reply(
+            401,
+            "text/plain",
+            "unauthorized: missing or wrong bearer token",
+        )
     } else if is_post
-        && !(origin.as_deref().is_none_or(is_loopback_origin)
-            && token.as_deref().is_some_and(|t| t == ctx.token))
+        && !(origin.as_deref().is_none_or(|o| origins_ok(ctx, o))
+            && token.as_deref().is_some_and(|t| same_token(t, &ctx.token)))
     {
         reply(403, "text/plain", "forbidden: missing or wrong token")
     } else {
@@ -364,6 +535,93 @@ fn is_loopback_origin(origin: &str) -> bool {
     origin
         .strip_prefix("http://")
         .is_some_and(is_loopback_authority)
+}
+
+/// Which `Host` headers this server accepts: loopback names for a loopback
+/// bind, exact allowlist entries for a remote one.
+fn hosts_ok(ctx: &Ctx, host: &str) -> bool {
+    if ctx.remote {
+        host_allowed(host, &ctx.allowed_hosts)
+    } else {
+        is_loopback_authority(host)
+    }
+}
+
+/// Which `Origin` headers a POST accepts: loopback for either mode; a remote
+/// bind additionally accepts an origin whose host is on its allowlist (the
+/// dashboard page itself, loaded from `http://tools.example:7433`).
+fn origins_ok(ctx: &Ctx, origin: &str) -> bool {
+    is_loopback_origin(origin) || (ctx.remote && origin_allowed(origin, &ctx.allowed_hosts))
+}
+
+/// The bearer gate for a remote bind: `Authorization: Bearer <t>` on every
+/// route except the dashboard page on first load, which may instead carry
+/// the token as `?token=` (the page then keeps it in memory and strips it
+/// from the URL). Nothing to check on a loopback bind.
+fn bearer_ok(ctx: &Ctx, method: &Method, url: &str, authorization: Option<&str>) -> bool {
+    if !ctx.remote {
+        return true;
+    }
+    match authorization.and_then(|a| a.strip_prefix("Bearer ")) {
+        Some(supplied) => same_token(supplied, &ctx.token),
+        None => {
+            *method == Method::Get
+                && url.split('?').next() == Some("/")
+                && query_param(url, "token").is_some_and(|t| same_token(t, &ctx.token))
+        }
+    }
+}
+
+/// Does a `Host` header match one allowlist entry exactly? An entry may name
+/// a port, in which case the port must match too; a bare `host` entry allows
+/// any port, like agent-deck's.
+fn host_allowed(host: &str, allowed: &[String]) -> bool {
+    let (host, port) = split_authority(host);
+    allowed.iter().any(|entry| {
+        let (entry_host, entry_port) = split_authority(entry);
+        host.eq_ignore_ascii_case(entry_host) && entry_port.is_none_or(|p| Some(p) == port)
+    })
+}
+
+/// A request's `Origin` matching the allowlist (scheme http or https).
+fn origin_allowed(origin: &str, allowed: &[String]) -> bool {
+    (["http://", "https://"]).into_iter().any(|scheme| {
+        origin
+            .strip_prefix(scheme)
+            .is_some_and(|a| host_allowed(a, allowed))
+    })
+}
+
+/// An authority, `host:port` or `[h:…]:port`, split into its host and port.
+/// (IPv6 without a port and with no bracket is not split.)
+fn split_authority(authority: &str) -> (&str, Option<&str>) {
+    if let Some(rest) = authority.strip_prefix('[') {
+        if let Some((host, tail)) = rest.split_once(']') {
+            return (host, tail.strip_prefix(':').filter(|p| !p.is_empty()));
+        }
+        return (authority, None);
+    }
+    match authority.rsplit_once(':') {
+        Some((host, port))
+            if !host.contains(':')
+                && !port.is_empty()
+                && port.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            (host, Some(port))
+        }
+        _ => (authority, None),
+    }
+}
+
+/// Same string, without telling an attacker where it first differs: all
+/// bytes are folded into one number in the same time either way.
+fn same_token(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut diff = (a.len() ^ b.len()) as u8;
+    for i in 0..a.len().max(b.len()) {
+        diff |= a.get(i).unwrap_or(&0) ^ b.get(i).unwrap_or(&0);
+    }
+    diff == 0
 }
 
 /// 128 random bits from the OS, hex-encoded.
@@ -883,6 +1141,119 @@ mod tests {
         assert_eq!(a.len(), 32);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn token_equality_is_exact_and_whole_string() {
+        assert!(same_token("abc", "abc"));
+        assert!(!same_token("abc", "abd"));
+        assert!(!same_token("abc", "abcd"));
+        assert!(!same_token("abcd", "abc"));
+        assert!(!same_token("", "a"));
+        assert!(same_token("", ""));
+    }
+
+    #[test]
+    fn hosts_match_allowlist_entries_exactly() {
+        let allowed = vec![
+            "toolnet.example".to_string(),
+            "dash.example:8443".to_string(),
+        ];
+        // A bare-entry host, any port.
+        for ok in [
+            "toolnet.example",
+            "toolnet.example:7433",
+            "toolnet.example:1",
+        ] {
+            assert!(host_allowed(ok, &allowed), "{ok}");
+        }
+        // An entry with a port: the port must match too.
+        for bad in [
+            "dash.example:9",
+            "dash.example",
+            "evil.example",
+            "toolnet.evil.example",
+            "eviltoolnet.example",
+            "",
+            "toolnet.example.evil.com",
+        ] {
+            assert!(!host_allowed(bad, &allowed), "{bad}");
+        }
+        // An empty allowlist lets nothing through.
+        assert!(!host_allowed("toolnet.example", &[]));
+    }
+
+    #[test]
+    fn origins_match_allowlist_entries_with_a_scheme() {
+        let allowed = vec!["toolnet.example".to_string()];
+        assert!(origin_allowed("http://toolnet.example:7433", &allowed));
+        assert!(origin_allowed("https://toolnet.example", &allowed));
+        assert!(!origin_allowed("http://evil.example", &allowed));
+        assert!(!origin_allowed("null", &allowed));
+        // No scheme, no match.
+        assert!(!origin_allowed("toolnet.example", &allowed));
+    }
+
+    #[test]
+    fn authorities_split_into_host_and_port() {
+        assert_eq!(
+            split_authority("127.0.0.1:7433"),
+            ("127.0.0.1", Some("7433"))
+        );
+        assert_eq!(
+            split_authority("toolnet.example"),
+            ("toolnet.example", None)
+        );
+        assert_eq!(
+            split_authority("toolnet.example:8443"),
+            ("toolnet.example", Some("8443"))
+        );
+        assert_eq!(split_authority("[::1]:7433"), ("::1", Some("7433")));
+        assert_eq!(split_authority("[::1]"), ("::1", None));
+        assert_eq!(split_authority("::1"), ("::1", None));
+        assert_eq!(split_authority(""), ("", None));
+    }
+
+    #[test]
+    fn a_non_loopback_listen_refuses_to_run_without_a_token() {
+        let args = WebArgs {
+            port: 7433,
+            listen: Some("0.0.0.0:7433".into()),
+            token_file: None,
+            token: None,
+            allowed_hosts: vec![],
+            no_open: true,
+        };
+        let err = setup(&args).unwrap_err().to_string();
+        assert!(err.contains("token"), "{err}");
+        assert!(err.contains("--token-file"), "{err}");
+
+        // ...and without an allowlist, even with a token in hand.
+        let args = WebArgs {
+            token: Some("t".into()),
+            allowed_hosts: vec![],
+            ..args
+        };
+        let err = setup(&args).unwrap_err().to_string();
+        assert!(err.contains("--allowed-host"), "{err}");
+
+        // With both, it's a remote serving setup.
+        let args = WebArgs {
+            allowed_hosts: vec!["toolnet.example".into()],
+            ..args
+        };
+        let serving = setup(&args).unwrap();
+        assert!(serving.remote);
+        assert_eq!(serving.bearer.as_deref(), Some("t"));
+
+        // The default port stays loopback, token or none.
+        let loopback = setup(&WebArgs {
+            listen: None,
+            allowed_hosts: vec!["toolnet.example".into()],
+            ..args
+        })
+        .unwrap();
+        assert!(!loopback.remote);
     }
 
     #[test]

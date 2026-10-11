@@ -395,10 +395,11 @@ fn ls_watch_refreshes_until_killed() {
     assert!(text.contains("\x1B[2J\x1B[H"));
 }
 
-/// A raw HTTP request over TCP (no HTTP client dependency). `host` is the
-/// Host header sent. Retries the connection until the server is up, and
-/// panics if it never comes up within a few seconds.
-fn http(
+/// A raw HTTP request over TCP (no HTTP client dependency). `ip` is where to
+/// connect; `host` is the Host header sent. Retries the connection until the
+/// server is up, and panics if it never comes up within a few seconds.
+fn http_at(
+    ip: &str,
     port: u16,
     method: &str,
     path: &str,
@@ -412,7 +413,7 @@ fn http(
 
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        match TcpStream::connect(("127.0.0.1", port)) {
+        match TcpStream::connect((ip, port)) {
             Ok(mut stream) => {
                 let mut req = format!(
                     "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Length: {}\r\n",
@@ -430,6 +431,17 @@ fn http(
             Err(e) => panic!("could not connect to 127.0.0.1:{port}: {e}"),
         }
     }
+}
+
+fn http(
+    port: u16,
+    method: &str,
+    path: &str,
+    host: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> String {
+    http_at("127.0.0.1", port, method, path, host, headers, body)
 }
 
 fn http_get(port: u16, path: &str) -> String {
@@ -554,6 +566,265 @@ fn web_refuses_cross_site_and_rebound_requests() {
     assert!(state.contains("\"pending\":1"), "{state}");
     // The real thing still works.
     let ok = http_post(port, &token, path, "");
+    assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+/// The raw HTTP helper talks to `127.0.0.1`; the remote-mode tests bind the
+/// real listener on `127.0.0.2` — a local address that is *not* a "loopback
+/// name", so `lf web` runs it in serving-other-machines mode and the test
+/// can exercise every gate without a second machine.
+const TEST_TOKEN: &str = "d3adb33fc0ffeecad3adb33fc0ffeeca";
+
+/// Duplicated token-file plumbing has one home: write `TEST_TOKEN` to a
+/// 0600 file a test can point `--token-file` at.
+fn write_token_file(home: &Path) -> std::path::PathBuf {
+    let token_file = home.join("web-token");
+    let mut file = std::fs::File::create(&token_file).unwrap();
+    writeln!(file, "{TEST_TOKEN}").unwrap();
+    let mut perms = std::fs::metadata(&token_file).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    perms.set_mode(0o600);
+    std::fs::set_permissions(&token_file, perms).unwrap();
+    token_file
+}
+
+#[test]
+fn web_refuses_a_non_loopback_listen_without_a_token() {
+    let home = tempfile::tempdir().unwrap();
+
+    // No token: it must not start, and it must say why.
+    let mut child = lf(home.path())
+        .args(["web", "--no-open", "--listen", "127.0.0.2:18442"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "still running: the server should refuse to start"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert!(!status.success(), "should exit non-zero");
+    let err = String::from_utf8_lossy(&child.wait_with_output().unwrap().stderr).into_owned();
+    assert!(err.contains("--token-file"), "{err}");
+    assert!(err.contains("token"), "{err}");
+
+    // A token but no allowlist: same refusal, for the Host header's sake.
+    let token_file = write_token_file(home.path());
+
+    let out = run(lf(home.path()).args([
+        "web",
+        "--no-open",
+        "--listen",
+        "127.0.0.2:18442",
+        "--token-file",
+        &token_file.display().to_string(),
+    ]));
+    let err = stderr(&out);
+    assert!(!out.status.success(), "should exit non-zero");
+    assert!(err.contains("--allowed-host"), "{err}");
+}
+
+#[test]
+fn web_remote_mode_gates_every_route_on_the_bearer_token() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    add(home.path(), repo.path(), "w1", "do it");
+
+    let token_file = write_token_file(home.path());
+
+    let port = 18443u16;
+    let mut child = lf(home.path())
+        .args([
+            "web",
+            "--no-open",
+            "--listen",
+            &format!("127.0.0.2:{port}"),
+            "--token-file",
+            &token_file.display().to_string(),
+            // A bare entry (any port) and an entry with a port, so both
+            // allowlist behaviors get a workout.
+            "--allowed-host",
+            "toolnet.example",
+            "--allowed-host",
+            &format!("tools.example:{port}"),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // First load: the token in the URL opens the page, and the page embeds it.
+    let page = http_at(
+        "127.0.0.2",
+        port,
+        "GET",
+        &format!("/?token={TEST_TOKEN}"),
+        "toolnet.example",
+        &[],
+        "",
+    );
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert!(page.contains(TEST_TOKEN), "{page}");
+    assert!(page.contains("lf web"));
+    // ...and the token is not in the URL the server recorded anywhere.
+
+    // Without the bearer: every route refuses, including one a page visits less.
+    for route in [
+        "/",
+        "/api/state",
+        "/api/doctor",
+        "/api/agents",
+        "/api/tasks/w1",
+    ] {
+        let denied = http_at("127.0.0.2", port, "GET", route, "toolnet.example", &[], "");
+        assert!(denied.starts_with("HTTP/1.1 401"), "{route}: {denied}");
+        assert!(!denied.contains(TEST_TOKEN));
+    }
+    let denied_post = http_at(
+        "127.0.0.2",
+        port,
+        "POST",
+        "/api/tasks/w1/cancel",
+        "toolnet.example",
+        &[
+            ("X-LF-Token", TEST_TOKEN),
+            ("Origin", "http://toolnet.example"),
+        ],
+        "",
+    );
+    assert!(denied_post.starts_with("HTTP/1.1 401"), "{denied_post}");
+
+    // A wrong bearer is just as dead.
+    let wrong = http_at(
+        "127.0.0.2",
+        port,
+        "GET",
+        "/api/state",
+        "toolnet.example",
+        &[("Authorization", "Bearer nope")],
+        "",
+    );
+    assert!(wrong.starts_with("HTTP/1.1 401"), "{wrong}");
+
+    let bearer = format!("Bearer {TEST_TOKEN}");
+
+    // A Host off the allowlist: refused even with the right token.
+    let bad_host = http_at(
+        "127.0.0.2",
+        port,
+        "GET",
+        "/api/state",
+        "evil.example",
+        &[("Authorization", &bearer)],
+        "",
+    );
+    assert!(bad_host.starts_with("HTTP/1.1 403"), "{bad_host}");
+    // A bare entry matches any port; a port-bearing entry must match exactly.
+    let bare_entry = http_at(
+        "127.0.0.2",
+        port,
+        "GET",
+        "/api/state",
+        "toolnet.example:65000",
+        &[("Authorization", &bearer)],
+        "",
+    );
+    assert!(bare_entry.starts_with("HTTP/1.1 200"), "{bare_entry}");
+    let port_mismatch = http_at(
+        "127.0.0.2",
+        port,
+        "GET",
+        "/api/state",
+        "tools.example:1",
+        &[("Authorization", &bearer)],
+        "",
+    );
+    assert!(port_mismatch.starts_with("HTTP/1.1 403"), "{port_mismatch}");
+
+    // With the right bearer and Host, every route works.
+    let state = http_at(
+        "127.0.0.2",
+        port,
+        "GET",
+        "/api/state",
+        "toolnet.example",
+        &[("Authorization", &bearer)],
+        "",
+    );
+    assert!(state.starts_with("HTTP/1.1 200"), "{state}");
+    assert!(state.contains("\"w1\""));
+    assert!(state.contains("\"pending\":1"));
+    for route in ["/", "/api/doctor", "/api/agents", "/api/tasks/w1"] {
+        let got = http_at(
+            "127.0.0.2",
+            port,
+            "GET",
+            route,
+            "toolnet.example",
+            &[("Authorization", &bearer)],
+            "",
+        );
+        assert!(got.starts_with("HTTP/1.1 200"), "{route}: {got}");
+    }
+
+    // The POST checks stay on top of the bearer gate.
+    let without_lf_token = http_at(
+        "127.0.0.2",
+        port,
+        "POST",
+        "/api/tasks/w1/cancel",
+        "toolnet.example",
+        &[
+            ("Authorization", &bearer),
+            ("Origin", "http://toolnet.example"),
+        ],
+        "",
+    );
+    assert!(
+        without_lf_token.starts_with("HTTP/1.1 403"),
+        "{without_lf_token}"
+    );
+    let foreign_origin = http_at(
+        "127.0.0.2",
+        port,
+        "POST",
+        "/api/tasks/w1/cancel",
+        "toolnet.example",
+        &[
+            ("Authorization", &bearer),
+            ("X-LF-Token", TEST_TOKEN),
+            ("Origin", "http://evil.example"),
+        ],
+        "",
+    );
+    assert!(
+        foreign_origin.starts_with("HTTP/1.1 403"),
+        "{foreign_origin}"
+    );
+    let ok = http_at(
+        "127.0.0.2",
+        port,
+        "POST",
+        "/api/tasks/w1/cancel",
+        "toolnet.example",
+        &[
+            ("Authorization", &bearer),
+            ("X-LF-Token", TEST_TOKEN),
+            ("Origin", "http://toolnet.example"),
+        ],
+        "",
+    );
     assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
 
     child.kill().unwrap();
