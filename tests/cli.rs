@@ -428,7 +428,7 @@ fn http_at(
                 return resp;
             }
             Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(30)),
-            Err(e) => panic!("could not connect to 127.0.0.1:{port}: {e}"),
+            Err(e) => panic!("could not connect to {ip}:{port}: {e}"),
         }
     }
 }
@@ -572,10 +572,12 @@ fn web_refuses_cross_site_and_rebound_requests() {
     child.wait().unwrap();
 }
 
-/// The raw HTTP helper talks to `127.0.0.1`; the remote-mode tests bind the
-/// real listener on `127.0.0.2` — a local address that is *not* a "loopback
-/// name", so `lf web` runs it in serving-other-machines mode and the test
-/// can exercise every gate without a second machine.
+/// The raw HTTP helper talks to `127.0.0.1`; the remote-mode test binds the
+/// real listener on `0.0.0.0` — an address that is *not* a "loopback name",
+/// so `lf web` runs it in serving-other-machines mode — and connects through
+/// `127.0.0.1`, which every platform routes, so the test can exercise every
+/// gate without a second machine. (`127.0.0.2`, an earlier attempt at a
+/// local-but-unloopback address, is routed on Linux but not on macOS.)
 const TEST_TOKEN: &str = "d3adb33fc0ffeecad3adb33fc0ffeeca";
 
 /// Duplicated token-file plumbing has one home: write `TEST_TOKEN` to a
@@ -649,7 +651,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
             "web",
             "--no-open",
             "--listen",
-            &format!("127.0.0.2:{port}"),
+            &format!("0.0.0.0:{port}"),
             "--token-file",
             &token_file.display().to_string(),
             // A bare entry (any port) and an entry with a port, so both
@@ -666,7 +668,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
 
     // First load: the token in the URL opens the page, and the page embeds it.
     let page = http_at(
-        "127.0.0.2",
+        "127.0.0.1",
         port,
         "GET",
         &format!("/?token={TEST_TOKEN}"),
@@ -687,12 +689,12 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
         "/api/agents",
         "/api/tasks/w1",
     ] {
-        let denied = http_at("127.0.0.2", port, "GET", route, "toolnet.example", &[], "");
+        let denied = http_at("127.0.0.1", port, "GET", route, "toolnet.example", &[], "");
         assert!(denied.starts_with("HTTP/1.1 401"), "{route}: {denied}");
         assert!(!denied.contains(TEST_TOKEN));
     }
     let denied_post = http_at(
-        "127.0.0.2",
+        "127.0.0.1",
         port,
         "POST",
         "/api/tasks/w1/cancel",
@@ -707,7 +709,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
 
     // A wrong bearer is just as dead.
     let wrong = http_at(
-        "127.0.0.2",
+        "127.0.0.1",
         port,
         "GET",
         "/api/state",
@@ -721,7 +723,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
 
     // A Host off the allowlist: refused even with the right token.
     let bad_host = http_at(
-        "127.0.0.2",
+        "127.0.0.1",
         port,
         "GET",
         "/api/state",
@@ -732,7 +734,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
     assert!(bad_host.starts_with("HTTP/1.1 403"), "{bad_host}");
     // A bare entry matches any port; a port-bearing entry must match exactly.
     let bare_entry = http_at(
-        "127.0.0.2",
+        "127.0.0.1",
         port,
         "GET",
         "/api/state",
@@ -742,7 +744,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
     );
     assert!(bare_entry.starts_with("HTTP/1.1 200"), "{bare_entry}");
     let port_mismatch = http_at(
-        "127.0.0.2",
+        "127.0.0.1",
         port,
         "GET",
         "/api/state",
@@ -754,7 +756,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
 
     // With the right bearer and Host, every route works.
     let state = http_at(
-        "127.0.0.2",
+        "127.0.0.1",
         port,
         "GET",
         "/api/state",
@@ -767,7 +769,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
     assert!(state.contains("\"pending\":1"));
     for route in ["/", "/api/doctor", "/api/agents", "/api/tasks/w1"] {
         let got = http_at(
-            "127.0.0.2",
+            "127.0.0.1",
             port,
             "GET",
             route,
@@ -780,7 +782,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
 
     // The POST checks stay on top of the bearer gate.
     let without_lf_token = http_at(
-        "127.0.0.2",
+        "127.0.0.1",
         port,
         "POST",
         "/api/tasks/w1/cancel",
@@ -796,7 +798,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
         "{without_lf_token}"
     );
     let foreign_origin = http_at(
-        "127.0.0.2",
+        "127.0.0.1",
         port,
         "POST",
         "/api/tasks/w1/cancel",
@@ -813,7 +815,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
         "{foreign_origin}"
     );
     let ok = http_at(
-        "127.0.0.2",
+        "127.0.0.1",
         port,
         "POST",
         "/api/tasks/w1/cancel",
