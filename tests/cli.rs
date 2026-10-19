@@ -263,7 +263,12 @@ fn logs_reads_a_saved_attempt_via_the_cli() {
     let out = stdout(&ok(run(furmi(home.path()).args(["logs", "t1"]))));
     assert_eq!(out, "hello from the agent\n");
 
-    let out = failed(run(furmi(home.path()).args(["logs", "t1", "--attempt", "2"])));
+    let out = failed(run(furmi(home.path()).args([
+        "logs",
+        "t1",
+        "--attempt",
+        "2",
+    ])));
     assert!(stderr(&out).contains("1 attempt"));
 }
 
@@ -552,7 +557,14 @@ fn web_refuses_cross_site_and_rebound_requests() {
     );
     assert!(origin.starts_with("HTTP/1.1 403"), "{origin}");
     // Wrong token.
-    let wrong = http(port, "POST", path, &own_host, &[("X-Furmi-Token", "nope")], "");
+    let wrong = http(
+        port,
+        "POST",
+        path,
+        &own_host,
+        &[("X-Furmi-Token", "nope")],
+        "",
+    );
     assert!(wrong.starts_with("HTTP/1.1 403"), "{wrong}");
     // DNS rebinding: the browser sends the attacker's hostname.
     let rebound = http(port, "GET", "/api/state", "evil.example", &[], "");
@@ -678,7 +690,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
     );
     assert!(page.starts_with("HTTP/1.1 200"), "{page}");
     assert!(page.contains(TEST_TOKEN), "{page}");
-    assert!(page.contains("furmi web"));
+    assert!(page.contains("Furmiculi"));
     // ...and the browser is handed a cookie of its own, so a reload of the
     // now-stripped URL (or a bookmark) gets the page instead of a 401.
     assert!(
@@ -905,7 +917,7 @@ fn web_serves_the_dashboard_and_state() {
 
     let index = http_get(port, "/");
     assert!(index.starts_with("HTTP/1.1 200"));
-    assert!(index.contains("furmi web"));
+    assert!(index.contains("Furmiculi"));
 
     let state = http_get(port, "/api/state");
     assert!(state.starts_with("HTTP/1.1 200"));

@@ -61,7 +61,7 @@ test("a failed task says why, and Try again reruns it in the same workspace", as
   await expect(row(page, "needs-file").locator(".why")).toHaveCount(0);
 });
 
-test("a running task can be marked done, given up on, or cancelled from its row", async ({ page, forge }) => {
+test("a running task can be marked done or failed from its row, and dropped before it starts", async ({ page, forge }) => {
   forge.add("finish-me", "sleep 300");
   forge.add("quit-me", "sleep 300");
   forge.add("drop-me", "sleep 300");
@@ -73,30 +73,36 @@ test("a running task can be marked done, given up on, or cancelled from its row"
     await expect(row(page, id).locator(".badge")).toHaveText("Working");
   }
 
+  // Work that ran is either done or failed; "cancelled" is for work that
+  // never started, so a running row doesn't offer it.
+  await expect(row(page, "drop-me").getByRole("button", { name: "Drop it" })).toHaveCount(0);
+
   await row(page, "finish-me").getByRole("button", { name: "Mark done" }).click();
 
-  // "Give up" asks for a reason, which is kept on the task.
+  // "Mark failed" asks for a reason, which is kept on the task.
   page.once("dialog", (d) => {
     expect(d.type()).toBe("prompt");
     void d.accept("changed my mind");
   });
-  await row(page, "quit-me").getByRole("button", { name: "Give up" }).click();
+  await row(page, "quit-me").getByRole("button", { name: "Mark failed" }).click();
 
-  // Dismissing the confirmation leaves the task alone.
+  // Dismissing the reason prompt leaves the task alone.
   page.once("dialog", (d) => void d.dismiss());
-  await row(page, "drop-me").getByRole("button", { name: "Cancel" }).click();
+  await row(page, "drop-me").getByRole("button", { name: "Mark failed" }).click();
   await expect(row(page, "drop-me").locator(".badge")).toHaveText("Working");
 
   page.once("dialog", (d) => {
     expect(d.message()).toContain("drop-me");
-    void d.accept();
+    void d.accept("");
   });
-  await row(page, "drop-me").getByRole("button", { name: "Cancel" }).click();
+  await row(page, "drop-me").getByRole("button", { name: "Mark failed" }).click();
 
   await expect(page.locator("#c-running")).toHaveText("0");
   await tab(page, "archive").click();
   await expect(row(page, "finish-me").locator(".badge")).toHaveText("Done");
   await expect(row(page, "quit-me").locator(".badge")).toHaveText("Failed");
   await expect(row(page, "quit-me").locator(".why")).toContainText("changed my mind");
-  await expect(row(page, "drop-me").locator(".badge")).toHaveText("Cancelled");
+  await expect(row(page, "drop-me").locator(".badge")).toHaveText("Failed");
+  // No reason typed, so it says who failed it rather than showing nothing.
+  await expect(row(page, "drop-me").locator(".why")).toContainText("marked failed by hand");
 });

@@ -48,7 +48,7 @@ use crate::home::{Home, contract_tilde};
 use crate::run::{self, RunnerState};
 use crate::schedule::Schedule;
 use crate::spec::{OnFinish, TaskSpec};
-use crate::task::{Status, Task, fmt_cost, fmt_tokens, now};
+use crate::task::{Status, Task, now};
 
 #[derive(clap::Args)]
 pub struct WebArgs {
@@ -894,11 +894,24 @@ struct Row {
     id: String,
     status: &'static str,
     when: String,
+    /// The instant behind `when`, RFC 3339 (and `None` when there is none:
+    /// "as soon as possible"). The page sorts and time-filters on this and
+    /// ticks the "running for" clock from it, since the printed form has
+    /// minute precision and its own idea of "asap".
+    ///
+    /// Token/cost usage deliberately isn't here: it only exists for completed
+    /// headless runs of agents that print JSON, so a column of it would be
+    /// mostly dashes and easy to mistake for accounting. `furmi ls` and the task
+    /// files still have it.
+    when_at: Option<String>,
     repo: String,
     branch: String,
     agent: String,
-    tokens: String,
-    cost: String,
+    /// The model a task would run with: its own, else the agent's default, and
+    /// `"-"` when nothing says. Its own field rather than glued onto the agent
+    /// because real model names are long (`hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:\
+    /// UD-Q4_K_XL`).
+    model: String,
     /// Why a failed (or otherwise unfinished) task ended up that way.
     error: Option<String>,
 }
@@ -1099,23 +1112,19 @@ fn form_info(config: &Config, cwd_repo: Option<&str>, tasks: &[&Vec<Task>]) -> F
 
 fn to_row(t: &Task, config: &Config) -> Row {
     let eff = t.spec.resolve(&config.defaults);
-    let when = match (t.finished_at, t.started_at, t.scheduled_at) {
-        (Some(at), _, _) | (None, Some(at), _) | (None, None, Some(at)) => fmt_time(at),
-        _ => "asap".into(),
+    let at = match (t.finished_at, t.started_at, t.scheduled_at) {
+        (Some(at), _, _) | (None, Some(at), _) | (None, None, Some(at)) => Some(at),
+        (None, None, None) => None,
     };
     Row {
         id: t.id.clone(),
         status: t.status.as_str(),
-        when,
+        when: at.map(fmt_time).unwrap_or_else(|| "asap".into()),
+        when_at: at.map(|at| at.to_rfc3339()),
         repo: contract_tilde(&eff.repo),
         branch: t.effective_branch(config).unwrap_or_else(|| "-".into()),
-        agent: match (eff.agent, eff.model) {
-            (Some(a), Some(m)) => format!("{a}/{m}"),
-            (Some(a), None) => a,
-            (None, _) => "-".into(),
-        },
-        tokens: fmt_tokens(t.tokens_in, t.tokens_out),
-        cost: fmt_cost(t.cost_usd),
+        agent: eff.agent.unwrap_or_else(|| "-".into()),
+        model: eff.model.unwrap_or_else(|| "-".into()),
         error: t.error.clone().filter(|e| !e.trim().is_empty()),
     }
 }
@@ -1183,6 +1192,43 @@ mod tests {
 
         task.error = Some("  ".into());
         assert_eq!(to_row(&task, &config).error, None);
+    }
+
+    #[test]
+    fn a_row_carries_the_time_the_page_sorts_on() {
+        let spec = TaskSpec {
+            repo: "/tmp".into(),
+            branch: None,
+            worktree: None,
+            agent: None,
+            model: None,
+            mode: None,
+            on_finish: None,
+            retries: None,
+            retry_delay: None,
+            timeout: None,
+        };
+        let mut task = Task::new("t".into(), spec, "do it".into());
+        let config = Config::default();
+
+        // Waiting with no start time: nothing to sort on or count down from.
+        let row = to_row(&task, &config);
+        assert_eq!(row.when, "asap");
+        assert_eq!(row.when_at, None);
+        assert_eq!(row.agent, "-");
+        assert_eq!(row.model, "-");
+
+        // Running: a real timestamp, in a form the page can parse, and the
+        // agent and model each on their own (the page shows them side by side).
+        task.status = Status::Running;
+        task.started_at = Some(now());
+        task.spec.agent = Some("pi".into());
+        task.spec.model = Some("hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL".into());
+        let row = to_row(&task, &config);
+        assert_eq!(row.agent, "pi");
+        assert_eq!(row.model, "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL");
+        let at = row.when_at.expect("a running task knows when it started");
+        assert!(chrono::DateTime::parse_from_rfc3339(&at).is_ok(), "{at}");
     }
 
     #[test]

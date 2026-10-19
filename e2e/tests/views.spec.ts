@@ -1,0 +1,160 @@
+// Ways around a list that aren't the tabs: the numbers on top, the column
+// headers, and the time window — plus the live age of a run and the readable
+// view of an agent's JSON output.
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { expect, openDashboard, row, tab, test, type Forge } from "./fixtures";
+
+/** Move a waiting task into the archive as a finished one, at a given time. */
+function finish(forge: Forge, id: string, finishedAt: string) {
+  const from = path.join(forge.home, "tasks", `${id}.md`);
+  const to = path.join(forge.home, "archive", `${id}.md`);
+  fs.writeFileSync(
+    to,
+    fs
+      .readFileSync(from, "utf8")
+      .replace(/^status: .*$/m, "status: done")
+      .replace(/^(created_at: .*)$/m, `$1\nfinished_at: ${finishedAt}`),
+  );
+  fs.rmSync(from);
+}
+
+test.describe("with the runner off", () => {
+  test("the agent and the model get a column and a mark each", async ({ page, forge }) => {
+    forge.add("branded", "true", "--agent", "claude", "--model", "claude-sonnet-4");
+    // A real-world local model string, which has to match on its family.
+    forge.add(
+      "local-model",
+      "true",
+      "--agent",
+      "claude",
+      "--model",
+      "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
+    );
+    forge.add("custom-agent", "true", "--agent", "stub2");
+    await openDashboard(page, forge);
+
+    // Each on its own column: the agent name, then the model.
+    const branded = row(page, "branded");
+    await expect(branded.locator("td").nth(5)).toHaveText("claude");
+    await expect(branded.locator("td").nth(6)).toHaveText("claude-sonnet-4");
+    // A known name gets its brand mark, named in the tooltip.
+    await expect(branded.locator("td").nth(5).locator(".mark-text")).toHaveAttribute("title", "Claude");
+    await expect(branded.locator("td").nth(6).locator("svg.mark")).toHaveCount(1);
+    await expect(row(page, "local-model").locator("td").nth(6)).toHaveText(
+      "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
+    );
+    await expect(row(page, "local-model").locator("td").nth(6).locator(".mark-text")).toHaveAttribute("title", "QWen");
+    // An agent with no mark of its own gets a letter chip, and no model says so.
+    await expect(row(page, "custom-agent").locator("td").nth(5).locator(".chip")).toHaveText("S");
+    await expect(row(page, "custom-agent").locator("td").nth(6)).toHaveText("-");
+
+    // Both columns sort like any other.
+    await page.locator('#panel-queue th button[data-sort="model"]').click();
+    await expect(page.locator("#panel-queue tbody tr").first()).toContainText("custom-agent");
+  });
+
+  test("the column headers sort the waiting list", async ({ page, forge }) => {
+    forge.add("bbb", "true");
+    forge.add("aaa", "true");
+    await openDashboard(page, forge);
+
+    const firstRow = page.locator("#panel-queue tbody tr").first();
+    await expect(page.locator("#panel-queue tbody tr")).toHaveCount(2);
+    const idHeader = page.locator('#panel-queue th button[data-sort="id"]');
+
+    await idHeader.click();
+    await expect(firstRow).toContainText("aaa");
+    await expect(page.locator('#panel-queue th[aria-sort="ascending"]')).toHaveCount(1);
+
+    await idHeader.click();
+    await expect(firstRow).toContainText("bbb");
+    await expect(page.locator('#panel-queue th[aria-sort="descending"]')).toHaveCount(1);
+  });
+
+  test("the time window hides rows older than it, and the totals stay put", async ({ page, forge }) => {
+    forge.add("fresh", "true");
+    forge.add("stale", "true");
+    finish(forge, "fresh", new Date().toISOString());
+    finish(forge, "stale", "2020-01-01T00:05:00+00:00");
+    await openDashboard(page, forge);
+
+    await tab(page, "archive").click();
+    await expect(page.locator("#panel-archive tbody tr")).toHaveCount(2);
+
+    await page.locator("#age").selectOption("24h");
+    await expect(page.locator("#panel-archive tbody tr")).toHaveCount(1);
+    await expect(page.locator("#panel-archive tbody tr")).toContainText("fresh");
+    await expect(page.locator("#c-archive")).toHaveText("2"); // counted, just not shown
+    await expect(page.locator("#toolbar-note")).toHaveText("");
+
+    await page.locator("#toolbar-clear").click();
+    await expect(page.locator("#panel-archive tbody tr")).toHaveCount(2);
+  });
+});
+
+test.describe("with the runner on", () => {
+  test.use({ runner: true });
+
+  test("the numbers on top are a way into their list, and the clock ticks", async ({ page, forge }) => {
+    forge.add("went-well", "true");
+    forge.add("went-bad", "false");
+    forge.add("long-run", "sleep 300");
+    await openDashboard(page, forge);
+    await expect(page).toHaveTitle("Loompa Forge");
+
+    await tab(page, "archive").click();
+    await expect(row(page, "went-well").locator(".badge")).toHaveText("Done");
+    await expect(row(page, "went-bad").locator(".badge")).toHaveText("Failed");
+
+    // "1 Failed" opens that tab with just those rows...
+    await page.locator(".stat.failed").click();
+    await expect(page.locator("#toolbar-note")).toContainText("Failed");
+    await expect(page.locator("#panel-archive tbody tr")).toHaveCount(1);
+    await expect(page.locator("#panel-archive tbody tr")).toContainText("went-bad");
+
+    // ...and "Show everything" puts the rest back.
+    await page.locator("#toolbar-clear").click();
+    await expect(page.locator("#panel-archive tbody tr")).toHaveCount(2);
+
+    // Working: how long it has been going, kept current between refreshes.
+    await page.locator(".stat.running").click();
+    await expect(page.locator("#panel-running tbody tr")).toContainText("long-run");
+    const elapsed = row(page, "long-run").locator(".elapsed");
+    await expect(elapsed).toHaveText(/^running \d+s$/);
+    const first = parseInt((await elapsed.textContent())!.replace(/\D+/g, ""), 10);
+    await page.waitForTimeout(2100);
+    const later = parseInt((await elapsed.textContent())!.replace(/\D+/g, ""), 10);
+    expect(later).toBeGreaterThan(first);
+
+    // An empty list says so rather than showing the last thing it had.
+    await page.locator(".stat.pending").click();
+    await expect(page.locator("#panel-queue")).toContainText("Nothing is waiting.");
+  });
+
+  test("a JSON agent log reads as text, with the raw output one click away", async ({ page, forge }) => {
+    forge.add(
+      "json-log",
+      `printf '%s\\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hello-from-json"},{"type":"toolCall","name":"bash","arguments":{"command":"ls"}}]}}'; sleep 0.2; echo a-warning-from-stderr >&2`,
+    );
+    await openDashboard(page, forge);
+
+    await tab(page, "archive").click();
+    await expect(row(page, "json-log").locator(".badge")).toHaveText("Done");
+    await row(page, "json-log").getByRole("button", { name: "Output" }).click();
+
+    // The assistant's text and its tool call, readably; the JSON is not shown,
+    // but the line that isn't JSON at all (its stderr) is — that is where a
+    // run explains itself when it goes wrong.
+    const body = page.locator("#logs-body");
+    await expect(body).toContainText("hello-from-json");
+    await expect(body).toContainText("bash");
+    await expect(body).toContainText("a-warning-from-stderr");
+    await expect(body).not.toContainText("message_end");
+
+    await page.locator("#logs-toggle").click();
+    await expect(body).toContainText("message_end");
+    await page.locator("#logs-toggle").click();
+    await expect(body).not.toContainText("message_end");
+  });
+});

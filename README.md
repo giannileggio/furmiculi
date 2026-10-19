@@ -15,10 +15,11 @@ CLI, opencode and Pi are built in, and others are a few lines of config.
 
 Because the format is plain Markdown, you can write tasks by hand, with
 `furmi add`, or by asking an agent: open it in `~/.furmiculi` and say "add a
-task to fix the login redirect in ~/Projects/myapp tonight, open a PR". `furmi
-init` puts an `AGENTS.md` and an `furmi-tasks` skill there, which teach the agent
-to write a self-contained prompt and queue it with `furmi add`. It can also link
-the skill into your global skill folders, so you can queue work from any repo.
+task to fix the login redirect in ~/Projects/myapp tonight, open a PR".
+`furmi init` puts an `AGENTS.md` and a `furmi-tasks` skill there, which teach
+the agent to write a self-contained prompt and queue it with `furmi add`. It
+can also link the skill into your global skill folders, so you can queue work
+from any repo.
 
 ## Quick start
 
@@ -36,36 +37,38 @@ furmi start
 ```
 
 That's all: the first command you run sets up `~/.furmiculi` and picks the
-coding agent it finds on your `PATH`, and `furmi add` works on the git repo you're
-standing in. In the dashboard, **+ New task** queues more work (once or on a
-schedule), **Start the runner** turns it on, and **Setup** helps you pick and
-install a coding agent and says what else is missing, all without the terminal.
-No agent installed yet? `furmi agents` lists them with install commands. Run `furmi` on its own any time to see where things stand and what to
-try next, and `furmi doctor` if something isn't running.
+coding agent it finds on your `PATH`, and `furmi add` works on the git repo
+you're standing in. In the dashboard, **+ New task** queues more work (once or
+on a schedule), **Start the runner** turns it on, and **Setup** helps you pick
+and install a coding agent and says what else is missing, all without the
+terminal. No agent installed yet? `furmi agents` lists them with install
+commands. Run `furmi` on its own any time to see where things stand and what
+to try next, and `furmi doctor` if something isn't running.
 
 ## Status
 
-Working now: `init`, `add`, `ls`, `validate`, `start`, `stop`, `agents`, `furmi run` (the runner and
-scheduler: tmux windows, git worktrees, retries, timeouts, `on_finish`),
-`done|fail|cancel|retry|attach`, `logs`, `clean`, `web` (a dashboard you can
-also act from), `status`/`doctor`/`service` (keeping the runner healthy), and
-the agent skill for writing tasks.
+Working now: `init`, `add`, `ls`, `validate`, `start`, `stop`, `agents`,
+`furmi run` (the runner and scheduler: tmux windows, git worktrees, retries,
+timeouts, `on_finish`), `done|fail|cancel|retry|attach`, `logs`, `clean`,
+`web` (a dashboard you can also act from), `status`/`doctor`/`service`
+(keeping the runner healthy), and the agent skill for writing tasks.
 
 ## Install
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/giannileggio/furmiculi/releases/latest/download/furmiculi-installer.sh | sh
-furmi init            # optional: the first `furmi add`/`furmi start` sets up ~/.furmiculi by
-                   # itself (override with $FURMI_HOME or --home). `furmi init` also asks
-                   # whether to install the skill globally, so agents can queue tasks
+furmi init         # optional: the first `furmi add`/`furmi start` sets up
+                   # ~/.furmiculi by itself (override with $FURMI_HOME or --home).
+                   # `furmi init` also asks whether to install the skill globally,
+                   # so agents can queue tasks
 ```
 
 Prebuilt binaries are published for Linux and macOS (x86_64 and arm64); the
 script above fetches the right one and puts `furmi` on your `PATH`. It also
-installs `furmiculi-update`, so `furmiculi-update` upgrades an
-existing install, and `furmi` itself prints a one-line notice when a newer
-version is out (set `FURMI_NO_UPDATE_CHECK=1` to turn that off).
+installs `furmiculi-update`, so `furmiculi-update` upgrades an existing
+install, and `furmi` itself prints a one-line notice when a newer version is
+out (set `FURMI_NO_UPDATE_CHECK=1` to turn that off).
 
 Building from source instead:
 
@@ -220,12 +223,36 @@ anything but "Just once" creates a schedule, which appears under *Repeating*
 with **Edit**, **Pause**/**Resume** and **Delete**. Changing a schedule's time or
 resuming it starts counting from now, so it never fires for a slot that passed
 meanwhile. The dashboard writes the same Markdown files you would, so
-fields it doesn't show (`branch`, `model`, `allow_overlap`...) are kept.
+fields it doesn't show (`allow_overlap`, `retries`...) are kept.
 The dashboard uses plainer words than the files do: *Waiting*, *Working*,
 *Finished*, *Repeating*, *Needs review* (`pending`, `running`, the archive,
-schedules, `needs_review`), and a failed task shows why it failed. Each task row offers the buttons that make sense for its
-status (done, fail, cancel, retry) plus a log viewer, calling the same code
-as `furmi done|fail|cancel|retry` and `furmi logs`. It only binds to
+schedules, `needs_review`), and a failed task shows why it failed. Each task
+row offers the buttons that make sense for its
+status plus a log viewer, calling the same code as
+`furmi done|fail|cancel|retry` and `furmi logs`: **Mark done** (runs the when-done
+step), **Mark failed** (asks why, and doesn't retry) and **Try again** on a
+finished task, **Edit** and **Drop it** while a task is still *Waiting*.
+While something is *Working* the question is only whether it worked out —
+both answers stop the agent — so **Drop it** isn't offered there; that would
+mark something that ran as "cancelled". The **Agent** and **Model** columns
+carry a mark for the tool and the model family (Claude, OpenAI, Gemini,
+OpenCode, Qwen, DeepSeek, Meta, Mistral — a letter chip for anything else).
+
+The numbers across the top are also a way around: click *2 Failed* and you
+get the *Finished* list narrowed to failures (the count keeps counting
+everything). A column header sorts the list by that column — *When* sorts on
+the real timestamps, not on what it prints — and **Time** above the table
+narrows it to the last hour, day, week or month, each list judged by its own
+clock (when a task is due, when it started, when it finished); a task with no
+time at all is *asap* and never hidden. A *Working* row counts up while you
+watch it (`running 4m 12s`).
+The log viewer shows an agent's JSON output (what the `claude` and `pi`
+presets print) as the text it said and the tools it ran, with the raw bytes
+one click away. Token/cost usage isn't shown here: it only exists for
+completed headless runs of agents that report it, which would be a column of
+dashes pretending to be accounting. `furmi ls` shows what was reported.
+
+It only binds to
 `127.0.0.1`, so anyone who can reach it could already run `furmi` locally
 themselves; there's no login. But a web page you visit can send requests to
 `127.0.0.1` too, so the server only answers loopback `Host` names (against DNS

@@ -49,7 +49,7 @@ test("a waiting task can be edited, then cancelled and tried again", async ({ pa
   await expect(row(page, id).locator("td").nth(2)).not.toHaveText(/^\s*$/); // it has a start time now
 
   page.once("dialog", (d) => void d.accept());
-  await row(page, id).getByRole("button", { name: "Cancel" }).click();
+  await row(page, id).getByRole("button", { name: "Drop it" }).click();
   await expect(page.locator("#c-queue")).toHaveText("0");
   await tab(page, "archive").click();
   await expect(row(page, id).locator(".badge")).toHaveText("Cancelled");

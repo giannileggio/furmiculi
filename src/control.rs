@@ -173,7 +173,7 @@ pub fn fail(home: &Home, id: Option<String>, reason: Option<String>) -> Result<(
         ),
     };
     task.status = Status::Failed;
-    task.error = Some(reason.unwrap_or_else(|| "marked failed with `furmi fail`".into()));
+    task.error = Some(reason.unwrap_or_else(|| "marked failed by hand".into()));
     run::archive(home, &path, task, now())?;
     drop(lock);
     kill_deferred(deferred)
