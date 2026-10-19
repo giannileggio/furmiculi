@@ -101,7 +101,7 @@ test.describe("with the runner on", () => {
     forge.add("went-bad", "false");
     forge.add("long-run", "sleep 300");
     await openDashboard(page, forge);
-    await expect(page).toHaveTitle("Loompa Forge");
+    await expect(page).toHaveTitle("Furmiculi");
 
     await tab(page, "archive").click();
     await expect(row(page, "went-well").locator(".badge")).toHaveText("Done");

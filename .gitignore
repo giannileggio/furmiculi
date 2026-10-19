@@ -1,1 +1,7 @@
 /target
+
+# pi's per-project state (agent/model defaults, mesh name) — local, not shared.
+.pi/
+
+# Editor and OS clutter.
+.DS_Store
