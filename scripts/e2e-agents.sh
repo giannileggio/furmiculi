@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# End-to-end check of lf against real coding agents.
+# End-to-end check of furmi against real coding agents.
 #
-# Builds a throwaway git repo and a throwaway lf home (agent definitions are
+# Builds a throwaway git repo and a throwaway furmi home (agent definitions are
 # copied from your real config.toml), queues a few tiny tasks with
 # deterministic outcomes, runs the queue and checks every result.
 #
 #   scripts/e2e-agents.sh [--agents claude,pi,opencode|none] [--keep]
 #
 # Env:
-#   LF                 lf binary to test            (default: lf on $PATH)
-#   LF_E2E_CONFIG      config.toml to copy agents from (default: ~/.loompa-forge/config.toml)
-#   LF_E2E_TIMEOUT     overall limit in seconds     (default: 1200)
+#   FURMI              furmi binary to test            (default: furmi on $PATH)
+#   FURMI_E2E_CONFIG   config.toml to copy agents from (default: ~/.furmiculi/config.toml)
+#   FURMI_E2E_TIMEOUT  overall limit in seconds        (default: 1200)
 #   PI_MODEL, OPENCODE_MODEL, CLAUDE_MODEL   models to use (empty = the agent's default)
 #
 # What runs where:
@@ -25,7 +25,7 @@
 # Exit status is non-zero if any check fails. Real agents cost tokens and time.
 set -u
 
-LF=${LF:-lf}
+FURMI=${FURMI:-furmi}
 AGENTS=claude,pi,opencode
 KEEP=0
 while [ $# -gt 0 ]; do
@@ -40,18 +40,18 @@ done
 PI_MODEL=${PI_MODEL-opencode-go/deepseek-v4.1-flash}
 OPENCODE_MODEL=${OPENCODE_MODEL-opencode-go/deepseek-v4.1-flash}
 CLAUDE_MODEL=${CLAUDE_MODEL-}
-LIMIT=${LF_E2E_TIMEOUT:-1200}
-SRC_CONFIG=${LF_E2E_CONFIG:-$HOME/.loompa-forge/config.toml}
+LIMIT=${FURMI_E2E_TIMEOUT:-1200}
+SRC_CONFIG=${FURMI_E2E_CONFIG:-$HOME/.furmiculi/config.toml}
 
-for tool in git tmux "$LF"; do
+for tool in git tmux "$FURMI"; do
   command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 2; }
 done
 
 TMP=$(mktemp -d)
 HOME_DIR=$TMP/home
 REPO=$TMP/repo
-SESSION=lfe2e-$$
-export LF_HOME=$HOME_DIR
+SESSION=furmie2e-$$
+export FURMI_HOME=$HOME_DIR
 
 cleanup() {
   tmux kill-session -t "=$SESSION" 2>/dev/null
@@ -59,14 +59,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-lf() { "$LF" --home "$HOME_DIR" "$@"; }
+furmi() { "$FURMI" --home "$HOME_DIR" "$@"; }
 
 # --- fixture ------------------------------------------------------------------
 
 mkdir -p "$REPO"
 git -C "$REPO" init -q -b main
 git -C "$REPO" config user.email e2e@example.com
-git -C "$REPO" config user.name "lf e2e"
+git -C "$REPO" config user.name "furmi e2e"
 echo 41 > "$REPO/answer.txt"
 cat > "$REPO/check.sh" <<'EOF'
 #!/bin/sh
@@ -76,7 +76,7 @@ echo "fixture" > "$REPO/README.md"
 git -C "$REPO" add -A
 git -C "$REPO" commit -q -m fixture
 
-lf init >/dev/null 2>&1
+furmi init >/dev/null 2>&1
 if [ -f "$SRC_CONFIG" ]; then
   cp "$SRC_CONFIG" "$HOME_DIR/config.toml"
 fi
@@ -112,22 +112,22 @@ record() { # name ok(0/1) detail
 }
 
 field() { sed -n "s/^$2: *//p" "$HOME_DIR/archive/$1.md" 2>/dev/null | head -1; }
-branch_file() { git -C "$REPO" show "lf/$1:$2" 2>/dev/null; }
-commits_ahead() { git -C "$REPO" rev-list --count "main..lf/$1" 2>/dev/null || echo 0; }
+branch_file() { git -C "$REPO" show "furmi/$1:$2" 2>/dev/null; }
+commits_ahead() { git -C "$REPO" rev-list --count "main..furmi/$1" 2>/dev/null || echo 0; }
 
-# add <id> <agent> <model> <extra lf-add args...>   (prompt on stdin)
+# add <id> <agent> <model> <extra furmi-add args...>   (prompt on stdin)
 # RETRIES (default 0) sets the attempts after a failure, with a short delay.
 add() {
   local id=$1 agent=$2 model=$3
   shift 3
   local model_args=()
   [ -n "$model" ] && model_args=(--model "$model")
-  lf add --repo "$REPO" --id "$id" --agent "$agent" "${model_args[@]}" \
+  furmi add --repo "$REPO" --id "$id" --agent "$agent" "${model_args[@]}" \
     --retries "${RETRIES:-0}" --retry-delay 10s "$@" >/dev/null || echo "could not queue $id" >&2
 }
 
 model_of() { case $1 in pi) echo "$PI_MODEL" ;; opencode) echo "$OPENCODE_MODEL" ;; claude) echo "$CLAUDE_MODEL" ;; esac; }
-bad_model_of() { case $1 in pi) echo "opencode-go/lf-e2e-no-such-model" ;; opencode) echo "opencode/lf-e2e-no-such-model" ;; *) echo "lf-e2e-no-such-model" ;; esac; }
+bad_model_of() { case $1 in pi) echo "opencode-go/furmi-e2e-no-such-model" ;; opencode) echo "opencode/furmi-e2e-no-such-model" ;; *) echo "furmi-e2e-no-such-model" ;; esac; }
 
 # --- queue --------------------------------------------------------------------
 
@@ -150,13 +150,13 @@ on_finish: none
 
 exit 0
 EOF
-lf validate "$HOME_DIR/schedules/e2e-sched.md" >/dev/null || echo "schedule invalid" >&2
+furmi validate "$HOME_DIR/schedules/e2e-sched.md" >/dev/null || echo "schedule invalid" >&2
 
 for agent in ${AGENTS//,/ }; do
   model=$(model_of "$agent")
   if [ "$agent" != claude ]; then
     RETRIES=2 add "$agent-write-file" "$agent" "$model" --on-finish commit <<'EOF'
-Create a file named HELLO.txt at the repository root containing exactly one line: lf-e2e-ok
+Create a file named HELLO.txt at the repository root containing exactly one line: furmi-e2e-ok
 Do nothing else.
 EOF
     RETRIES=2 add "$agent-fix-test" "$agent" "$model" --on-finish commit <<'EOF'
@@ -182,7 +182,7 @@ echo "running $(ls "$HOME_DIR/tasks" | wc -l) tasks (limit ${LIMIT}s) in $TMP"
 start=$SECONDS
 sched_removed=0
 while :; do
-  lf run --once >/dev/null 2>&1
+  furmi run --once >/dev/null 2>&1
   if [ $sched_removed = 0 ] && grep -ql '^created_by: schedule:e2e-sched' "$HOME_DIR"/tasks/*.md "$HOME_DIR"/archive/*.md 2>/dev/null; then
     rm -f "$HOME_DIR/schedules/e2e-sched.md" # fired once; stop it firing again
     sched_removed=1
@@ -192,7 +192,7 @@ while :; do
   if [ $((SECONDS - start)) -ge "$LIMIT" ]; then echo "time limit reached, $left task(s) still queued"; break; fi
   sleep 3
 done
-lf run --once >/dev/null 2>&1
+furmi run --once >/dev/null 2>&1
 
 # --- checks -------------------------------------------------------------------
 
@@ -215,8 +215,8 @@ for agent in ${AGENTS//,/ }; do
   if [ "$agent" != claude ]; then
     id=$agent-write-file
     check_status "$id" done
-    [ "$(branch_file "$id" HELLO.txt | tr -d '[:space:]')" = lf-e2e-ok ]; record "$id wrote HELLO.txt" $? "content was '$(branch_file "$id" HELLO.txt | head -c 80)'"
-    [ "$(commits_ahead "$id")" -ge 1 ]; record "$id committed on its branch" $? "no commit on lf/$id"
+    [ "$(branch_file "$id" HELLO.txt | tr -d '[:space:]')" = furmi-e2e-ok ]; record "$id wrote HELLO.txt" $? "content was '$(branch_file "$id" HELLO.txt | head -c 80)'"
+    [ "$(commits_ahead "$id")" -ge 1 ]; record "$id committed on its branch" $? "no commit on furmi/$id"
 
     id=$agent-fix-test
     check_status "$id" done
@@ -232,12 +232,12 @@ for agent in ${AGENTS//,/ }; do
 
   id=$agent-blocked
   check_status "$id" done
-  [ "$(commits_ahead "$id")" = 0 ]; record "$id changed nothing" $? "$(commits_ahead "$id") commit(s) on lf/$id"
+  [ "$(commits_ahead "$id")" = 0 ]; record "$id changed nothing" $? "$(commits_ahead "$id") commit(s) on furmi/$id"
 
   id=$agent-bad-model
   check_status "$id" failed
   [ "$(field "$id" attempts)" = 1 ]; record "$id was not retried" $? "attempts was '$(field "$id" attempts)'"
-  # Informational: lf recognises a provider rejection by its wording.
+  # Informational: furmi recognises a provider rejection by its wording.
   if field "$id" error | grep -qi 'provider'; then
     RESULTS+=("info  $id: failure classified as a provider error")
   else

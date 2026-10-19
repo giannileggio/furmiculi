@@ -27,7 +27,7 @@ pub struct Schedule {
     #[serde(flatten)]
     pub spec: TaskSpec,
 
-    // Written by loompa-forge only.
+    // Written by furmiculi only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_enqueued_at: Option<DateTime<FixedOffset>>,
 

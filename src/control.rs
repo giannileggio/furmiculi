@@ -1,8 +1,8 @@
-//! Changing a task's status by hand: `lf done|fail|cancel|retry|attach`.
+//! Changing a task's status by hand: `furmi done|fail|cancel|retry|attach`.
 //!
 //! These hold the home lock while they touch task files, so they never race
-//! a `tick` of `lf run`. The id defaults to `$LF_TASK_ID`, which `lf run`
-//! sets in each task's window, so `lf done` works from inside a session.
+//! a `tick` of `furmi run`. The id defaults to `$FURMI_TASK_ID`, which `furmi run`
+//! sets in each task's window, so `furmi done` works from inside a session.
 
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -18,7 +18,7 @@ use crate::spec::validate_id;
 use crate::task::{Status, Task, now};
 use crate::tmux;
 
-/// How long `lf stop` waits for the runner to exit, and `start_runner` for
+/// How long `furmi stop` waits for the runner to exit, and `start_runner` for
 /// one to come up, before giving up.
 const RUNNER_WAIT: Duration = Duration::from_secs(10);
 
@@ -35,14 +35,14 @@ fn wait_for(deadline: Duration, mut condition: impl FnMut() -> bool) -> bool {
     }
 }
 
-/// Starts `lf run` in the background, detached from this process and its
+/// Starts `furmi run` in the background, detached from this process and its
 /// terminal, so it keeps going after the dashboard or shell that started it
 /// is closed. Returns `false` if a runner was already running.
 pub fn start_runner(home: &Home) -> Result<bool> {
     if home.runner_alive() {
         return Ok(false);
     }
-    let exe = std::env::current_exe().context("finding the lf binary to start the runner")?;
+    let exe = std::env::current_exe().context("finding the furmi binary to start the runner")?;
     let mut child = Command::new(exe)
         .arg("--home")
         .arg(home.root())
@@ -123,11 +123,11 @@ pub fn stop_runner(home: &Home) -> Result<Option<u32>> {
 ///
 /// The home lock is held to read the task and end its session, then released
 /// for `on_finish` (a push or a PR, which can take minutes) so it can't stall
-/// the runner, the dashboard or `lf add`; `run::complete` takes it again to
+/// the runner, the dashboard or `furmi add`; `run::complete` takes it again to
 /// archive. A `running` task is first marked `needs_review`: with its window
 /// gone, the runner would otherwise see it as interrupted and requeue it
-/// while `on_finish` is still going. If `lf done` dies midway the task is
-/// left `needs_review`, and `lf done` can simply be run again.
+/// while `on_finish` is still going. If `furmi done` dies midway the task is
+/// left `needs_review`, and `furmi done` can simply be run again.
 pub fn done(home: &Home, id: Option<String>) -> Result<()> {
     let (config, id) = setup(home, id)?;
     let (path, task, deferred) = {
@@ -173,7 +173,7 @@ pub fn fail(home: &Home, id: Option<String>, reason: Option<String>) -> Result<(
         ),
     };
     task.status = Status::Failed;
-    task.error = Some(reason.unwrap_or_else(|| "marked failed with `lf fail`".into()));
+    task.error = Some(reason.unwrap_or_else(|| "marked failed with `furmi fail`".into()));
     run::archive(home, &path, task, now())?;
     drop(lock);
     kill_deferred(deferred)
@@ -275,7 +275,7 @@ fn setup(home: &Home, id: Option<String>) -> Result<(Config, String)> {
     home.ensure_initialized()?;
     let config = Config::load(&home.config_path())?;
     let id = id
-        .or_else(|| std::env::var("LF_TASK_ID").ok())
+        .or_else(|| std::env::var("FURMI_TASK_ID").ok())
         .context("no task id: pass one, or run this inside a task's window")?;
     Ok((config, id))
 }
@@ -305,7 +305,7 @@ type Window = (String, String);
 fn end_session(home: &Home, config: &Config, task: &Task) -> Result<Option<Window>> {
     let (session, window) = run::window_of(task, config);
     run::save_log(home, task, &session, &window);
-    if std::env::var("LF_TASK_ID").is_ok_and(|v| v == task.id) {
+    if std::env::var("FURMI_TASK_ID").is_ok_and(|v| v == task.id) {
         return Ok(Some((session, window)));
     }
     tmux::terminate_window(&session, &window, STOP_GRACE)?;

@@ -1,7 +1,7 @@
 {
-  "name": "loompa-forge-e2e",
+  "name": "furmiculi-e2e",
   "private": true,
-  "description": "Browser end-to-end tests for the lf dashboard",
+  "description": "Browser end-to-end tests for the furmi dashboard",
   "scripts": {
     "test": "playwright test"
   },

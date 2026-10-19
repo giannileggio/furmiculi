@@ -1,6 +1,6 @@
-//! The files that let any coding agent opened in the lf home (or, with the
+//! The files that let any coding agent opened in the furmi home (or, with the
 //! global skill, anywhere) create tasks: AGENTS.md, per-agent pointers to
-//! it, FORMAT.md, and the `lf-tasks` skill.
+//! it, FORMAT.md, and the `furmi-tasks` skill.
 //!
 //! The skill lives in `.agents/skills/`, the location shared by agents that
 //! support skills. Agents with their own location get a symlink to it.
@@ -16,16 +16,16 @@ use crate::home::{Home, contract_tilde, home_dir};
 const AGENTS_MD: &str = include_str!("../assets/AGENTS.md");
 const SKILL_MD: &str = include_str!("../assets/SKILL.md");
 const FORMAT_MD: &str = include_str!("../docs/FORMAT.md");
-const GENERATED: &str = "<!-- Written by `lf init`, which overwrites it: don't edit. -->\n\n";
+const GENERATED: &str = "<!-- Written by `furmi init`, which overwrites it: don't edit. -->\n\n";
 
 /// Instruction files of agents that don't read AGENTS.md. Each imports it.
 const INSTRUCTION_POINTERS: &[&str] = &["CLAUDE.md", "GEMINI.md"];
 
 /// Skill folders of agents that don't read `.agents/skills`, relative to a
-/// project (the lf home) or to `$HOME`. Each gets a link to the skill.
+/// project (the furmi home) or to `$HOME`. Each gets a link to the skill.
 const SKILL_DIRS: &[&str] = &[".claude/skills"];
 
-const SKILL: &str = "lf-tasks";
+const SKILL: &str = "furmi-tasks";
 
 static QUIET: AtomicBool = AtomicBool::new(false);
 
@@ -35,7 +35,7 @@ pub fn set_quiet(quiet: bool) {
     QUIET.store(quiet, Ordering::Relaxed);
 }
 
-/// Reports a file `lf init` wrote, kept or linked.
+/// Reports a file `furmi init` wrote, kept or linked.
 pub fn note(line: impl std::fmt::Display) {
     if !QUIET.load(Ordering::Relaxed) {
         println!("{line}");
@@ -44,7 +44,7 @@ pub fn note(line: impl std::fmt::Display) {
 
 /// Writes the agent files into the home. AGENTS.md and the pointers are the
 /// user's to edit, so they're only written if missing; FORMAT.md and the
-/// skill are lf's own and refreshed to match this binary.
+/// skill are furmi's own and refreshed to match this binary.
 pub fn install_in_home(home: &Home) -> Result<()> {
     write_if_missing(&home.root().join("AGENTS.md"), AGENTS_MD)?;
     for name in INSTRUCTION_POINTERS {
@@ -108,15 +108,17 @@ pub fn set_global(home: &Home, choice: Option<bool>) -> Result<()> {
     Ok(())
 }
 
-/// The skill with this home's paths and `lf` invocation filled in.
+/// The skill with this home's paths and `furmi` invocation filled in.
 fn render_skill(home: &Home) -> String {
     let shown = contract_tilde(home.root());
-    let lf = if home.is_default() {
-        "lf".to_string()
+    let furmi = if home.is_default() {
+        "furmi".to_string()
     } else {
-        format!("lf --home {shown}")
+        format!("furmi --home {shown}")
     };
-    let skill = SKILL_MD.replace("{home}", &shown).replace("{lf}", &lf);
+    let skill = SKILL_MD
+        .replace("{home}", &shown)
+        .replace("{furmi}", &furmi);
     with_generated_note(&skill)
 }
 
@@ -131,7 +133,7 @@ fn with_generated_note(skill: &str) -> String {
     format!("{frontmatter}\n{GENERATED}{}", body.trim_start())
 }
 
-/// A symlink lf made: one pointing at some lf home's skill.
+/// A symlink furmi made: one pointing at some furmi home's skill.
 fn is_our_link(path: &Path) -> bool {
     std::fs::read_link(path).is_ok_and(|t| t.ends_with(Path::new(".agents/skills").join(SKILL)))
 }
@@ -145,7 +147,7 @@ fn link(target: &Path, at: &Path) -> Result<()> {
         std::fs::remove_file(at).with_context(|| format!("removing {}", at.display()))?;
     } else if at.exists() {
         note(format_args!(
-            "kept existing {} (not a link made by lf)",
+            "kept existing {} (not a link made by furmi)",
             at.display()
         ));
         return Ok(());
@@ -208,14 +210,14 @@ mod tests {
         install_in_home(&home).unwrap();
 
         let skill = std::fs::read_to_string(home.skill_dir().join("SKILL.md")).unwrap();
-        assert!(skill.starts_with("---\nname: lf-tasks\n"));
-        assert!(skill.contains("---\n\n<!-- Written by `lf init`"));
-        assert!(!skill.contains("{home}") && !skill.contains("{lf}"));
+        assert!(skill.starts_with("---\nname: furmi-tasks\n"));
+        assert!(skill.contains("---\n\n<!-- Written by `furmi init`"));
+        assert!(!skill.contains("{home}") && !skill.contains("{furmi}"));
         // Not the default home, so every command carries --home.
-        assert!(skill.contains(&format!("lf --home {} add", dir.path().display())));
+        assert!(skill.contains(&format!("furmi --home {} add", dir.path().display())));
 
         // Agents with their own skill folder reach the same file.
-        let via_link = dir.path().join(".claude/skills/lf-tasks/SKILL.md");
+        let via_link = dir.path().join(".claude/skills/furmi-tasks/SKILL.md");
         assert_eq!(std::fs::read_to_string(via_link).unwrap(), skill);
 
         let agents = dir.path().join("AGENTS.md");
@@ -238,11 +240,11 @@ mod tests {
     #[test]
     fn links_replace_links_but_not_files() {
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("home/.agents/skills/lf-tasks");
+        let target = dir.path().join("home/.agents/skills/furmi-tasks");
         std::fs::create_dir_all(&target).unwrap();
-        let at = dir.path().join("user/.agents/skills/lf-tasks");
+        let at = dir.path().join("user/.agents/skills/furmi-tasks");
 
-        link(&dir.path().join("old/.agents/skills/lf-tasks"), &at).unwrap();
+        link(&dir.path().join("old/.agents/skills/furmi-tasks"), &at).unwrap();
         assert!(is_our_link(&at));
         link(&target, &at).unwrap();
         assert_eq!(std::fs::read_link(&at).unwrap(), target);

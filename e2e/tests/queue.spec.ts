@@ -12,7 +12,7 @@ test("with the runner off, a banner offers to start it, and it can be stopped ag
   await expect(page.locator("#toast")).toHaveText("Runner started");
   await expect(page.locator("#runner")).toContainText("runner: on");
   await expect(page.locator("#runner-notice")).toBeHidden();
-  expect(forge.lf("status")).toContain("running (pid");
+  expect(forge.furmi("status")).toContain("running (pid");
 
   // Stopping asks first; declining changes nothing.
   page.once("dialog", (d) => void d.dismiss());
@@ -23,7 +23,7 @@ test("with the runner off, a banner offers to start it, and it can be stopped ag
   await page.locator("#runner").getByRole("button", { name: "stop" }).click();
   await expect(page.locator("#runner")).toHaveText("runner: off");
   await expect(page.locator("#runner-notice")).toBeVisible();
-  expect(forge.lf("status")).not.toContain("running (pid");
+  expect(forge.furmi("status")).not.toContain("running (pid");
 });
 
 test("a waiting task can be edited, then cancelled and tried again", async ({ page, forge }) => {

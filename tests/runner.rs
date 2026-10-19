@@ -1,4 +1,4 @@
-//! End-to-end tests of the runner (`lf run`) against the built binary, with
+//! End-to-end tests of the runner (`furmi run`) against the built binary, with
 //! a stub "agent" that just runs the task's prompt as a shell command.
 //!
 //! Each test gets its own home, its own git repo and its own tmux server
@@ -16,7 +16,7 @@ struct Env {
 }
 
 /// The tmux session tasks run in (see the config `Env::new` writes).
-const SESSION: &str = "lft";
+const SESSION: &str = "furmit";
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -40,7 +40,7 @@ impl Env {
             tmux: tempfile::tempdir().unwrap(),
         };
         ok(env
-            .lf()
+            .furmi()
             .args(["init", "--agent", "claude", "--no-global-skill"])
             .output()
             .unwrap());
@@ -62,20 +62,20 @@ impl Env {
         env
     }
 
-    fn lf(&self) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_lf"));
+    fn furmi(&self) -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_furmi"));
         cmd.env("HOME", self.home.path())
             .env("TMUX_TMPDIR", self.tmux.path())
             .env_remove("TMUX")
-            .env("LF_NO_UPDATE_CHECK", "1")
+            .env("FURMI_NO_UPDATE_CHECK", "1")
             .arg("--home")
             .arg(self.home.path())
             .stdin(Stdio::null());
         cmd
     }
 
-    fn lf_ok(&self, args: &[&str]) -> Output {
-        ok(self.lf().args(args).output().unwrap())
+    fn furmi_ok(&self, args: &[&str]) -> Output {
+        ok(self.furmi().args(args).output().unwrap())
     }
 
     /// Queues a task running `prompt` in the test repo.
@@ -83,12 +83,12 @@ impl Env {
         let repo = self.repo.path().display().to_string();
         let mut args = vec!["add", "--repo", &repo, "--id", id, "--prompt", prompt];
         args.extend(extra);
-        self.lf_ok(&args);
+        self.furmi_ok(&args);
     }
 
-    /// One `lf run --once` pass.
+    /// One `furmi run --once` pass.
     fn tick(&self) {
-        self.lf_ok(&["run", "--once"]);
+        self.furmi_ok(&["run", "--once"]);
     }
 
     fn task_path(&self, id: &str) -> Option<PathBuf> {
@@ -150,9 +150,9 @@ impl Env {
             .output();
     }
 
-    /// Runs `lf run` in the background, like `lf start` does.
+    /// Runs `furmi run` in the background, like `furmi start` does.
     fn runner(&self) -> std::process::Child {
-        self.lf()
+        self.furmi()
             .arg("run")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -215,7 +215,7 @@ fn a_task_runs_to_done_and_its_work_is_committed() {
         git(&wt, &["show", "--name-only", "--format=", "HEAD"]),
         "out.txt"
     );
-    assert_eq!(git(&wt, &["branch", "--show-current"]), "lf/happy");
+    assert_eq!(git(&wt, &["branch", "--show-current"]), "furmi/happy");
 }
 
 #[test]
@@ -270,17 +270,18 @@ fn losing_the_tmux_server_requeues_without_using_a_retry() {
         "retries: 0, yet it wasn't failed"
     );
 
-    env.lf_ok(&["cancel", "survivor"]);
+    env.furmi_ok(&["cancel", "survivor"]);
 }
 
 #[test]
 fn only_one_runner_per_home_and_status_notices() {
     let env = Env::new("");
-    let status = |env: &Env| String::from_utf8_lossy(&env.lf_ok(&["status"]).stdout).into_owned();
+    let status =
+        |env: &Env| String::from_utf8_lossy(&env.furmi_ok(&["status"]).stdout).into_owned();
     assert!(status(&env).contains("NOT running"));
 
     let mut runner = env
-        .lf()
+        .furmi()
         .arg("run")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -290,7 +291,7 @@ fn only_one_runner_per_home_and_status_notices() {
         status(&env).contains("runner     running")
     });
 
-    let second = env.lf().args(["run", "--once"]).output().unwrap();
+    let second = env.furmi().args(["run", "--once"]).output().unwrap();
     assert!(!second.status.success());
     assert!(String::from_utf8_lossy(&second.stderr).contains("already running"));
 
@@ -305,14 +306,14 @@ fn only_one_runner_per_home_and_status_notices() {
 #[test]
 fn doctor_checks_the_setup() {
     let env = Env::new("");
-    let out = env.lf().arg("doctor").output().unwrap();
+    let out = env.furmi().arg("doctor").output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{text}");
     assert!(text.contains("ok    tmux is installed"), "{text}");
     assert!(text.contains("agent `stub`"), "{text}");
 
     std::fs::write(env.home.path().join("tasks/bad.md"), "garbage").unwrap();
-    let out = env.lf().arg("doctor").output().unwrap();
+    let out = env.furmi().arg("doctor").output().unwrap();
     assert!(String::from_utf8_lossy(&out.stdout).contains("bad.md"));
 }
 
@@ -375,7 +376,7 @@ fn the_daily_budget_stops_new_tasks_from_starting() {
 
     env.tick();
     assert_eq!(env.field("waiting", "status").as_deref(), Some("pending"));
-    let status = String::from_utf8_lossy(&env.lf_ok(&["status"]).stdout).into_owned();
+    let status = String::from_utf8_lossy(&env.furmi_ok(&["status"]).stdout).into_owned();
     assert!(status.contains("$5.0000 of $1.0000"), "{status}");
 }
 
@@ -408,11 +409,11 @@ fn a_slow_on_finish_does_not_block_other_commands() {
     wait_for("the agent to exit", Duration::from_secs(30), || {
         env.home.path().join("logs/pushy.1.exit").exists()
     });
-    let mut finishing = env.lf().args(["run", "--once"]).spawn().unwrap();
+    let mut finishing = env.furmi().args(["run", "--once"]).spawn().unwrap();
     std::thread::sleep(Duration::from_millis(1500)); // now inside the hook
 
     let started = Instant::now();
-    env.lf_ok(&["cancel", "bystander"]); // needs the home lock
+    env.furmi_ok(&["cancel", "bystander"]); // needs the home lock
     assert!(
         started.elapsed() < Duration::from_secs(4),
         "blocked behind on_finish"
@@ -425,12 +426,12 @@ fn a_slow_on_finish_does_not_block_other_commands() {
     assert!(finishing.wait().unwrap().success());
     assert_eq!(env.field("pushy", "status").as_deref(), Some("done"));
     assert_eq!(
-        git(origin.path(), &["branch", "--list", "lf/pushy"]).trim(),
-        "lf/pushy"
+        git(origin.path(), &["branch", "--list", "furmi/pushy"]).trim(),
+        "furmi/pushy"
     );
 }
 
-/// `lf done` runs `on_finish` (here: a push whose pre-push hook
+/// `furmi done` runs `on_finish` (here: a push whose pre-push hook
 /// takes a while) without holding the home lock, so the runner,
 /// the dashboard and other commands aren't stalled behind it.
 #[test]
@@ -457,7 +458,7 @@ fn done_does_not_hold_the_home_lock_while_on_finish_runs() {
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     // The agent outlives the tick that starts it, so the task is
-    // still `running` afterwards and `lf done` — not the runner —
+    // still `running` afterwards and `furmi done` — not the runner —
     // runs its on_finish.
     env.add(
         "pushy",
@@ -470,11 +471,11 @@ fn done_does_not_hold_the_home_lock_while_on_finish_runs() {
     wait_for("the agent to exit", Duration::from_secs(30), || {
         env.home.path().join("logs/pushy.1.exit").exists()
     });
-    let mut finishing = env.lf().args(["done", "pushy"]).spawn().unwrap();
+    let mut finishing = env.furmi().args(["done", "pushy"]).spawn().unwrap();
     std::thread::sleep(Duration::from_millis(1500)); // now inside the hook
 
     let started = Instant::now();
-    env.lf_ok(&["cancel", "bystander"]); // needs the home lock
+    env.furmi_ok(&["cancel", "bystander"]); // needs the home lock
     assert!(
         started.elapsed() < Duration::from_secs(4),
         "blocked behind on_finish"
@@ -496,12 +497,12 @@ fn done_does_not_hold_the_home_lock_while_on_finish_runs() {
     assert!(finishing.wait().unwrap().success());
     assert_eq!(env.field("pushy", "status").as_deref(), Some("done"));
     assert_eq!(
-        git(origin.path(), &["branch", "--list", "lf/pushy"]).trim(),
-        "lf/pushy"
+        git(origin.path(), &["branch", "--list", "furmi/pushy"]).trim(),
+        "furmi/pushy"
     );
 }
 
-/// `lf done` from inside the task's window defers the window kill
+/// `furmi done` from inside the task's window defers the window kill
 /// until after `on_finish`; it must still happen when `on_finish`
 /// fails, so the window doesn't outlive the attempt.
 #[test]
@@ -518,12 +519,12 @@ fn done_kills_the_window_even_when_on_finish_fails() {
     wait_for("the agent to exit", Duration::from_secs(30), || {
         env.home.path().join("logs/pushy.1.exit").exists()
     });
-    // LF_TASK_ID makes `lf done` believe it runs inside the
+    // FURMI_TASK_ID makes `furmi done` believe it runs inside the
     // task's window, so the kill waits until on_finish is over —
     // and on_finish (the push) fails.
     let out = env
-        .lf()
-        .env("LF_TASK_ID", "pushy")
+        .furmi()
+        .env("FURMI_TASK_ID", "pushy")
         .args(["done", "pushy"])
         .output()
         .unwrap();
@@ -532,7 +533,7 @@ fn done_kills_the_window_even_when_on_finish_fails() {
 
     // The window was killed even though on_finish failed.
     let windows = Command::new("tmux")
-        .args(["list-windows", "-t", "=lft", "-F", "#{window_name}"])
+        .args(["list-windows", "-t", "=furmit", "-F", "#{window_name}"])
         .env("TMUX_TMPDIR", env.tmux.path())
         .env_remove("TMUX")
         .output()
@@ -550,7 +551,7 @@ enum FakePr {
     None,
     /// An open PR whose head is the branch's current commit.
     AtHead,
-    /// An open PR for an older commit: a stale `lf/<id>`
+    /// An open PR for an older commit: a stale `furmi/<id>`
     /// branch from an earlier task.
     AtOlderCommit,
     /// A merged PR: closed, so it no longer covers the branch.
@@ -606,7 +607,7 @@ fn finish_with_pr(pr: FakePr) -> usize {
 
     wait_for("prtask to be archived", Duration::from_secs(60), || {
         ok(env
-            .lf()
+            .furmi()
             .env("PATH", &path)
             .args(["run", "--once"])
             .output()
@@ -629,7 +630,7 @@ fn on_finish_pr_does_not_open_a_second_pr_for_the_branch() {
     assert_eq!(finish_with_pr(FakePr::AtHead), 0);
 }
 
-/// A stale `lf/<id>` branch from an earlier task can have an open
+/// A stale `furmi/<id>` branch from an earlier task can have an open
 /// PR of its own, pointing at an older commit: that doesn't cover
 /// this run's work, so a PR is still opened.
 #[test]
@@ -684,7 +685,7 @@ fn a_transient_tmux_error_does_not_requeue_a_running_task() {
     let bin = flaky_tmux(env.home.path());
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
     ok(env
-        .lf()
+        .furmi()
         .env("PATH", &path)
         .args(["run", "--once"])
         .output()
@@ -704,12 +705,12 @@ fn a_transient_tmux_error_does_not_requeue_a_running_task() {
     assert_eq!(env.field("steady", "status").as_deref(), Some("running"));
     assert_eq!(env.field("steady", "attempts").as_deref(), Some("1"));
 
-    env.lf_ok(&["cancel", "steady"]);
+    env.furmi_ok(&["cancel", "steady"]);
 }
 
 // --- crash recovery ------------------------------------------------------------
 
-/// `lf run` killed outright (SIGKILL: no cleanup, no signal
+/// `furmi run` killed outright (SIGKILL: no cleanup, no signal
 /// handlers) while a task is running, then started again. The
 /// tmux server outlives the runner, so the agent keeps going:
 /// the new runner must let it finish, not start it again, and
@@ -754,7 +755,7 @@ fn a_killed_runner_leaves_no_task_stuck_running_or_running_twice() {
     );
 }
 
-/// A running `lf run` asked to stop (SIGTERM, as `lf stop` does) must not
+/// A running `furmi run` asked to stop (SIGTERM, as `furmi stop` does) must not
 /// touch the task: it exits cleanly, the agent keeps going in its tmux
 /// window, and a fresh runner finishes it without a second attempt.
 #[test]
@@ -823,22 +824,23 @@ fn a_corrupt_exit_record_is_ignored_until_the_attempt_ends() {
         "a lost window is an interruption, not a failure"
     );
 
-    env.lf_ok(&["cancel", "stubborn"]);
+    env.furmi_ok(&["cancel", "stubborn"]);
 }
 
-/// Two `lf run` processes on one home: the second must refuse,
+/// Two `furmi run` processes on one home: the second must refuse,
 /// and the first keeps serving.
 #[test]
 fn a_second_runner_process_refuses_to_start() {
     let env = Env::new("");
-    let status = |env: &Env| String::from_utf8_lossy(&env.lf_ok(&["status"]).stdout).into_owned();
+    let status =
+        |env: &Env| String::from_utf8_lossy(&env.furmi_ok(&["status"]).stdout).into_owned();
 
     let mut runner = env.runner();
     wait_for("the runner to show up", Duration::from_secs(10), || {
         status(&env).contains("runner     running")
     });
 
-    let second = env.lf().arg("run").output().unwrap();
+    let second = env.furmi().arg("run").output().unwrap();
     assert!(!second.status.success());
     assert!(
         String::from_utf8_lossy(&second.stderr).contains("already running"),
@@ -914,7 +916,7 @@ fn half_written_task_and_schedule_files_are_skipped_and_reported() {
 /// gone (killed by hand, or renamed away): the running tasks are
 /// requeued as interruptions, not left stuck `running`.
 #[test]
-fn losing_the_loompa_session_requeues_the_task() {
+fn losing_the_furmi_session_requeues_the_task() {
     let env = Env::new("");
     env.add("orphaned", "sleep 300", &["--retries", "0"]);
 
@@ -935,7 +937,7 @@ fn losing_the_loompa_session_requeues_the_task() {
         "retries: 0, yet it wasn't failed"
     );
 
-    env.lf_ok(&["cancel", "orphaned"]);
+    env.furmi_ok(&["cancel", "orphaned"]);
 }
 
 /// The `last_enqueued_at` slot of a schedule, for slot tests.
@@ -950,7 +952,7 @@ fn last_enqueued(env: &Env, id: &str) -> Option<String> {
 /// A schedule whose slot is due must fire exactly once for it,
 /// even across restarts in the same minute: `last_enqueued_at` is
 /// recorded (atomically) before the task is created, so a fresh
-/// `lf run --once` in the same minute finds the slot already
+/// `furmi run --once` in the same minute finds the slot already
 /// taken.
 #[test]
 fn a_schedule_does_not_fire_twice_for_the_same_slot_after_a_restart() {
@@ -1039,7 +1041,7 @@ fn on_finish_pr_failure_keeps_the_work_and_says_how_to_finish_it() {
 
     wait_for("prfail to be archived", Duration::from_secs(60), || {
         ok(env
-            .lf()
+            .furmi()
             .env("PATH", &path)
             .args(["run", "--once"])
             .output()
@@ -1050,18 +1052,18 @@ fn on_finish_pr_failure_keeps_the_work_and_says_how_to_finish_it() {
     let error = std::fs::read_to_string(env.home.path().join("archive/prfail.md")).unwrap();
     assert!(error.contains("on_finish failed"), "{error}");
     assert!(error.contains("gh auth login"), "{error}");
-    assert!(error.contains("lf/prfail"), "{error}");
-    assert!(error.contains("lf retry prfail"), "{error}");
+    assert!(error.contains("furmi/prfail"), "{error}");
+    assert!(error.contains("furmi retry prfail"), "{error}");
 
     // The commit `on_finish` made before `gh` failed is still there.
     let wt = env.worktree("prfail");
-    assert_eq!(git(&wt, &["branch", "--show-current"]), "lf/prfail");
+    assert_eq!(git(&wt, &["branch", "--show-current"]), "furmi/prfail");
     assert_eq!(
         git(&wt, &["show", "--name-only", "--format=", "HEAD"]),
         "f.txt"
     );
     assert!(
-        !git(env.repo.path(), &["branch", "--list", "lf/prfail"])
+        !git(env.repo.path(), &["branch", "--list", "furmi/prfail"])
             .trim()
             .is_empty(),
         "the branch is kept"
@@ -1071,7 +1073,7 @@ fn on_finish_pr_failure_keeps_the_work_and_says_how_to_finish_it() {
 #[test]
 fn a_pane_that_dies_without_a_status_fails_with_an_explanation() {
     let env = Env::new("");
-    // `$PPID` here is `lf exec`: killing it leaves a dead pane but no
+    // `$PPID` here is `furmi exec`: killing it leaves a dead pane but no
     // `logs/<id>.<attempt>.exit`, which is the production failure this
     // reproduces.
     env.add("selfkill", "kill -9 $PPID", &["--retries", "0"]);
@@ -1141,7 +1143,7 @@ fn a_provider_error_fails_with_its_reason_and_is_not_retried() {
     let error = env.field("provider", "error").unwrap();
     assert!(error.contains("not available in your country"), "{error}");
     assert!(error.contains("Retrying the same model"), "{error}");
-    assert!(error.contains("then run `lf retry provider`"), "{error}");
+    assert!(error.contains("then run `furmi retry provider`"), "{error}");
     assert!(
         !error.contains('\u{1b}'),
         "terminal colours were stripped: {error}"
@@ -1165,8 +1167,8 @@ fn a_successful_run_mentioning_a_provider_error_stays_done() {
 #[test]
 fn a_task_whose_agent_binary_is_missing_fails_before_starting() {
     let env = Env::new(
-        "[agents.missingbin]\nheadless = [\"lf-no-such-agent-binary\", \"{prompt}\"]\n\
-         interactive = [\"lf-no-such-agent-binary\", \"{prompt}\"]\n",
+        "[agents.missingbin]\nheadless = [\"furmi-no-such-agent-binary\", \"{prompt}\"]\n\
+         interactive = [\"furmi-no-such-agent-binary\", \"{prompt}\"]\n",
     );
     env.add(
         "nobin",
@@ -1181,7 +1183,7 @@ fn a_task_whose_agent_binary_is_missing_fails_before_starting() {
         "no attempt was made, so no retry either"
     );
     let error = env.field("nobin", "error").unwrap();
-    assert!(error.contains("lf-no-such-agent-binary"), "{error}");
+    assert!(error.contains("furmi-no-such-agent-binary"), "{error}");
     assert!(error.contains("not on $PATH"), "{error}");
     assert!(error.contains("install it"), "{error}");
 }
@@ -1189,7 +1191,7 @@ fn a_task_whose_agent_binary_is_missing_fails_before_starting() {
 #[test]
 fn a_task_with_an_unconfigured_agent_fails_with_an_explanation() {
     let env = Env::new("");
-    // `lf add` rejects this, but a task written by hand, an agent or a
+    // `furmi add` rejects this, but a task written by hand, an agent or a
     // schedule can still name an agent that has no [agents.*] section.
     std::fs::write(
         env.home.path().join("tasks/ghost.md"),

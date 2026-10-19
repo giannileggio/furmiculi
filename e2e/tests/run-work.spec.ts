@@ -16,7 +16,7 @@ test("a task queued from the form runs to Finished with its output and commit", 
   // Use the empty state's own button, as a first-time user would.
   await page.locator("#panel-queue").getByRole("button", { name: "+ New task" }).click();
   await expect(page.locator("#new-title")).toHaveText("New task");
-  await expect(page.locator("#f-repo")).not.toHaveValue(""); // the repo `lf` was started in
+  await expect(page.locator("#f-repo")).not.toHaveValue(""); // the repo `furmi` was started in
   await page.locator("#f-prompt").fill("echo hello-from-agent; echo data > out.txt");
   await page.locator("#f-finish").selectOption("commit");
   await page.locator("#f-submit").click();

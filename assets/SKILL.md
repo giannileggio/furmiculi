@@ -1,13 +1,13 @@
 ---
-name: lf-tasks
-description: Create, schedule, edit or cancel loompa-forge (lf) tasks, the Markdown files that queue work for coding agents to run later. Use when the user asks to add, queue or schedule a task (for this repo or another), to set up something recurring ("every night...", "each Monday..."), or to change or drop queued work.
+name: furmi-tasks
+description: Create, schedule, edit or cancel furmiculi (furmi) tasks, the Markdown files that queue work for coding agents to run later. Use when the user asks to add, queue or schedule a task (for this repo or another), to set up something recurring ("every night...", "each Monday..."), or to change or drop queued work.
 ---
 
-# Managing lf tasks
+# Managing furmi tasks
 
 The queue lives in `{home}`. The full format is in `{home}/FORMAT.md`; read
 it if anything here is unclear. Run every command exactly as written here
-(`{lf} ...`), from any folder.
+(`{furmi} ...`), from any folder.
 
 A task is run later, by another agent, in the target repo. That agent has no
 access to this conversation. Your job is to turn what the user said into a
@@ -18,8 +18,8 @@ task it can carry out.
 - **Repo**: an absolute path or one starting with `~`. "This repo", or no
   repo at all while you're working in a git repo outside `{home}`, means that
   repo's root (`git rev-parse --show-toplevel`). If the user gives only a
-  name, look for it in the `REPO` column of `{lf} ls`, `{lf} ls --archive` and
-  `{lf} ls --schedules`, or check that `~/Projects/<name>` exists. If it's
+  name, look for it in the `REPO` column of `{furmi} ls`, `{furmi} ls --archive` and
+  `{furmi} ls --schedules`, or check that `~/Projects/<name>` exists. If it's
   still ambiguous, ask. Don't guess.
 - **What to do**: if the request is vague ("clean up the auth code"), ask
   one or two questions before you queue it. A vague task wastes a whole run.
@@ -46,17 +46,17 @@ and can't ask questions (headless runs have nobody to answer):
 - **If blocked**: tell the agent to stop and explain what's missing instead
   of guessing.
 
-Don't invent requirements the user didn't ask for. Don't mention lf; the
+Don't invent requirements the user didn't ask for. Don't mention furmi; the
 runner handles branches, worktrees, commits and PRs as configured.
 
-## 3. Create the task with `{lf} add`
+## 3. Create the task with `{furmi} add`
 
-Always use `{lf} add`, never a hand-written file in `{home}/tasks/`. It
+Always use `{furmi} add`, never a hand-written file in `{home}/tasks/`. It
 validates the task before creating it, picks a unique id, and stores
-`created_at`, so `lf run` never sees a half-written task.
+`created_at`, so `furmi run` never sees a half-written task.
 
 ```sh
-{lf} add --repo ~/Projects/myapp --created-by agent --on-finish pr <<'EOF'
+{furmi} add --repo ~/Projects/myapp --created-by agent --on-finish pr <<'EOF'
 Fix the redirect loop after login when the session cookie has expired.
 
 Reproduce: log in, delete the `session` cookie, reload /dashboard. The
@@ -72,7 +72,7 @@ Options (all optional except `--repo`):
 | Option | Meaning |
 |--------|---------|
 | `--id <id>` | File name and id: `a-z`, `0-9`, `-`. Default: derived from the prompt's first line. Pass a short descriptive one. |
-| `--branch <name>` | Default `lf/<id>`. |
+| `--branch <name>` | Default `furmi/<id>`. |
 | `--no-worktree` | Work directly in the repo checkout. |
 | `--agent <name>`, `--model <id>` | See step 1. |
 | `--mode headless\|interactive` | |
@@ -104,24 +104,24 @@ on_finish: pr
 Update dependencies to their latest compatible versions...
 ```
 
-Then run `{lf} validate {home}/schedules/<id>.md` and fix anything it
+Then run `{furmi} validate {home}/schedules/<id>.md` and fix anything it
 reports. Use an id that doesn't already exist in `{home}/schedules/`. The schedule first
-fires at the next matching time after `lf run` sees it. A firing is skipped
+fires at the next matching time after `furmi run` sees it. A firing is skipped
 while the previous task from the same schedule is still queued or running;
 add `allow_overlap: true` only if the user wants runs to pile up.
 
 ## 5. Changing or dropping queued work
 
-- Check the current state with `{lf} ls` (or read the file) first.
+- Check the current state with `{furmi} ls` (or read the file) first.
 - **Pending tasks** and **schedules**: you may edit the prompt and the fields
-  from step 1, then run `{lf} validate <file>`. To pause a schedule, set
+  from step 1, then run `{furmi} validate <file>`. To pause a schedule, set
   `enabled: false`.
 - Change a status only with these commands, and confirm with the user first:
-  `{lf} cancel <id>` (pending or running), `{lf} retry <id>` (failed,
-  cancelled or needs_review: requeues it), `{lf} done <id>` (runs
-  `on_finish`, e.g. opens the PR) and `{lf} fail <id> -r "<why>"`. The
-  `error:` field says why a task failed; `{lf} logs <id>` prints its output.
-- Never edit fields lf writes (`status`, `attempts`, `started_at`,
+  `{furmi} cancel <id>` (pending or running), `{furmi} retry <id>` (failed,
+  cancelled or needs_review: requeues it), `{furmi} done <id>` (runs
+  `on_finish`, e.g. opens the PR) and `{furmi} fail <id> -r "<why>"`. The
+  `error:` field says why a task failed; `{furmi} logs <id>` prints its output.
+- Never edit fields furmi writes (`status`, `attempts`, `started_at`,
   `finished_at`, `exit_code`, `tmux_window`, `error`, `interruptions`,
   `last_enqueued_at`),
   and never delete task files.
@@ -131,5 +131,5 @@ add `allow_overlap: true` only if the user wants runs to pile up.
 ## 6. Report back
 
 Tell the user the task id, when it will start, and what happens when it
-finishes (e.g. "opens a PR on `lf/fix-login-redirect`"). If it should start
-soon, remind them that tasks only run while `lf run` is running.
+finishes (e.g. "opens a PR on `furmi/fix-login-redirect`"). If it should start
+soon, remind them that tasks only run while `furmi run` is running.

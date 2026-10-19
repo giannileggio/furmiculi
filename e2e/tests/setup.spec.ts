@@ -1,5 +1,5 @@
 // The Setup dialog: which coding agents exist, picking the default, and the
-// health checks `lf doctor` runs.
+// health checks `furmi doctor` runs.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { expect, openDashboard, test } from "./fixtures";
@@ -24,7 +24,7 @@ test("Setup lists agents and checks, and lets you pick the default agent", async
   await expect(stub).toContainText("default");
   await expect(stub2.getByRole("button", { name: "Use this one" })).toBeVisible();
 
-  // The checks are what `lf doctor` reports, one line each.
+  // The checks are what `furmi doctor` reports, one line each.
   await expect(overlay.locator("#setup-list li").first()).not.toHaveText("checking…");
   await expect(overlay.locator("#setup-list")).toContainText("config.toml is valid");
 

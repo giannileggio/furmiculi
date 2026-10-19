@@ -1,39 +1,39 @@
 # File formats
 
-All state lives under one folder: `$LF_HOME`, default `~/.loompa-forge`.
+All state lives under one folder: `$FURMI_HOME`, default `~/.furmiculi`.
 
 ```
-~/.loompa-forge/
+~/.furmiculi/
   config.toml    user preferences and defaults
   tasks/         queue: one <id>.md per task
   schedules/     recurring task templates: one <id>.md per schedule
   archive/       finished tasks, moved out of tasks/
   logs/          <id>.<attempt>.log (the agent's output), .exit (exit status)
                  and .usage (token/cost usage, if the agent reports it) per run
-  worktrees/     <id>/: the git worktree a task runs in (kept until `lf clean`)
-  runner.log     what `lf run` did, appended (moved to runner.log.1 past 5 MB)
-  runner.json    `lf run`'s heartbeat: pid, start and last pass (see `lf status`)
+  worktrees/     <id>/: the git worktree a task runs in (kept until `furmi clean`)
+  runner.log     what `furmi run` did, appended (moved to runner.log.1 past 5 MB)
+  runner.json    `furmi run`'s heartbeat: pid, start and last pass (see `furmi status`)
   AGENTS.md      guide for any agent opened in this folder
   CLAUDE.md, GEMINI.md   `@AGENTS.md`, for agents that don't read AGENTS.md
   FORMAT.md      this document
-  .agents/skills/lf-tasks/SKILL.md   how an agent creates and edits tasks
-  .claude/skills/lf-tasks            link to it, for agents with their own skill folder
+  .agents/skills/furmi-tasks/SKILL.md   how an agent creates and edits tasks
+  .claude/skills/furmi-tasks            link to it, for agents with their own skill folder
 ```
 
 Open any coding agent in this folder and ask it to "add a task to..." or
-"every night, ...": the `lf-tasks` skill tells it how. `lf init` keeps your
+"every night, ...": the `furmi-tasks` skill tells it how. `furmi init` keeps your
 `AGENTS.md`, `CLAUDE.md` and `GEMINI.md` if they exist, and rewrites
-`FORMAT.md` and the skill so they match the installed `lf`.
+`FORMAT.md` and the skill so they match the installed `furmi`.
 
-`lf init` also offers to make the skill available in every project (or pass
-`--global-skill` / `--no-global-skill`): it links `~/.agents/skills/lf-tasks`,
-and `~/.claude/skills/lf-tasks` if `~/.claude` exists, to this folder's skill.
+`furmi init` also offers to make the skill available in every project (or pass
+`--global-skill` / `--no-global-skill`): it links `~/.agents/skills/furmi-tasks`,
+and `~/.claude/skills/furmi-tasks` if `~/.claude` exists, to this folder's skill.
 Agents can then queue tasks from inside any repo ("queue a task for this
-repo..."). Once linked, every `lf init` keeps the links pointing here.
+repo..."). Once linked, every `furmi init` keeps the links pointing here.
 
 Tasks and schedules are Markdown files with a YAML frontmatter block. The
 **body is the prompt** given to the agent. Unknown frontmatter keys are
-errors, so typos don't silently fall back to defaults. Run `lf validate` after
+errors, so typos don't silently fall back to defaults. Run `furmi validate` after
 editing any file.
 
 ## Task — `tasks/<id>.md`
@@ -58,22 +58,22 @@ Add a regression test.
 |----------------|----------|-------------------------------|---------|
 | `id`           | yes      | —                 | `a-z`, `0-9`, `-`, max 64 chars. Must equal the file name without `.md`. |
 | `repo`         | yes      | —                 | Folder the task runs in: absolute, or starting with `~`. |
-| `branch`       | no       | `lf/<id>` if `worktree` | Branch to work on. |
+| `branch`       | no       | `furmi/<id>` if `worktree` | Branch to work on. |
 | `worktree`     | no       | `true`            | Run in a dedicated git worktree for the branch. |
-| `agent`        | no       | chosen at `lf init` | Name of an agent in `config.toml` `[agents.*]`. |
+| `agent`        | no       | chosen at `furmi init` | Name of an agent in `config.toml` `[agents.*]`. |
 | `model`        | no       | the agent's own   | Model id, in the form that agent's CLI expects. |
-| `mode`         | no       | `headless`        | `headless`: non-interactive, exit code decides the outcome. `interactive`: a live session that finishes with `lf done` / `lf fail`. |
+| `mode`         | no       | `headless`        | `headless`: non-interactive, exit code decides the outcome. `interactive`: a live session that finishes with `furmi done` / `furmi fail`. |
 | `on_finish`    | no       | `none`            | `none` \| `commit` \| `push` \| `pr` |
 | `retries`      | no       | `1`               | Extra attempts after a failure. |
 | `retry_delay`  | no       | `5m`              | Wait between attempts (`30s`, `5m`, `1h`...). |
 | `timeout`      | no       | `2h`              | Per attempt. |
 | `scheduled_at` | no       | now               | Don't start before this RFC 3339 time. |
 | `created_by`   | no       | —                 | Free text: `cli`, `agent`, `schedule:<id>`... |
-| `created_at`   | no       | —                 | RFC 3339; set by `lf add`. |
+| `created_at`   | no       | —                 | RFC 3339; set by `furmi add`. |
 
-### Fields loompa-forge writes
+### Fields furmiculi writes
 
-Don't edit these by hand. Use `lf` commands to change the status.
+Don't edit these by hand. Use `furmi` commands to change the status.
 
 | Field         | Meaning |
 |---------------|---------|
@@ -88,52 +88,52 @@ Don't edit these by hand. Use `lf` commands to change the status.
 | `cost_usd`    | Cost in USD, same condition. |
 
 `needs_review` means an interactive session ended without signalling
-`lf done` or `lf fail`.
+`furmi done` or `furmi fail`.
 
 ### Changing the status by hand
 
 | Command | Works on | Effect |
 |---------|----------|--------|
-| `lf done [id]`   | running, needs_review, failed | Ends the session if running, runs `on_finish`, archives as `done` (or `failed` if `on_finish` fails). |
-| `lf fail [id] [-r reason]` | running, needs_review | Ends the session if running, archives as `failed` without retrying. |
-| `lf cancel [id]` | pending, running | Ends the session if running, archives as `cancelled`. `on_finish` doesn't run. |
-| `lf retry <id>`  | failed, cancelled, needs_review | Moves it back to `tasks/` as `pending`, to start as soon as possible in the same worktree. |
-| `lf attach [id]` | running | Opens the task's tmux window, or the whole session without an id. |
+| `furmi done [id]`   | running, needs_review, failed | Ends the session if running, runs `on_finish`, archives as `done` (or `failed` if `on_finish` fails). |
+| `furmi fail [id] [-r reason]` | running, needs_review | Ends the session if running, archives as `failed` without retrying. |
+| `furmi cancel [id]` | pending, running | Ends the session if running, archives as `cancelled`. `on_finish` doesn't run. |
+| `furmi retry <id>`  | failed, cancelled, needs_review | Moves it back to `tasks/` as `pending`, to start as soon as possible in the same worktree. |
+| `furmi attach [id]` | running | Opens the task's tmux window, or the whole session without an id. |
 
-`id` defaults to `$LF_TASK_ID`, so inside a task's window a plain `lf done`
+`id` defaults to `$FURMI_TASK_ID`, so inside a task's window a plain `furmi done`
 works: run it in the agent's shell, or ask the agent to run it.
 Ending a session saves its output to the attempt's log first.
 
-`lf logs <id> [--attempt N]` prints that output: the live tmux pane for a
+`furmi logs <id> [--attempt N]` prints that output: the live tmux pane for a
 task still running, else `logs/<id>.<attempt>.log` (the latest attempt by
 default). A headless agent's stdout and stderr are streamed to that file as
 they arrive (up to 64 MB per attempt), so the whole log survives tmux dying.
 Interactive sessions' logs are captured from the tmux pane when they end.
 
-`lf clean` removes `worktrees/<id>` of archived `done` tasks (`--all`: any
+`furmi clean` removes `worktrees/<id>` of archived `done` tasks (`--all`: any
 archived task, and worktrees with no task file; `--older-than 7d`: only
 tasks finished that long ago; `-n`: dry run). It never removes a worktree
 with uncommitted changes, and never deletes branches.
 
-`lf clean --archive` also deletes the archived task file and its
+`furmi clean --archive` also deletes the archived task file and its
 `logs/<id>.*` files, for any task whose worktree is already gone (or never
-had one). This loses that task's history from `lf ls --archive`/`lf web`
+had one). This loses that task's history from `furmi ls --archive`/`furmi web`
 for good, so it's off by default; combine it with `--all --older-than` to
 prune old history without touching anything recent.
 
-`attempts` keeps counting across `lf retry`, so earlier logs are kept. That
+`attempts` keeps counting across `furmi retry`, so earlier logs are kept. That
 also means automatic retries aren't renewed: if the retried attempt fails,
 the task is `failed` unless `retries` still covers the new count.
 
 A failed attempt (non-zero exit, signal, timeout, or a start error such as a
 worktree that can't be created) goes back to `pending` with `scheduled_at`
 pushed out by `retry_delay` while retries remain; then it's `failed`. A task
-that doesn't pass `lf validate` when its turn comes is failed without
+that doesn't pass `furmi validate` when its turn comes is failed without
 running. `timeout` applies to headless tasks only (an interactive session
 waits for a human); when it hits, the agent's process group gets SIGTERM and,
 5 seconds later, SIGKILL. If `on_finish` fails after the agent succeeded, the
 task is `failed` without a retry; its worktree keeps the work. `on_finish:
-pr` doesn't open a second PR if the branch already has one, so `lf done` can
+pr` doesn't open a second PR if the branch already has one, so `furmi done` can
 be re-run after a partial failure.
 
 A running task whose tmux window is gone without an exit record (a reboot,
@@ -142,14 +142,14 @@ a killed tmux server) is *interrupted*, not failed: it goes back to
 retry (see `interruptions`).
 
 `prompt` is passed to the agent as a single command-line argument, so it
-must stay under 100,000 bytes (`lf validate` and `lf add` check this): put
+must stay under 100,000 bytes (`furmi validate` and `furmi add` check this): put
 long specifications in a file in the repo and point the prompt at it.
 
 With `worktree: true`, an existing `worktrees/<id>` is reused only if it's
-really a worktree of the task's repo. With `worktree: false`, `lf` refuses to
+really a worktree of the task's repo. With `worktree: false`, `furmi` refuses to
 switch the repo's branch while it has uncommitted changes.
 
-The agent runs with `LF_HOME` and `LF_TASK_ID` set.
+The agent runs with `FURMI_HOME` and `FURMI_TASK_ID` set.
 
 ## Schedule — `schedules/<id>.md`
 
@@ -163,7 +163,7 @@ the task it creates. It also adds:
 | `cron`             | yes      | 5-field cron expression in local time, e.g. `"0 2 * * *"`. Quote it. |
 | `enabled`          | no       | Default `true`. |
 | `allow_overlap`    | no       | Default `false`: a firing is skipped while the previous task from this schedule is still in `tasks/` (pending or running), so a slow task isn't joined by a pile of copies. |
-| `last_enqueued_at` | —        | Written by loompa-forge. |
+| `last_enqueued_at` | —        | Written by furmiculi. |
 
 ```markdown
 ---
@@ -176,17 +176,17 @@ on_finish: pr
 Update dependencies, run the test suite, and fix any breakage.
 ```
 
-Each time the schedule fires, `lf run` creates a task `<id>-<YYYYMMDD-HHMM>`
+Each time the schedule fires, `furmi run` creates a task `<id>-<YYYYMMDD-HHMM>`
 in `tasks/` with the schedule's fields and prompt and sets
-`created_by: schedule:<id>`. The first time `lf run` sees a schedule it only
+`created_by: schedule:<id>`. The first time `furmi run` sees a schedule it only
 records `last_enqueued_at`; it fires from then on. Firings missed while
-`lf run` wasn't running collapse into one task, not one per missed slot.
-`lf run` logs a warning when a schedule's last 3 runs all failed, and
-`lf status` lists schedules whose last 2 did.
+`furmi run` wasn't running collapse into one task, not one per missed slot.
+`furmi run` logs a warning when a schedule's last 3 runs all failed, and
+`furmi status` lists schedules whose last 2 did.
 
 ## Config — `config.toml`
 
-`lf init` writes a `config.toml` with every default, commented, and asks
+`furmi init` writes a `config.toml` with every default, commented, and asks
 which agent tasks use by default (or detects the only one on `$PATH`, or
 takes `--agent`). Presets are built in for `claude`, `codex`, `gemini`,
 `opencode` and `pi`; add an `[agents.<name>]` table for any other CLI agent:
@@ -212,15 +212,15 @@ daily_budget_usd = 20.0   # optional
 ```
 
 Once the cost agents reported for tasks run today (local time) reaches
-`daily_budget_usd`, `lf run` starts no more tasks until tomorrow; running
-ones finish. Only agents that report a cost count (see below). `lf status`
+`daily_budget_usd`, `furmi run` starts no more tasks until tomorrow; running
+ones finish. Only agents that report a cost count (see below). `furmi status`
 shows the day's spend.
 
 ### Token/cost usage
 
-If a headless run's stdout is a JSON object with a `usage` field, `lf`
-records it on the task as `tokens_in`/`tokens_out`/`cost_usd` (`lf ls` and
-`lf web` show them too). The `claude` preset asks for this with
+If a headless run's stdout is a JSON object with a `usage` field, `furmi`
+records it on the task as `tokens_in`/`tokens_out`/`cost_usd` (`furmi ls` and
+`furmi web` show them too). The `claude` preset asks for this with
 `--output-format json`; other agents report nothing unless their own
 headless flags produce the same shape. Interactive mode never reports
 usage: it keeps a real terminal for the human running it.

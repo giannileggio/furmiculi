@@ -2,8 +2,8 @@
 //! edit a task that hasn't started, and create, edit, pause, resume and
 //! delete schedules.
 //!
-//! Like `lf done|cancel|retry`, these hold the home lock while they touch
-//! files, so they never race a `tick` of `lf run`, which also rewrites
+//! Like `furmi done|cancel|retry`, these hold the home lock while they touch
+//! files, so they never race a `tick` of `furmi run`, which also rewrites
 //! schedule files (`last_enqueued_at`). Every edit starts from the file as it
 //! is now and changes only what the form shows, so fields the form doesn't
 //! know about (`branch`, `model`, `timeout`, `allow_overlap`...) survive.

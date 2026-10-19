@@ -7,16 +7,16 @@ use serde::Deserialize;
 
 use crate::spec::{Mode, OnFinish};
 
-/// Written by `lf init`, with `{agent}` replaced by [`default_config_toml`].
+/// Written by `furmi init`, with `{agent}` replaced by [`default_config_toml`].
 /// Must stay in sync with `Config::default()` (enforced by a test).
-const CONFIG_TEMPLATE: &str = r#"# loompa-forge configuration.
+const CONFIG_TEMPLATE: &str = r#"# furmiculi configuration.
 # Every value below is the built-in default; delete what you don't change.
 
 [runner]
 max_parallel = 3            # tasks running at once, overall
 max_parallel_per_repo = 1   # tasks running at once in the same repo
-tmux_session = "loompa"     # one session, one window per task
-poll_interval = "30s"       # how often `lf run` rescans the folders
+tmux_session = "furmi"      # one session, one window per task
+poll_interval = "30s"       # how often `furmi run` rescans the folders
 # daily_budget_usd = 20.0   # stop starting tasks once today's reported cost reaches this
 
 # Fallbacks for any field a task or schedule doesn't set.
@@ -39,9 +39,9 @@ timeout = "2h"
 # auto-approve flags (e.g. claude "--permission-mode", "acceptEdits";
 # codex "--full-auto"; gemini "--yolo") to suit your trust level.
 #
-# claude's headless preset asks for `--output-format json`: lf parses that
+# claude's headless preset asks for `--output-format json`: furmi parses that
 # final object for token/cost usage (see `tokens_in`/`tokens_out`/`cost_usd`
-# in FORMAT.md). Drop the flag and lf just won't record usage for it.
+# in FORMAT.md). Drop the flag and furmi just won't record usage for it.
 [agents.claude]
 headless = ["claude", "-p", "{prompt}", "--output-format", "json"]
 interactive = ["claude", "{prompt}"]
@@ -68,7 +68,7 @@ interactive = ["pi", "{prompt}"]
 model_args = ["--model", "{model}"]
 "#;
 
-/// The config `lf init` writes, with `agent` as the default agent (left
+/// The config `furmi init` writes, with `agent` as the default agent (left
 /// commented out if none was chosen).
 pub fn default_config_toml(agent: Option<&str>) -> String {
     let line = match agent {
@@ -98,7 +98,7 @@ pub struct Runner {
     #[serde(with = "humantime_serde")]
     pub poll_interval: Duration,
     /// Once the cost agents reported for tasks run today reaches this,
-    /// `lf run` starts no more until tomorrow. Unset: no limit. Only agents
+    /// `furmi run` starts no more until tomorrow. Unset: no limit. Only agents
     /// that report a cost (see `cost_usd`) count towards it.
     pub daily_budget_usd: Option<f64>,
 }
@@ -135,7 +135,7 @@ impl Default for Runner {
         Self {
             max_parallel: 3,
             max_parallel_per_repo: 1,
-            tmux_session: "loompa".into(),
+            tmux_session: "furmi".into(),
             poll_interval: Duration::from_secs(30),
             daily_budget_usd: None,
         }
@@ -564,7 +564,7 @@ mod tests {
     fn partial_config_keeps_other_defaults() {
         let c = Config::parse("[runner]\nmax_parallel = 8\n").unwrap();
         assert_eq!(c.runner.max_parallel, 8);
-        assert_eq!(c.runner.tmux_session, "loompa");
+        assert_eq!(c.runner.tmux_session, "furmi");
         assert_eq!(c.agents.len(), PRESETS.len());
     }
 

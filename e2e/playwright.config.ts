@@ -1,10 +1,10 @@
 import { defineConfig } from "@playwright/test";
 
-// Browser end-to-end tests for the `lf` dashboard. Every test starts its own
-// `lf web`/`lf start` against a throwaway home, git repo and tmux server (see
+// Browser end-to-end tests for the `furmi` dashboard. Every test starts its own
+// `furmi web`/`furmi start` against a throwaway home, git repo and tmux server (see
 // tests/fixtures.ts), so tests are independent and can run in parallel.
 //
-// The binary under test is $LF_BIN, defaulting to the debug build:
+// The binary under test is $FURMI_BIN, defaulting to the debug build:
 //   cargo build && cd e2e && npm ci && npx playwright install chromium && npm test
 export default defineConfig({
   testDir: "./tests",

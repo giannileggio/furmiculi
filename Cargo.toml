@@ -1,12 +1,12 @@
 [package]
-name = "loompa-forge"
+name = "furmiculi"
 version = "0.1.0"
 edition = "2024"
 # Let-chains (1.88) and File::lock (1.89) are used; CI checks this version.
 rust-version = "1.89"
 description = "Queue and run coding-agent tasks defined as Markdown files"
 license = "Apache-2.0"
-repository = "https://github.com/giannileggio/loompa-forge"
+repository = "https://github.com/giannileggio/furmiculi"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -27,7 +27,7 @@ toml = "1.1.6"
 tempfile = "3.27.0"
 
 [[bin]]
-name = "lf"
+name = "furmi"
 path = "src/main.rs"
 
 # The profile that 'dist' will build with

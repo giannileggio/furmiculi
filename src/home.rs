@@ -5,20 +5,20 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-/// How long a command waits for another `lf` process to release the lock
+/// How long a command waits for another `furmi` process to release the lock
 /// before giving up, instead of hanging behind a stuck one.
 const LOCK_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The single folder holding everything loompa-forge owns.
+/// The single folder holding everything furmiculi owns.
 ///
-/// Resolved from `--home`, then `$LF_HOME`, then `~/.loompa-forge`.
+/// Resolved from `--home`, then `$FURMI_HOME`, then `~/.furmiculi`.
 pub struct Home {
     root: PathBuf,
 }
 
 impl Home {
     pub fn resolve(flag: Option<PathBuf>) -> Result<Self> {
-        let root = match flag.or_else(|| std::env::var_os("LF_HOME").map(PathBuf::from)) {
+        let root = match flag.or_else(|| std::env::var_os("FURMI_HOME").map(PathBuf::from)) {
             Some(p) => std::path::absolute(expand_tilde(&p))?,
             None => default_root()?,
         };
@@ -53,15 +53,15 @@ impl Home {
         self.root.join("worktrees")
     }
 
-    /// Whether this is `~/.loompa-forge`, which `lf` finds without
-    /// `--home` or `$LF_HOME`.
+    /// Whether this is `~/.furmiculi`, which `furmi` finds without
+    /// `--home` or `$FURMI_HOME`.
     pub fn is_default(&self) -> bool {
         default_root().is_ok_and(|d| d == self.root)
     }
 
-    /// The `lf-tasks` skill's folder.
+    /// The `furmi-tasks` skill's folder.
     pub fn skill_dir(&self) -> PathBuf {
-        self.root.join(".agents/skills/lf-tasks")
+        self.root.join(".agents/skills/furmi-tasks")
     }
 
     pub fn dirs(&self) -> [PathBuf; 5] {
@@ -74,17 +74,17 @@ impl Home {
         ]
     }
 
-    /// Where `lf run` appends its log (rotated when it grows large).
+    /// Where `furmi run` appends its log (rotated when it grows large).
     pub fn runner_log(&self) -> PathBuf {
         self.root.join("runner.log")
     }
 
-    /// Heartbeat written by `lf run` every pass: pid, start and last tick.
+    /// Heartbeat written by `furmi run` every pass: pid, start and last tick.
     pub fn runner_state(&self) -> PathBuf {
         self.root.join("runner.json")
     }
 
-    /// Waits until no other `lf` process is changing task files, and holds
+    /// Waits until no other `furmi` process is changing task files, and holds
     /// that lock until the returned file is dropped. Gives up after two
     /// minutes with an error, so a stuck process can't hang everything else.
     pub fn lock(&self) -> Result<std::fs::File> {
@@ -99,8 +99,8 @@ impl Home {
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(TryLockError::WouldBlock) => bail!(
-                    "{} is locked by another lf process for over {}; if nothing is running, \
-                     it may be stuck (see `lf status`)",
+                    "{} is locked by another furmi process for over {}; if nothing is running, \
+                     it may be stuck (see `furmi status`)",
                     path.display(),
                     humantime::format_duration(LOCK_TIMEOUT)
                 ),
@@ -111,10 +111,10 @@ impl Home {
         }
     }
 
-    /// Claims the right to be *the* `lf run` for this home, until the
+    /// Claims the right to be *the* `furmi run` for this home, until the
     /// returned file is dropped (or the process dies). Fails if another
     /// runner holds it. While held, the file contains this process's pid, so
-    /// `lf stop` knows who to ask to stop (see [`runner_pid`](Self::runner_pid)).
+    /// `furmi stop` knows who to ask to stop (see [`runner_pid`](Self::runner_pid)).
     pub fn claim_runner(&self) -> Result<std::fs::File> {
         let path = self.root.join(".runner.lock");
         // Not `File::create`: that would wipe a running runner's pid just
@@ -134,7 +134,7 @@ impl Home {
             }
             Err(TryLockError::WouldBlock) => {
                 bail!(
-                    "another `lf run` is already running for {}",
+                    "another `furmi run` is already running for {}",
                     self.root.display()
                 )
             }
@@ -166,11 +166,11 @@ impl Home {
             .ok()
     }
 
-    /// Fails with a helpful message if `lf init` has not been run.
+    /// Fails with a helpful message if `furmi init` has not been run.
     pub fn ensure_initialized(&self) -> Result<()> {
         if !self.tasks().is_dir() {
             bail!(
-                "{} is not initialized; run `lf init` first",
+                "{} is not initialized; run `furmi init` first",
                 self.root.display()
             );
         }
@@ -179,7 +179,7 @@ impl Home {
 }
 
 fn default_root() -> Result<PathBuf> {
-    Ok(home_dir()?.join(".loompa-forge"))
+    Ok(home_dir()?.join(".furmiculi"))
 }
 
 pub fn home_dir() -> Result<PathBuf> {
@@ -233,7 +233,10 @@ mod tests {
         assert_eq!(home.root(), dir.path());
         assert!(!home.is_default());
         assert_eq!(home.config_path(), dir.path().join("config.toml"));
-        assert_eq!(home.skill_dir(), dir.path().join(".agents/skills/lf-tasks"));
+        assert_eq!(
+            home.skill_dir(),
+            dir.path().join(".agents/skills/furmi-tasks")
+        );
         assert_eq!(
             home.dirs(),
             [
@@ -248,8 +251,8 @@ mod tests {
 
     #[test]
     fn resolve_expands_a_leading_tilde() {
-        let home = Home::resolve(Some(PathBuf::from("~/.loompa-forge-test"))).unwrap();
-        assert_eq!(home.root(), home_dir().unwrap().join(".loompa-forge-test"));
+        let home = Home::resolve(Some(PathBuf::from("~/.furmiculi-test"))).unwrap();
+        assert_eq!(home.root(), home_dir().unwrap().join(".furmiculi-test"));
     }
 
     #[test]

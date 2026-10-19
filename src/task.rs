@@ -52,7 +52,7 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
 
-    // Written by loompa-forge only.
+    // Written by furmiculi only.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub attempts: u32,
     /// Attempts cut short by something other than the task itself (tmux or
@@ -208,11 +208,11 @@ impl Task {
         fsutil::write_atomic(path, self.to_markdown()?)
     }
 
-    /// Branch the task runs on: explicit, or `lf/<id>` when using a worktree.
+    /// Branch the task runs on: explicit, or `furmi/<id>` when using a worktree.
     pub fn effective_branch(&self, config: &Config) -> Option<String> {
         let eff = self.spec.resolve(&config.defaults);
         eff.branch
-            .or_else(|| eff.worktree.then(|| format!("lf/{}", self.id)))
+            .or_else(|| eff.worktree.then(|| format!("furmi/{}", self.id)))
     }
 
     /// Problems that make this task unrunnable. `path`, if given, is checked
@@ -308,7 +308,7 @@ Fix the redirect loop.
         let c = Config::default();
         assert_eq!(t.effective_branch(&c).as_deref(), Some("fix/login"));
         t.spec.branch = None;
-        assert_eq!(t.effective_branch(&c).as_deref(), Some("lf/fix-login"));
+        assert_eq!(t.effective_branch(&c).as_deref(), Some("furmi/fix-login"));
         t.spec.worktree = Some(false);
         assert_eq!(t.effective_branch(&c), None);
     }

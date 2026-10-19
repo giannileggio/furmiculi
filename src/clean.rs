@@ -1,4 +1,4 @@
-//! `lf clean`: remove the worktrees of finished tasks, and optionally the
+//! `furmi clean`: remove the worktrees of finished tasks, and optionally the
 //! archived task files and logs themselves.
 
 use std::path::Path;
@@ -23,7 +23,7 @@ pub struct CleanArgs {
     older_than: Option<Duration>,
     /// Also delete the archived task file and its logs, for tasks whose
     /// worktree is already gone (or never had one). Loses that task's
-    /// history from `lf ls --archive` / `lf web` for good.
+    /// history from `furmi ls --archive` / `furmi web` for good.
     #[arg(long)]
     archive: bool,
     /// Show what would be removed without removing anything.
@@ -36,7 +36,7 @@ pub struct CleanArgs {
 /// uncommitted changes are always kept; branches are never deleted.
 pub fn clean(home: &Home, args: CleanArgs) -> Result<()> {
     home.ensure_initialized()?;
-    // Keeps `lf run` from starting (or `lf retry` from requeueing) a task
+    // Keeps `furmi run` from starting (or `furmi retry` from requeueing) a task
     // whose worktree is being removed.
     let _lock = home.lock()?;
     let now = now();
@@ -111,7 +111,7 @@ pub fn clean(home: &Home, args: CleanArgs) -> Result<()> {
 
 /// Deletes archived task files (and their logs) that qualify, but only if
 /// their worktree is already gone — a worktree left behind because it had
-/// uncommitted changes keeps its task record too, so `lf clean --all` run
+/// uncommitted changes keeps its task record too, so `furmi clean --all` run
 /// again still explains what that worktree is.
 fn prune_archive(home: &Home, args: &CleanArgs, now: DateTime<FixedOffset>) -> Result<()> {
     let (mut removed, mut kept) = (0, 0);
@@ -243,7 +243,7 @@ fn eligible(
     Ok(())
 }
 
-/// Whether `dir` has uncommitted changes, which `lf clean` always
+/// Whether `dir` has uncommitted changes, which `furmi clean` always
 /// keeps. A directory git can't inspect — a worktree whose owning
 /// repo moved or was deleted — is not reported as dirty: the
 /// removal attempt decides what to do with it (see
@@ -457,7 +457,7 @@ mod tests {
                 "-q",
                 dir.to_str().unwrap(),
                 "-b",
-                &format!("lf/{id}"),
+                &format!("furmi/{id}"),
             ],
         );
         dir

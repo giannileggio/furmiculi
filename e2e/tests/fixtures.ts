@@ -7,8 +7,8 @@ import * as path from "node:path";
 
 export { expect };
 
-const LF_BIN =
-  process.env.LF_BIN ?? path.resolve(__dirname, "../../target/debug/lf");
+const FURMI_BIN =
+  process.env.FURMI_BIN ?? path.resolve(__dirname, "../../target/debug/furmi");
 
 /** A running dashboard plus the throwaway state behind it. */
 export interface Forge {
@@ -16,8 +16,8 @@ export interface Forge {
   home: string;
   /** The git repo tasks run in. */
   repo: string;
-  /** Runs `lf <args>` against this home and returns its stdout. */
-  lf(...args: string[]): string;
+  /** Runs `furmi <args>` against this home and returns its stdout. */
+  furmi(...args: string[]): string;
   /** Queues a task through the CLI, the way a user would from a terminal. */
   add(id: string, prompt: string, ...extra: string[]): void;
   /** Path of a task file, wherever it currently is (tasks/ or archive/). */
@@ -38,7 +38,7 @@ function freePort(): Promise<number> {
 async function waitForServer(url: string, child: ChildProcess) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`lf exited early (${child.exitCode})`);
+    if (child.exitCode !== null) throw new Error(`furmi exited early (${child.exitCode})`);
     try {
       if ((await fetch(url)).ok) return;
     } catch {
@@ -54,13 +54,13 @@ function git(cwd: string, ...args: string[]) {
 }
 
 export const test = base.extend<{ forge: Forge; runner: boolean; config: string }>({
-  /** Run `lf start` (runner + dashboard) instead of just `lf web`. */
+  /** Run `furmi start` (runner + dashboard) instead of just `furmi web`. */
   runner: [false, { option: true }],
   /** Extra config.toml text appended after the stub agent. */
   config: ["", { option: true }],
 
   forge: async ({ runner, config }, use) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "lf-e2e-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "furmi-e2e-"));
     const home = path.join(root, "home");
     const repo = path.join(root, "repo");
     const tmux = path.join(root, "tmux");
@@ -72,25 +72,25 @@ export const test = base.extend<{ forge: Forge; runner: boolean; config: string 
       ...process.env,
       HOME: root,
       TMUX_TMPDIR: tmux,
-      LF_NO_UPDATE_CHECK: "1",
+      FURMI_NO_UPDATE_CHECK: "1",
     };
     delete env.TMUX;
 
-    const lf = (...args: string[]) =>
-      execFileSync(LF_BIN, ["--home", home, ...args], { env, cwd: repo, stdio: "pipe" }).toString();
+    const furmi = (...args: string[]) =>
+      execFileSync(FURMI_BIN, ["--home", home, ...args], { env, cwd: repo, stdio: "pipe" }).toString();
 
     git(repo, "init", "-q", "-b", "main");
     git(repo, "config", "user.email", "e2e@example.com");
     git(repo, "config", "user.name", "E2E");
     git(repo, "commit", "-q", "--allow-empty", "-m", "init");
 
-    lf("init", "--agent", "claude", "--no-global-skill");
+    furmi("init", "--agent", "claude", "--no-global-skill");
     // A stub "agent" that runs the task's prompt as a shell command, plus a
     // second one so the agent picker has a real choice.
     fs.writeFileSync(
       path.join(home, "config.toml"),
       `[runner]
-tmux_session = "lfe2e"
+tmux_session = "furmie2e"
 poll_interval = "1s"
 max_parallel_per_repo = 3 # tests run several tasks in the one test repo
 
@@ -113,7 +113,7 @@ ${config}
     const port = await freePort();
     const url = `http://127.0.0.1:${port}`;
     const server = spawn(
-      LF_BIN,
+      FURMI_BIN,
       ["--home", home, runner ? "start" : "web", "--no-open", "--port", String(port)],
       { env, cwd: repo, stdio: "ignore" },
     );
@@ -124,9 +124,9 @@ ${config}
         url,
         home,
         repo,
-        lf,
+        furmi,
         add: (id, prompt, ...extra) =>
-          void lf("add", "--repo", repo, "--id", id, "--prompt", prompt, ...extra),
+          void furmi("add", "--repo", repo, "--id", id, "--prompt", prompt, ...extra),
         taskFile: (id) =>
           ["tasks", "archive"]
             .map((d) => path.join(home, d, `${id}.md`))
@@ -134,10 +134,10 @@ ${config}
       });
     } finally {
       server.kill();
-      // `lf start` leaves its runner behind on purpose; stop it and the
+      // `furmi start` leaves its runner behind on purpose; stop it and the
       // tmux server so nothing outlives the test.
       try {
-        lf("stop");
+        furmi("stop");
       } catch {
         /* none running */
       }

@@ -1,7 +1,7 @@
-//! `lf run`: enqueue due schedules, poll running tasks, start pending ones.
+//! `furmi run`: enqueue due schedules, poll running tasks, start pending ones.
 //!
 //! Each task runs in its own tmux window, named after the task id. The
-//! window runs `lf exec <id>`, which loads the task, runs the agent and
+//! window runs `furmi exec <id>`, which loads the task, runs the agent and
 //! records its exit status in `logs/<id>.<attempt>.exit`. So the prompt
 //! never passes through tmux's command line (which splits arguments ending
 //! in `;` and caps message size), and the outcome doesn't depend on tmux's
@@ -45,7 +45,7 @@ static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 /// Turns SIGTERM/SIGINT into a request to stop after the current pass.
 /// Without it the process dies mid-tick, which can leave a task file
 /// written but not yet archived. Running tasks keep going in their tmux
-/// windows either way; the next `lf run` picks them up.
+/// windows either way; the next `furmi run` picks them up.
 pub fn install_shutdown_handler() {
     // SAFETY: `on_shutdown` only stores to an atomic, which is
     // async-signal-safe; the previous disposition was the default.
@@ -109,7 +109,7 @@ pub fn run(home: &Home, once: bool) -> Result<()> {
         if !sleep_until_tick(config.runner.poll_interval) {
             log(
                 "stopping on request: running tasks keep going in their tmux windows; \
-                 `lf run` will pick them up again",
+                 `furmi run` will pick them up again",
             );
             return Ok(());
         }
@@ -135,7 +135,7 @@ fn sleep_until_tick(duration: Duration) -> bool {
     !shutdown_requested()
 }
 
-/// The runner's heartbeat, in `runner.json`: lets `lf status` tell a live
+/// The runner's heartbeat, in `runner.json`: lets `furmi status` tell a live
 /// runner from a dead or wedged one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerState {
@@ -183,8 +183,8 @@ pub fn exec(home: &Home, id: &str, status_file: &Path) -> Result<ExitCode> {
         let argv = agent_argv(agent, eff.mode, &task.prompt, model, &task.id);
         let mut cmd = Command::new(&argv[0]);
         cmd.args(&argv[1..])
-            .env("LF_HOME", home.root())
-            .env("LF_TASK_ID", &task.id);
+            .env("FURMI_HOME", home.root())
+            .env("FURMI_TASK_ID", &task.id);
         // Headless output is captured (and teed back below) so it can be
         // logged and a final JSON summary parsed for usage. Interactive
         // mode keeps a real, fully inherited tty: it's a live session for a
@@ -558,7 +558,7 @@ enum Outcome {
         /// model won't change on a retry, so those failures skip it.
         retry: bool,
     },
-    /// An interactive session ended without `lf done` / `lf fail`.
+    /// An interactive session ended without `furmi done` / `furmi fail`.
     NeedsReview,
     /// The attempt was cut short from outside (its tmux window vanished or
     /// was killed, e.g. by a reboot): requeued without using up a retry.
@@ -618,11 +618,11 @@ fn poll_running(
         let mut outcome = match (exit, pane) {
             (Some(exit), _) => exit_outcome(eff.mode, exit),
             (None, None) => Outcome::Interrupted("tmux window disappeared".into()),
-            // `lf exec` writes the status before exiting, so a dead pane
-            // without one means `lf exec` itself was killed (or the agent
+            // `furmi exec` writes the status before exiting, so a dead pane
+            // without one means `furmi exec` itself was killed (or the agent
             // killed its own process group) before it could record it.
             (None, Some(p)) if p.dead => Outcome::Interrupted(
-                "the window died without recording an exit status (`lf exec` was killed or \
+                "the window died without recording an exit status (`furmi exec` was killed or \
                  the agent crashed before it could write one)"
                     .into(),
             ),
@@ -708,7 +708,7 @@ fn provider_error(home: &Home, task: &Task) -> Option<(String, bool)> {
             format!(
                 "the agent's provider rejected the run: {line}. Retrying the same model would \
                  fail the same way, so it wasn't retried: fix the provider or set a different \
-                 `model`, then run `lf retry {id}`",
+                 `model`, then run `furmi retry {id}`",
                 id = task.id
             ),
             false,
@@ -826,7 +826,7 @@ fn note_in_log(home: &Home, task: &Task, note: &str) {
     else {
         return;
     };
-    let _ = writeln!(file, "\n[lf] {note}");
+    let _ = writeln!(file, "\n[furmi] {note}");
 }
 
 fn exit_outcome(mode: Mode, exit: Exit) -> Outcome {
@@ -861,7 +861,7 @@ pub fn window_of(task: &Task, config: &Config) -> (String, String) {
     }
 }
 
-/// Saves the attempt's output: the pane's scrollback, unless `lf exec`
+/// Saves the attempt's output: the pane's scrollback, unless `furmi exec`
 /// already streamed the full output to the log file (headless runs).
 pub fn save_log(home: &Home, task: &Task, session: &str, window: &str) {
     let path = log_file(home, &task.id, task.attempts);
@@ -1010,7 +1010,7 @@ fn record_finish(home: &Home, config: &Config, task: &mut Task, on_finish: Resul
             task.error = Some(format!(
                 "on_finish failed: {e:#}\nThe worktree is kept at {} and the work is on branch `{branch}` \
                  (commit `on_finish` made, plus anything uncommitted). Fix the problem and run \
-                 `lf retry {id}` to finish it in the same worktree.",
+                 `furmi retry {id}` to finish it in the same worktree.",
                 dir.display(),
                 id = task.id
             ));
@@ -1240,7 +1240,7 @@ fn start_problems(config: &Config, task: &Task, path: &Path) -> Vec<String> {
         {
             out.push(format!(
                 "agent `{name}`: `{program}` is not on $PATH; install it or fix \
-                 [agents.{name}] in config.toml (`lf doctor` shows the setup)"
+                 [agents.{name}] in config.toml (`furmi doctor` shows the setup)"
             ));
         }
     }
@@ -1275,7 +1275,7 @@ fn prepare_workdir(home: &Home, config: &Config, task: &Task, eff: &Effective) -
 }
 
 fn exec_argv(home: &Home, id: &str, status_file: &Path) -> Result<Vec<String>> {
-    let exe = std::env::current_exe().context("locating the lf binary")?;
+    let exe = std::env::current_exe().context("locating the furmi binary")?;
     let path = |p: &Path| {
         p.to_str()
             .map(String::from)
@@ -1335,7 +1335,7 @@ fn load_tasks(home: &Home, status: Status) -> Result<Vec<(PathBuf, Task)>> {
     Ok(out)
 }
 
-/// Where [`log`] also appends, once `lf run` has set it.
+/// Where [`log`] also appends, once `furmi run` has set it.
 static LOG_FILE: OnceLock<PathBuf> = OnceLock::new();
 /// The log file is moved to `.1` (replacing an older one) beyond this size.
 const MAX_RUNNER_LOG_BYTES: u64 = 5 * 1024 * 1024;

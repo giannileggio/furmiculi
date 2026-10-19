@@ -1,6 +1,6 @@
-//! Interactive `lf ls --watch`: a live task list with a cursor and one-key
+//! Interactive `furmi ls --watch`: a live task list with a cursor and one-key
 //! actions, for when a terminal is all you have (say, over SSH). It calls the
-//! same `control::` functions as `lf done|fail|cancel|retry|logs|attach`.
+//! same `control::` functions as `furmi done|fail|cancel|retry|logs|attach`.
 //! Raw mode comes from termios through `libc`, so there is no TUI dependency.
 
 use std::io::Write;
@@ -288,7 +288,7 @@ pub fn run(home: &Home, mut archive: bool, interval: Duration) -> Result<()> {
         ui.set_ids(tasks.iter().map(|t| t.id.clone()).collect());
         let table = table_lines(&task_rows(&config, &tasks));
         let title = format!(
-            "lf {} ({} tasks), as of {}",
+            "furmi {} ({} tasks), as of {}",
             if archive { "archive" } else { "queue" },
             tasks.len(),
             fmt_time(now())

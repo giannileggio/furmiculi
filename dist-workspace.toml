@@ -10,7 +10,7 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-# No Windows target: lf shells out to tmux and Unix signals, so it only
+# No Windows target: furmi shells out to tmux and Unix signals, so it only
 # runs on Unix-likes.
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
 # Path that installers should place binaries in

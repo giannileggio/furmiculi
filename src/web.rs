@@ -1,8 +1,8 @@
-//! `lf web`: a Sidekiq-style dashboard over the queue, with actions.
+//! `furmi web`: a Sidekiq-style dashboard over the queue, with actions.
 //!
 //! Serves one HTML shell, a `/api/state` JSON endpoint the page polls, a
 //! `/api/tasks/<id>/logs` endpoint, `/api/tasks/<id>/{done,fail,cancel,retry}`
-//! POST routes that call straight into the same code `lf done|fail|cancel|retry`
+//! POST routes that call straight into the same code `furmi done|fail|cancel|retry`
 //! use, `POST /api/tasks` to queue a new task (the "New task" form),
 //! `POST /api/tasks/<id>/edit` for a task that hasn't started, schedule
 //! create/edit/pause/resume/delete under `/api/schedules`, `POST
@@ -82,13 +82,13 @@ const ACTIONS: [&str; 4] = ["done", "fail", "cancel", "retry"];
 const WORKERS: usize = 4;
 /// Largest request body read; the only body anyone sends is a short reason.
 const MAX_BODY_BYTES: u64 = 16 * 1024;
-const TOKEN_HEADER: &str = "X-LF-Token";
+const TOKEN_HEADER: &str = "X-Furmi-Token";
 
 struct Ctx<'a> {
     home: &'a Home,
     token: String,
     index: String,
-    /// The git repo `lf web` was started in, offered first in the new-task form.
+    /// The git repo `furmi web` was started in, offered first in the new-task form.
     cwd_repo: Option<String>,
     /// A non-loopback bind: requests additionally need the bearer token and
     /// an allowlisted `Host`.
@@ -122,7 +122,7 @@ pub fn serve(home: &Home, args: WebArgs) -> Result<()> {
     run_server(home, server, &serving, &args)
 }
 
-/// `lf start`: the runner and the dashboard in one command. The runner
+/// `furmi start`: the runner and the dashboard in one command. The runner
 /// stops when the dashboard does, so there's nothing to clean up.
 pub fn start(home: &Home, args: WebArgs) -> Result<()> {
     home.ensure_initialized()?;
@@ -242,7 +242,7 @@ fn bind(serving: &Serving) -> Result<Server> {
     let addr = &serving.addr;
     Server::http(addr.as_str()).map_err(|e| {
         anyhow::anyhow!(
-            "couldn't listen on {addr}: {e}. If `lf web` or `lf start` is already running, \
+            "couldn't listen on {addr}: {e}. If `furmi web` or `furmi start` is already running, \
              open http://{addr}; otherwise pick another address with --listen"
         )
     })
@@ -267,7 +267,7 @@ fn run_server(home: &Home, server: Server, serving: &Serving, args: &WebArgs) ->
         .map(|root| contract_tilde(&root));
     let ctx = Ctx {
         home,
-        index: INDEX_HTML.replace("__LF_TOKEN__", &token),
+        index: INDEX_HTML.replace("__FURMI_TOKEN__", &token),
         token,
         cwd_repo,
         remote: serving.remote,
@@ -321,7 +321,7 @@ fn run_server(home: &Home, server: Server, serving: &Serving, args: &WebArgs) ->
     Ok(())
 }
 
-/// A background `lf run`, stopped when dropped. It's asked to stop
+/// A background `furmi run`, stopped when dropped. It's asked to stop
 /// (SIGTERM) so it can finish its current pass first; only a runner that
 /// doesn't go is killed.
 struct RunnerChild(Child);
@@ -347,7 +347,7 @@ impl Drop for RunnerChild {
 }
 
 fn spawn_runner(home: &Home) -> Result<RunnerChild> {
-    let exe = std::env::current_exe().context("finding the lf binary to start the runner")?;
+    let exe = std::env::current_exe().context("finding the furmi binary to start the runner")?;
     let child = Command::new(exe)
         .arg("--home")
         .arg(home.root())
@@ -638,7 +638,7 @@ struct ActionBody {
     reason: Option<String>,
 }
 
-/// Runs one of the `ACTIONS` against a task, the same way `lf <action> <id>`
+/// Runs one of the `ACTIONS` against a task, the same way `furmi <action> <id>`
 /// would. `body` is the POST body, parsed for `fail`'s optional `reason`.
 fn perform_action(home: &Home, id: &str, action: &str, body: &str) -> Result<()> {
     match action {
@@ -670,7 +670,7 @@ struct NewTaskBody {
     agent: Option<String>,
 }
 
-/// Queues the task described by the form, as `lf add` would. Returns its id.
+/// Queues the task described by the form, as `furmi add` would. Returns its id.
 fn perform_create(home: &Home, body: &str) -> Result<String> {
     let form: NewTaskBody = serde_json::from_str(body).context("couldn't read the form")?;
     let repo = form.repo.trim();
@@ -812,7 +812,7 @@ fn agents_json(home: &Home) -> Result<String> {
     Ok(serde_json::json!({ "agents": crate::config::agent_statuses(&config) }).to_string())
 }
 
-/// The setup check: what `lf doctor` looks at, for the dashboard.
+/// The setup check: what `furmi doctor` looks at, for the dashboard.
 fn doctor_json(home: &Home) -> String {
     let checks: Vec<_> = crate::doctor::checks(home)
         .iter()
@@ -1013,7 +1013,7 @@ fn state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
     Ok(serde_json::to_string(&state)?)
 }
 
-/// Repos from the folder `lf web` started in, then from recent tasks (newest
+/// Repos from the folder `furmi web` started in, then from recent tasks (newest
 /// first, each once), plus the configured agents and finish action.
 fn form_info(config: &Config, cwd_repo: Option<&str>, tasks: &[&Vec<Task>]) -> FormInfo {
     let mut recent: Vec<&Task> = tasks.iter().flat_map(|t| t.iter()).collect();

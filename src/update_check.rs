@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::home::Home;
 
-const APP_NAME: &str = "loompa-forge";
+const APP_NAME: &str = "furmiculi";
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 3600);
 const CHECK_TIMEOUT: Duration = Duration::from_millis(1500);
 
@@ -15,7 +15,7 @@ const CHECK_TIMEOUT: Duration = Duration::from_millis(1500);
 /// silent. Cached to at most once a day, and bounded to `CHECK_TIMEOUT` so
 /// a dead network never adds noticeable latency to a command.
 pub fn check(home: &Home) {
-    if std::env::var_os("LF_NO_UPDATE_CHECK").is_some() || !home.root().is_dir() || !due(home) {
+    if std::env::var_os("FURMI_NO_UPDATE_CHECK").is_some() || !home.root().is_dir() || !due(home) {
         return;
     }
 
@@ -34,8 +34,8 @@ pub fn check(home: &Home) {
 
     if let Ok(true) = rx.recv_timeout(CHECK_TIMEOUT) {
         eprintln!(
-            "A new version of lf is available. Run `loompa-forge-update` to upgrade, or see \
-             https://github.com/giannileggio/loompa-forge/releases."
+            "A new version of furmi is available. Run `furmiculi-update` to upgrade, or see \
+             https://github.com/giannileggio/furmiculi/releases."
         );
     }
 }

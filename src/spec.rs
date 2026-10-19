@@ -14,7 +14,7 @@ use crate::home::expand_tilde;
 pub enum Mode {
     /// Non-interactive run; the exit code decides done/failed.
     Headless,
-    /// Interactive session; completion is signalled with `lf done|fail`.
+    /// Interactive session; completion is signalled with `furmi done|fail`.
     Interactive,
 }
 

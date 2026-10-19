@@ -1,4 +1,4 @@
-//! End-to-end tests against the built `lf` binary.
+//! End-to-end tests against the built `furmi` binary.
 //!
 //! The unit tests under `src/` cover each command's logic directly; these
 //! instead go through `Cli::parse` and the real filesystem, to catch
@@ -10,11 +10,11 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-/// A fresh `lf` invocation against `home`. `$HOME` is also pointed at it, so
-/// the global-skill links `lf init` may touch land inside the temp dir
+/// A fresh `furmi` invocation against `home`. `$HOME` is also pointed at it, so
+/// the global-skill links `furmi init` may touch land inside the temp dir
 /// instead of the real user home.
-fn lf(home: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_lf"));
+fn furmi(home: &Path) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_furmi"));
     cmd.env("HOME", home)
         .arg("--home")
         .arg(home)
@@ -23,7 +23,7 @@ fn lf(home: &Path) -> Command {
 }
 
 fn run(cmd: &mut Command) -> Output {
-    cmd.output().expect("spawning lf")
+    cmd.output().expect("spawning furmi")
 }
 
 fn ok(out: Output) -> Output {
@@ -55,7 +55,7 @@ fn stderr(out: &Output) -> String {
 }
 
 fn init(home: &Path) {
-    ok(run(lf(home).args([
+    ok(run(furmi(home).args([
         "init",
         "--agent",
         "claude",
@@ -64,7 +64,7 @@ fn init(home: &Path) {
 }
 
 fn add(home: &Path, repo: &Path, id: &str, prompt: &str) {
-    ok(run(lf(home).args([
+    ok(run(furmi(home).args([
         "add",
         "--repo",
         &repo.display().to_string(),
@@ -80,7 +80,7 @@ fn add(home: &Path, repo: &Path, id: &str, prompt: &str) {
 fn init_creates_the_home_layout() {
     let home = tempfile::tempdir().unwrap();
 
-    let out = ok(run(lf(home.path()).args([
+    let out = ok(run(furmi(home.path()).args([
         "init",
         "--agent",
         "claude",
@@ -95,7 +95,7 @@ fn init_creates_the_home_layout() {
     }
 
     // Re-running keeps the user's config instead of overwriting it.
-    let out = ok(run(lf(home.path()).args([
+    let out = ok(run(furmi(home.path()).args([
         "init",
         "--agent",
         "claude",
@@ -110,7 +110,7 @@ fn add_ls_and_validate_roundtrip() {
     let repo = tempfile::tempdir().unwrap();
     init(home.path());
 
-    let out = ok(run(lf(home.path()).args([
+    let out = ok(run(furmi(home.path()).args([
         "add",
         "--repo",
         &repo.path().display().to_string(),
@@ -122,12 +122,12 @@ fn add_ls_and_validate_roundtrip() {
     ])));
     assert!(stdout(&out).trim_end().ends_with("my-task.md"));
 
-    let out = ok(run(lf(home.path()).arg("ls")));
+    let out = ok(run(furmi(home.path()).arg("ls")));
     let listing = stdout(&out);
     assert!(listing.contains("my-task"));
     assert!(listing.contains("pending"));
 
-    let out = ok(run(lf(home.path()).arg("validate")));
+    let out = ok(run(furmi(home.path()).arg("validate")));
     let report = stdout(&out);
     assert!(report.contains("ok"));
     assert!(report.contains("1 file(s) checked, 0 with errors"));
@@ -139,7 +139,7 @@ fn add_reads_the_prompt_from_stdin() {
     let repo = tempfile::tempdir().unwrap();
     init(home.path());
 
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args([
             "add",
             "--repo",
@@ -172,7 +172,7 @@ fn add_rejects_an_empty_prompt() {
     let repo = tempfile::tempdir().unwrap();
     init(home.path());
 
-    let out = failed(run(lf(home.path()).args([
+    let out = failed(run(furmi(home.path()).args([
         "add",
         "--repo",
         &repo.path().display().to_string(),
@@ -188,7 +188,7 @@ fn add_rejects_a_missing_repo() {
     let home = tempfile::tempdir().unwrap();
     init(home.path());
 
-    let out = failed(run(lf(home.path()).args([
+    let out = failed(run(furmi(home.path()).args([
         "add",
         "--repo",
         "/no/such/repo",
@@ -206,7 +206,7 @@ fn add_rejects_a_duplicate_id() {
     init(home.path());
     add(home.path(), repo.path(), "dup", "first");
 
-    let out = failed(run(lf(home.path()).args([
+    let out = failed(run(furmi(home.path()).args([
         "add",
         "--repo",
         &repo.path().display().to_string(),
@@ -226,16 +226,16 @@ fn cancel_then_retry_via_cli() {
     init(home.path());
     add(home.path(), repo.path(), "t1", "do it");
 
-    ok(run(lf(home.path()).args(["cancel", "t1"])));
-    let archived = stdout(&ok(run(lf(home.path()).args(["ls", "--archive"]))));
+    ok(run(furmi(home.path()).args(["cancel", "t1"])));
+    let archived = stdout(&ok(run(furmi(home.path()).args(["ls", "--archive"]))));
     assert!(archived.contains("t1") && archived.contains("cancelled"));
-    let pending = stdout(&ok(run(lf(home.path()).arg("ls"))));
+    let pending = stdout(&ok(run(furmi(home.path()).arg("ls"))));
     assert!(pending.contains("(none)"));
 
-    ok(run(lf(home.path()).args(["retry", "t1"])));
-    let pending = stdout(&ok(run(lf(home.path()).arg("ls"))));
+    ok(run(furmi(home.path()).args(["retry", "t1"])));
+    let pending = stdout(&ok(run(furmi(home.path()).arg("ls"))));
     assert!(pending.contains("t1") && pending.contains("pending"));
-    let archived = stdout(&ok(run(lf(home.path()).args(["ls", "--archive"]))));
+    let archived = stdout(&ok(run(furmi(home.path()).args(["ls", "--archive"]))));
     assert!(archived.contains("(none)"));
 }
 
@@ -246,11 +246,11 @@ fn logs_reads_a_saved_attempt_via_the_cli() {
     init(home.path());
     add(home.path(), repo.path(), "t1", "do it");
 
-    let out = failed(run(lf(home.path()).args(["logs", "t1"])));
+    let out = failed(run(furmi(home.path()).args(["logs", "t1"])));
     assert!(stderr(&out).contains("hasn't started"));
 
     // Fake a finished attempt: bump `attempts` on the task file and write
-    // the log `lf run` would have saved.
+    // the log `furmi run` would have saved.
     let task_path = home.path().join("tasks/t1.md");
     let content = std::fs::read_to_string(&task_path).unwrap();
     std::fs::write(
@@ -260,10 +260,10 @@ fn logs_reads_a_saved_attempt_via_the_cli() {
     .unwrap();
     std::fs::write(home.path().join("logs/t1.1.log"), "hello from the agent\n").unwrap();
 
-    let out = stdout(&ok(run(lf(home.path()).args(["logs", "t1"]))));
+    let out = stdout(&ok(run(furmi(home.path()).args(["logs", "t1"]))));
     assert_eq!(out, "hello from the agent\n");
 
-    let out = failed(run(lf(home.path()).args(["logs", "t1", "--attempt", "2"])));
+    let out = failed(run(furmi(home.path()).args(["logs", "t1", "--attempt", "2"])));
     assert!(stderr(&out).contains("1 attempt"));
 }
 
@@ -271,7 +271,7 @@ fn logs_reads_a_saved_attempt_via_the_cli() {
 fn commands_that_need_existing_state_fail_clearly_before_init() {
     let home = tempfile::tempdir().unwrap();
 
-    let out = failed(run(lf(home.path()).args(["done", "some-task"])));
+    let out = failed(run(furmi(home.path()).args(["done", "some-task"])));
     assert!(stderr(&out).contains("not initialized"));
 }
 
@@ -279,14 +279,14 @@ fn commands_that_need_existing_state_fail_clearly_before_init() {
 fn first_use_sets_everything_up() {
     let home = tempfile::tempdir().unwrap();
 
-    let out = ok(run(lf(home.path()).arg("ls")));
+    let out = ok(run(furmi(home.path()).arg("ls")));
     assert!(stderr(&out).contains("First run"));
     assert!(!stdout(&out).contains("First run"));
     assert!(home.path().join("config.toml").is_file());
     assert!(home.path().join("tasks").is_dir());
 
     // The second time it's just the listing.
-    let out = ok(run(lf(home.path()).arg("ls")));
+    let out = ok(run(furmi(home.path()).arg("ls")));
     assert!(!stderr(&out).contains("First run"));
 }
 
@@ -308,7 +308,7 @@ fn add_needs_no_flags_inside_a_repo() {
     let repo = git_repo();
     init(home.path());
 
-    let out = ok(run(lf(home.path())
+    let out = ok(run(furmi(home.path())
         .current_dir(repo.path())
         .args(["add", "Fix the login redirect"])));
     assert!(
@@ -330,7 +330,7 @@ fn add_outside_a_repo_says_what_to_do() {
     let not_a_repo = tempfile::tempdir().unwrap();
     init(home.path());
 
-    let out = failed(run(lf(home.path())
+    let out = failed(run(furmi(home.path())
         .current_dir(not_a_repo.path())
         .args(["add", "Fix it"])));
     let err = stderr(&out);
@@ -344,10 +344,10 @@ fn the_prompt_is_positional_or_a_flag_but_not_both() {
     let repo = git_repo();
     init(home.path());
 
-    ok(run(lf(home.path())
+    ok(run(furmi(home.path())
         .current_dir(repo.path())
         .args(["add", "--prompt", "via flag", "--id", "flagged"])));
-    failed(run(lf(home.path()).current_dir(repo.path()).args([
+    failed(run(furmi(home.path()).current_dir(repo.path()).args([
         "add",
         "positional",
         "--prompt",
@@ -356,19 +356,19 @@ fn the_prompt_is_positional_or_a_flag_but_not_both() {
 }
 
 #[test]
-fn bare_lf_explains_how_to_start() {
+fn bare_furmi_explains_how_to_start() {
     let home = tempfile::tempdir().unwrap();
 
-    let out = stdout(&ok(run(&mut lf(home.path()))));
-    assert!(out.contains("lf add"), "{out}");
-    assert!(out.contains("lf start"), "{out}");
+    let out = stdout(&ok(run(&mut furmi(home.path()))));
+    assert!(out.contains("furmi add"), "{out}");
+    assert!(out.contains("furmi start"), "{out}");
     // It only explains: nothing gets created.
     assert!(!home.path().join("tasks").exists());
 
     init(home.path());
-    let out = stdout(&ok(run(&mut lf(home.path()))));
+    let out = stdout(&ok(run(&mut furmi(home.path()))));
     assert!(out.contains("runner"), "{out}");
-    assert!(out.contains("lf start"), "{out}");
+    assert!(out.contains("furmi start"), "{out}");
 }
 
 #[test]
@@ -378,7 +378,7 @@ fn ls_watch_refreshes_until_killed() {
     init(home.path());
     add(home.path(), repo.path(), "watched", "do it");
 
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args(["ls", "--watch", "--interval", "20ms"])
         .stdout(Stdio::piped())
         .spawn()
@@ -456,7 +456,7 @@ fn http_post(port: u16, token: &str, path: &str, body: &str) -> String {
         path,
         &format!("127.0.0.1:{port}"),
         &[
-            ("X-LF-Token", token),
+            ("X-Furmi-Token", token),
             ("Origin", &format!("http://127.0.0.1:{port}")),
             ("Content-Type", "application/json"),
         ],
@@ -464,10 +464,10 @@ fn http_post(port: u16, token: &str, path: &str, body: &str) -> String {
     )
 }
 
-/// The per-run token `lf web` embeds in the dashboard page.
+/// The per-run token `furmi web` embeds in the dashboard page.
 fn page_token(port: u16) -> String {
     let index = http_get(port, "/");
-    let marker = "name=\"lf-token\" content=\"";
+    let marker = "name=\"furmi-token\" content=\"";
     let start = index.find(marker).expect("token meta tag") + marker.len();
     index[start..start + 32].to_string()
 }
@@ -480,7 +480,7 @@ fn web_actions_mutate_tasks_through_the_api() {
     add(home.path(), repo.path(), "w1", "do it");
 
     let port = 18338u16;
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args(["web", "--port", &port.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -521,7 +521,7 @@ fn web_refuses_cross_site_and_rebound_requests() {
     add(home.path(), repo.path(), "w1", "do it");
 
     let port = 18339u16;
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args(["web", "--port", &port.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -547,12 +547,12 @@ fn web_refuses_cross_site_and_rebound_requests() {
         "POST",
         path,
         &own_host,
-        &[("X-LF-Token", &token), ("Origin", "http://evil.example")],
+        &[("X-Furmi-Token", &token), ("Origin", "http://evil.example")],
         "",
     );
     assert!(origin.starts_with("HTTP/1.1 403"), "{origin}");
     // Wrong token.
-    let wrong = http(port, "POST", path, &own_host, &[("X-LF-Token", "nope")], "");
+    let wrong = http(port, "POST", path, &own_host, &[("X-Furmi-Token", "nope")], "");
     assert!(wrong.starts_with("HTTP/1.1 403"), "{wrong}");
     // DNS rebinding: the browser sends the attacker's hostname.
     let rebound = http(port, "GET", "/api/state", "evil.example", &[], "");
@@ -574,7 +574,7 @@ fn web_refuses_cross_site_and_rebound_requests() {
 
 /// The raw HTTP helper talks to `127.0.0.1`; the remote-mode test binds the
 /// real listener on `0.0.0.0` — an address that is *not* a "loopback name",
-/// so `lf web` runs it in serving-other-machines mode — and connects through
+/// so `furmi web` runs it in serving-other-machines mode — and connects through
 /// `127.0.0.1`, which every platform routes, so the test can exercise every
 /// gate without a second machine. (`127.0.0.2`, an earlier attempt at a
 /// local-but-unloopback address, is routed on Linux but not on macOS.)
@@ -598,7 +598,7 @@ fn web_refuses_a_non_loopback_listen_without_a_token() {
     let home = tempfile::tempdir().unwrap();
 
     // No token: it must not start, and it must say why.
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args(["web", "--no-open", "--listen", "127.0.0.2:18442"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -623,7 +623,7 @@ fn web_refuses_a_non_loopback_listen_without_a_token() {
     // A token but no allowlist: same refusal, for the Host header's sake.
     let token_file = write_token_file(home.path());
 
-    let out = run(lf(home.path()).args([
+    let out = run(furmi(home.path()).args([
         "web",
         "--no-open",
         "--listen",
@@ -646,7 +646,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
     let token_file = write_token_file(home.path());
 
     let port = 18443u16;
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args([
             "web",
             "--no-open",
@@ -678,7 +678,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
     );
     assert!(page.starts_with("HTTP/1.1 200"), "{page}");
     assert!(page.contains(TEST_TOKEN), "{page}");
-    assert!(page.contains("lf web"));
+    assert!(page.contains("furmi web"));
     // ...and the token is not in the URL the server recorded anywhere.
 
     // Without the bearer: every route refuses, including one a page visits less.
@@ -700,7 +700,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
         "/api/tasks/w1/cancel",
         "toolnet.example",
         &[
-            ("X-LF-Token", TEST_TOKEN),
+            ("X-Furmi-Token", TEST_TOKEN),
             ("Origin", "http://toolnet.example"),
         ],
         "",
@@ -781,7 +781,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
     }
 
     // The POST checks stay on top of the bearer gate.
-    let without_lf_token = http_at(
+    let without_furmi_token = http_at(
         "127.0.0.1",
         port,
         "POST",
@@ -794,8 +794,8 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
         "",
     );
     assert!(
-        without_lf_token.starts_with("HTTP/1.1 403"),
-        "{without_lf_token}"
+        without_furmi_token.starts_with("HTTP/1.1 403"),
+        "{without_furmi_token}"
     );
     let foreign_origin = http_at(
         "127.0.0.1",
@@ -805,7 +805,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
         "toolnet.example",
         &[
             ("Authorization", &bearer),
-            ("X-LF-Token", TEST_TOKEN),
+            ("X-Furmi-Token", TEST_TOKEN),
             ("Origin", "http://evil.example"),
         ],
         "",
@@ -822,7 +822,7 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
         "toolnet.example",
         &[
             ("Authorization", &bearer),
-            ("X-LF-Token", TEST_TOKEN),
+            ("X-Furmi-Token", TEST_TOKEN),
             ("Origin", "http://toolnet.example"),
         ],
         "",
@@ -842,7 +842,7 @@ fn web_survives_a_corrupt_task_file() {
     std::fs::write(home.path().join("tasks/broken.md"), "not a task").unwrap();
 
     let port = 18340u16;
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args(["web", "--port", &port.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -868,7 +868,7 @@ fn web_serves_the_dashboard_and_state() {
     add(home.path(), repo.path(), "w1", "do it");
 
     let port = 18337u16;
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args(["web", "--port", &port.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -877,7 +877,7 @@ fn web_serves_the_dashboard_and_state() {
 
     let index = http_get(port, "/");
     assert!(index.starts_with("HTTP/1.1 200"));
-    assert!(index.contains("lf web"));
+    assert!(index.contains("furmi web"));
 
     let state = http_get(port, "/api/state");
     assert!(state.starts_with("HTTP/1.1 200"));
@@ -898,7 +898,7 @@ fn web_new_task_form_queues_a_task() {
     init(home.path());
 
     let port = 18341u16;
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args(["web", "--no-open", "--port", &port.to_string()])
         .current_dir(repo.path())
         .stdout(Stdio::null())
@@ -979,7 +979,7 @@ fn start_runs_the_runner_and_the_dashboard_together() {
     init(home.path());
 
     let port = 18342u16;
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args(["start", "--no-open", "--port", &port.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -990,7 +990,7 @@ fn start_runs_the_runner_and_the_dashboard_together() {
     // The runner comes up a moment after the page does.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let status = loop {
-        let status = stdout(&ok(run(lf(home.path()).arg("status"))));
+        let status = stdout(&ok(run(furmi(home.path()).arg("status"))));
         if status.contains("running (pid") || std::time::Instant::now() > deadline {
             break status;
         }
@@ -1009,12 +1009,12 @@ fn start_runs_the_runner_and_the_dashboard_together() {
     Command::new("kill").arg(runner_pid).status().unwrap();
 }
 
-/// Waits until `lf status` reports the runner as `up` (or not), up to five
+/// Waits until `furmi status` reports the runner as `up` (or not), up to five
 /// seconds.
 fn wait_for_runner(home: &Path, up: bool) -> String {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        let status = stdout(&ok(run(lf(home).arg("status"))));
+        let status = stdout(&ok(run(furmi(home).arg("status"))));
         if status.contains("running (pid") == up || std::time::Instant::now() > deadline {
             return status;
         }
@@ -1027,11 +1027,11 @@ fn stop_stops_a_runner_and_is_calm_when_there_is_none() {
     let home = tempfile::tempdir().unwrap();
     init(home.path());
 
-    let out = stdout(&ok(run(lf(home.path()).arg("stop"))));
+    let out = stdout(&ok(run(furmi(home.path()).arg("stop"))));
     assert!(out.contains("isn't running"), "{out}");
 
-    // A runner as `lf run` would leave it, in the background.
-    let mut runner = lf(home.path())
+    // A runner as `furmi run` would leave it, in the background.
+    let mut runner = furmi(home.path())
         .arg("run")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1039,12 +1039,12 @@ fn stop_stops_a_runner_and_is_calm_when_there_is_none() {
         .unwrap();
     assert!(wait_for_runner(home.path(), true).contains("running (pid"));
 
-    let out = stdout(&ok(run(lf(home.path()).arg("stop"))));
+    let out = stdout(&ok(run(furmi(home.path()).arg("stop"))));
     assert!(out.contains("Stopped the runner"), "{out}");
     runner.wait().unwrap(); // it really exited
     assert!(wait_for_runner(home.path(), false).contains("NOT running"));
 
-    let out = stdout(&ok(run(lf(home.path()).arg("stop"))));
+    let out = stdout(&ok(run(furmi(home.path()).arg("stop"))));
     assert!(out.contains("isn't running"), "{out}");
 }
 
@@ -1054,7 +1054,7 @@ fn web_can_start_and_stop_the_runner_and_run_the_setup_check() {
     init(home.path());
 
     let port = 18343u16;
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args(["web", "--no-open", "--port", &port.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1105,7 +1105,7 @@ fn web_edits_waiting_tasks_and_refuses_started_ones() {
     add(home.path(), repo.path(), "w1", "first draft");
 
     let port = 18344u16;
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args(["web", "--no-open", "--port", &port.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1177,7 +1177,7 @@ fn web_manages_schedules_end_to_end() {
     init(home.path());
 
     let port = 18345u16;
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args(["web", "--no-open", "--port", &port.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1264,7 +1264,7 @@ fn web_lists_agents_and_sets_the_default() {
     init(home.path());
 
     let port = 18346u16;
-    let mut child = lf(home.path())
+    let mut child = furmi(home.path())
         .args(["web", "--no-open", "--port", &port.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1311,11 +1311,11 @@ fn web_lists_agents_and_sets_the_default() {
 }
 
 #[test]
-fn lf_agents_lists_installs_and_picks_the_default() {
+fn furmi_agents_lists_installs_and_picks_the_default() {
     let home = tempfile::tempdir().unwrap();
     // A PATH with nothing on it: no agent is installed.
     let bare = |home: &Path| {
-        let mut cmd = lf(home);
+        let mut cmd = furmi(home);
         cmd.env("PATH", "");
         cmd
     };

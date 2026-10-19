@@ -141,7 +141,7 @@ pub fn remove_worktree(path: &Path) -> Result<()> {
 
 /// Removes a worktree `git worktree remove` can't touch: one whose
 /// owning repo moved or was deleted, so its gitdir is unreachable
-/// and every git command in it fails — `lf clean` would keep it
+/// and every git command in it fails — `furmi clean` would keep it
 /// forever. `git worktree prune` clears any registration a
 /// surviving repo still holds (best effort: it fails like every
 /// other git command when the repo is gone), then the directory is
@@ -218,7 +218,7 @@ pub fn commit_message(id: &str, prompt: &str) -> String {
     if prompt.trim() == subject {
         subject
     } else {
-        format!("{subject}\n\n{}\n\nlf task: {id}", prompt.trim())
+        format!("{subject}\n\n{}\n\nfurmi task: {id}", prompt.trim())
     }
 }
 
@@ -241,7 +241,7 @@ pub fn on_finish(action: OnFinish, dir: &Path, id: &str, prompt: &str) -> Result
     if action == OnFinish::Pr {
         // The push may have worked on an earlier attempt whose `gh` call
         // then failed: don't open a second PR for the same branch. But a
-        // stale `lf/<id>` branch from an earlier task can still have a PR
+        // stale `furmi/<id>` branch from an earlier task can still have a PR
         // of its own — closed, or for an older commit — which `gh pr view`
         // reports for this branch: only an open PR at this run's head
         // commit counts as already opened.
@@ -261,7 +261,7 @@ pub fn on_finish(action: OnFinish, dir: &Path, id: &str, prompt: &str) -> Result
 
 /// Whether the current branch already has an open PR whose head is the
 /// branch's current commit, so a second one must not be opened. `gh pr
-/// view` alone is not enough: it also succeeds for a stale `lf/<id>`
+/// view` alone is not enough: it also succeeds for a stale `furmi/<id>`
 /// branch from an earlier task, whose PR may be closed or point at an
 /// older commit — neither covers this run's work. `gh` failing to answer
 /// (e.g. no PR for the branch at all) counts as no covering PR; the
@@ -322,11 +322,11 @@ mod tests {
             "{}-wt",
             repo.path().file_name().unwrap().to_str().unwrap()
         ));
-        ensure_worktree(repo.path(), &wt, "lf/new").unwrap();
-        assert_eq!(current_branch(&wt), "lf/new");
+        ensure_worktree(repo.path(), &wt, "furmi/new").unwrap();
+        assert_eq!(current_branch(&wt), "furmi/new");
 
         std::fs::write(wt.join("f.txt"), "x").unwrap();
-        ensure_worktree(repo.path(), &wt, "lf/new").unwrap();
+        ensure_worktree(repo.path(), &wt, "furmi/new").unwrap();
         assert!(wt.join("f.txt").exists(), "existing worktree is reused");
 
         // An existing branch is checked out rather than recreated.
@@ -343,7 +343,7 @@ mod tests {
     fn removes_clean_worktrees_and_keeps_branches() {
         let repo = repo();
         let wt = repo.path().join("wt");
-        ensure_worktree(repo.path(), &wt, "lf/gone").unwrap();
+        ensure_worktree(repo.path(), &wt, "furmi/gone").unwrap();
 
         std::fs::write(wt.join("f.txt"), "x").unwrap();
         assert!(remove_worktree(&wt).is_err(), "dirty worktrees stay");
@@ -351,7 +351,7 @@ mod tests {
 
         remove_worktree(&wt).unwrap();
         assert!(!wt.exists());
-        assert!(branch_exists(repo.path(), "lf/gone"));
+        assert!(branch_exists(repo.path(), "furmi/gone"));
         assert!(
             !git(repo.path(), &["worktree", "list"])
                 .unwrap()
@@ -385,23 +385,23 @@ mod tests {
         let other = repo();
         let repo = repo();
         let stray = tempfile::tempdir().unwrap();
-        let err = ensure_worktree(repo.path(), stray.path(), "lf/x").unwrap_err();
+        let err = ensure_worktree(repo.path(), stray.path(), "furmi/x").unwrap_err();
         assert!(err.to_string().contains("not a git worktree"), "{err}");
 
         // A worktree of some other repo isn't ours either.
         let foreign = other.path().join("wt");
-        ensure_worktree(other.path(), &foreign, "lf/y").unwrap();
-        assert!(ensure_worktree(repo.path(), &foreign, "lf/y").is_err());
+        ensure_worktree(other.path(), &foreign, "furmi/y").unwrap();
+        assert!(ensure_worktree(repo.path(), &foreign, "furmi/y").is_err());
     }
 
     #[test]
     fn a_worktree_deleted_by_hand_can_be_recreated() {
         let repo = repo();
         let wt = repo.path().join("wt");
-        ensure_worktree(repo.path(), &wt, "lf/again").unwrap();
+        ensure_worktree(repo.path(), &wt, "furmi/again").unwrap();
         std::fs::remove_dir_all(&wt).unwrap(); // leaves a stale registration
-        ensure_worktree(repo.path(), &wt, "lf/again").unwrap();
-        assert_eq!(current_branch(&wt), "lf/again");
+        ensure_worktree(repo.path(), &wt, "furmi/again").unwrap();
+        assert_eq!(current_branch(&wt), "furmi/again");
     }
 
     #[test]
@@ -440,7 +440,7 @@ mod tests {
         assert!(!has_changes(p).unwrap());
         let log = git(p, &["log", "-1", "--format=%B"]).unwrap();
         assert!(log.starts_with("Add a file\n\nAdd a file\n\nWith details."));
-        assert!(log.contains("lf task: t"));
+        assert!(log.contains("furmi task: t"));
     }
 
     #[test]

@@ -49,7 +49,7 @@ jobs:
       - name: Test
         run: cargo test --all
 
-  # Drives the dashboard in a real browser against the built `lf`, with a stub
+  # Drives the dashboard in a real browser against the built `furmi`, with a stub
   # agent (see e2e/). The Rust tests cover the CLI, runner and HTTP API; this
   # covers the page itself.
   e2e:
@@ -71,7 +71,7 @@ jobs:
             target
           key: e2e-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build lf
+      - name: Build furmi
         run: cargo build
 
       - name: Install test dependencies

@@ -14,7 +14,7 @@ use crate::fsutil::run_with_timeout;
 const TMUX_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Only liveness is reported: tmux can mark a pane dead before it has
-/// reaped the process, so its exit status isn't reliable. `lf exec` records
+/// reaped the process, so its exit status isn't reliable. `furmi exec` records
 /// the real one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pane {
@@ -257,8 +257,8 @@ mod tests {
 
     #[test]
     fn tells_a_missing_session_from_a_transient_failure() {
-        assert!(is_missing("can't find session: lft"));
-        assert!(is_missing("can't find window: lft"));
+        assert!(is_missing("can't find session: furmit"));
+        assert!(is_missing("can't find window: furmit"));
         assert!(is_missing("no server running on /tmp/tmux-1000/default"));
         assert!(is_missing(
             "error connecting to /tmp/tmux-1000/default (No such file or directory)"
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn finished_windows_stay_until_killed() {
-        let s = Session(format!("lf-test-{}", std::process::id()));
+        let s = Session(format!("furmi-test-{}", std::process::id()));
         let dir = std::env::temp_dir();
         let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
 
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn terminate_window_escalates_past_ignored_signals() {
-        let s = Session(format!("lf-test-term-{}", std::process::id()));
+        let s = Session(format!("furmi-test-term-{}", std::process::id()));
         let dir = std::env::temp_dir();
         let argv = ["sh", "-c", "trap '' HUP TERM; sleep 60 & wait"]
             .map(String::from)

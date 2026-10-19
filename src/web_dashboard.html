@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta name="lf-token" content="__LF_TOKEN__">
+<meta name="furmi-token" content="__FURMI_TOKEN__">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>lf web</title>
+<title>furmi web</title>
 <style>
   :root {
     --bg: #f5f6f8;
@@ -219,7 +219,7 @@
 </head>
 <body>
 <header>
-  <h1><span>&#9670;</span> lf web</h1>
+  <h1><span>&#9670;</span> furmi web</h1>
   <span class="home mono" id="home"></span>
   <span class="updated" id="runner"></span>
   <span class="updated"><span class="dot"></span>as of <span id="updated">-</span></span>
@@ -356,12 +356,12 @@ const TOKEN = (() => {
     history.replaceState(null, "", url);
     return given;
   }
-  return document.querySelector('meta[name="lf-token"]').content;
+  return document.querySelector('meta[name="furmi-token"]').content;
 })();
 // Sent with every request: the per-run token (defeats cross-site forgery)
 // and, on a remote dashboard, the bearer token the server gates on.
 const AUTH = () => ({
-  "X-LF-Token": TOKEN, Authorization: `Bearer ${TOKEN}`,
+  "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}`,
   Authorization: `Bearer ${TOKEN}`,
 });
 const STAT_LABELS = [
@@ -370,7 +370,7 @@ const STAT_LABELS = [
   ["schedules", "Repeating"],
 ];
 
-// The words the page uses for the statuses in the task files and `lf ls`.
+// The words the page uses for the statuses in the task files and `furmi ls`.
 const STATUS_LABELS = {
   pending: "Waiting", running: "Working", done: "Done", failed: "Failed",
   cancelled: "Cancelled", needs_review: "Needs review",
@@ -385,7 +385,7 @@ const STATUS_HELP = {
 };
 
 // Task fields (branch names, repo paths, cron strings, ids, ...) come from
-// task/schedule files the user or an agent wrote, not from lf itself, so
+// task/schedule files the user or an agent wrote, not from furmi itself, so
 // they're untrusted as far as this page is concerned.
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -599,7 +599,7 @@ async function runAction(id, action) {
   try {
     const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/${action}`, {
       method: "POST",
-      headers: { "X-LF-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+      headers: { "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, ...(body ? { "Content-Type": "application/json" } : {}) },
       body,
     });
     const data = await res.json();
@@ -643,7 +643,7 @@ async function runnerAction(what, btn) {
   if (what === "stop" && !confirm("Stop the runner? Work already underway keeps going, but nothing new starts until you turn it back on.")) return;
   btn.disabled = true;
   try {
-    const res = await fetch(`/api/runner/${what}`, { method: "POST", headers: { "X-LF-Token": TOKEN, Authorization: `Bearer ${TOKEN}` } });
+    const res = await fetch(`/api/runner/${what}`, { method: "POST", headers: { "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}` } });
     const data = await res.json();
     if (!res.ok) toast(data.error || `couldn't ${what} the runner`);
     else toast(what === "start" ? "Runner started" : "Runner stopped", true);
@@ -708,7 +708,7 @@ async function useAgent(name, btn) {
   try {
     const res = await fetch("/api/agents/default", {
       method: "POST",
-      headers: { "X-LF-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+      headers: { "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({ agent: name }),
     });
     const data = await res.json();
@@ -858,7 +858,7 @@ async function scheduleAction(id, verb) {
   }
   if (verb === "delete" && !confirm(`Delete the schedule ${id}? Tasks it already added stay in the queue.`)) return;
   try {
-    const res = await fetch(`/api/schedules/${encodeURIComponent(id)}/${verb}`, { method: "POST", headers: { "X-LF-Token": TOKEN, Authorization: `Bearer ${TOKEN}` } });
+    const res = await fetch(`/api/schedules/${encodeURIComponent(id)}/${verb}`, { method: "POST", headers: { "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}` } });
     const data = await res.json();
     if (!res.ok) toast(`${id}: ${data.error || "failed"}`);
   } catch (e) { toast(`${id}: ${e}`); }
@@ -885,7 +885,7 @@ $("f-prompt").addEventListener("keydown", (e) => {
 async function post(path, body) {
   const res = await fetch(path, {
     method: "POST",
-    headers: { "X-LF-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    headers: { "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   return { ok: res.ok, data: await res.json() };

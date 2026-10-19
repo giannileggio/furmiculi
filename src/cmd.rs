@@ -21,7 +21,7 @@ pub struct InitArgs {
     /// config.toml.
     #[arg(long)]
     agent: Option<String>,
-    /// Make the lf-tasks skill available in every project.
+    /// Make the furmi-tasks skill available in every project.
     #[arg(long, overrides_with = "no_global_skill")]
     global_skill: bool,
     /// Don't, and remove the links a previous --global-skill made.
@@ -63,14 +63,14 @@ fn setup(home: &Home, agent: Option<String>, global_skill: Option<Option<bool>>)
 }
 
 /// Sets the data folder up on first use, so nobody has to know about
-/// `lf init`. Asks nothing but which agent to default to when several are
+/// `furmi init`. Asks nothing but which agent to default to when several are
 /// installed (and only on a terminal); the global-skill question is left to
-/// an explicit `lf init`.
+/// an explicit `furmi init`.
 pub fn ensure_ready(home: &Home) -> Result<()> {
     if home.ensure_initialized().is_ok() {
         return Ok(());
     }
-    // Guidance, not output: stdout stays clean for scripts reading `lf add`.
+    // Guidance, not output: stdout stays clean for scripts reading `furmi add`.
     eprintln!(
         "First run: setting up {} (this only happens once)",
         contract_tilde(home.root())
@@ -79,11 +79,11 @@ pub fn ensure_ready(home: &Home) -> Result<()> {
     let result = setup(home, None, None);
     skill::set_quiet(false);
     result?;
-    eprintln!("Tip: `lf init` can also let your coding agents queue tasks from any repo.\n");
+    eprintln!("Tip: `furmi init` can also let your coding agents queue tasks from any repo.\n");
     Ok(())
 }
 
-/// `lf agents`: which agents are installed, and how to get the others.
+/// `furmi agents`: which agents are installed, and how to get the others.
 pub fn agents(home: &Home) -> Result<()> {
     let config = Config::load(&home.config_path())?;
     let statuses = crate::config::agent_statuses(&config);
@@ -108,17 +108,17 @@ pub fn agents(home: &Home) -> Result<()> {
     print_table(&rows);
     println!();
     if statuses.iter().any(|a| a.installed) {
-        println!("Pick the default for new tasks with: lf agents use <name>");
+        println!("Pick the default for new tasks with: furmi agents use <name>");
     } else {
         println!(
             "Install one with the command shown (it needs Node.js), run it once in a terminal \
-             to sign in, then pick it with: lf agents use <name>"
+             to sign in, then pick it with: furmi agents use <name>"
         );
     }
     Ok(())
 }
 
-/// `lf agents use <name>`: sets `agent` under `[defaults]` in config.toml.
+/// `furmi agents use <name>`: sets `agent` under `[defaults]` in config.toml.
 pub fn use_agent(home: &Home, name: &str) -> Result<()> {
     let config = Config::load(&home.config_path())?;
     crate::config::set_default_agent(&home.config_path(), name)?;
@@ -139,18 +139,18 @@ pub fn use_agent(home: &Home, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// What a bare `lf` shows: where things stand and the next thing to try.
+/// What a bare `furmi` shows: where things stand and the next thing to try.
 pub fn welcome(home: &Home) -> Result<()> {
-    println!("loompa-forge: queue coding-agent tasks and let them run while you're away.\n");
+    println!("furmiculi: queue coding-agent tasks and let them run while you're away.\n");
     if home.ensure_initialized().is_ok() {
         crate::doctor::status(home)?;
         println!();
     }
     println!("Try:");
-    println!("  lf add \"Fix the login redirect\"   queue a task for the repo you're in");
-    println!("  lf start                           run the queue and open the dashboard");
-    println!("  lf ls                              see what's queued, running and done");
-    println!("  lf --help                          every command");
+    println!("  furmi add \"Fix the login redirect\"   queue a task for the repo you're in");
+    println!("  furmi start                            run the queue and open the dashboard");
+    println!("  furmi ls                               see what's queued, running and done");
+    println!("  furmi --help                           every command");
     Ok(())
 }
 
@@ -172,8 +172,8 @@ fn choose_agent(given: Option<String>) -> Result<Option<String>> {
     match found.as_slice() {
         [] => {
             println!(
-                "No coding agent found yet. `lf agents` shows how to install one; \
-                 then `lf agents use <name>` makes it the default."
+                "No coding agent found yet. `furmi agents` shows how to install one; \
+                 then `furmi agents use <name>` makes it the default."
             );
             Ok(None)
         }
@@ -253,7 +253,7 @@ fn ls_once(home: &Home, archive: bool, schedules: bool) -> Result<()> {
     let rows = task_rows(&config, &tasks);
     print_table(&rows);
     if tasks.is_empty() && !archive && std::io::stdout().is_terminal() {
-        println!("\nNothing queued yet. Add something with: lf add \"describe the work\"");
+        println!("\nNothing queued yet. Add something with: furmi add \"describe the work\"");
     }
     Ok(())
 }
@@ -273,7 +273,7 @@ pub fn load_tasks(dir: &Path) -> Result<(Vec<Task>, Vec<String>)> {
     Ok((tasks, warnings))
 }
 
-/// The header row plus one row per task, as `lf ls` shows them.
+/// The header row plus one row per task, as `furmi ls` shows them.
 pub fn task_rows(config: &Config, tasks: &[Task]) -> Vec<Vec<String>> {
     let mut rows = vec![row([
         "ID", "STATUS", "WHEN", "REPO", "BRANCH", "AGENT", "TOKENS", "COST",
@@ -488,12 +488,12 @@ fn read_prompt(given: Option<String>) -> Result<String> {
     Ok(buf)
 }
 
-/// The git repo the user is standing in, for `lf add` without `--repo`.
+/// The git repo the user is standing in, for `furmi add` without `--repo`.
 fn current_repo() -> Result<PathBuf> {
     let cwd = std::env::current_dir().context("finding the current folder")?;
     crate::git::repo_root(&cwd).map_err(|_| {
         anyhow::anyhow!(
-            "{} isn't inside a git repository: run `lf add` from your project's folder, \
+            "{} isn't inside a git repository: run `furmi add` from your project's folder, \
              or say where with --repo <path>",
             contract_tilde(&cwd)
         )
@@ -514,10 +514,10 @@ fn print_queued(home: &Home, config: &Config, task: &Task) {
     println!();
     if home.runner_alive() {
         println!(
-            "The runner is up, so it will start on its own. Follow along with `lf ls --watch`."
+            "The runner is up, so it will start on its own. Follow along with `furmi ls --watch`."
         );
     } else {
-        println!("Nothing runs it yet: start the runner (and the dashboard) with `lf start`.");
+        println!("Nothing runs it yet: start the runner (and the dashboard) with `furmi start`.");
     }
 }
 
