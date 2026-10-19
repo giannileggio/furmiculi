@@ -218,9 +218,20 @@ shows the day's spend.
 
 ### Token/cost usage
 
-If a headless run's stdout is a JSON object with a `usage` field, `furmi`
-records it on the task as `tokens_in`/`tokens_out`/`cost_usd` (`furmi ls` and
-`furmi web` show them too). The `claude` preset asks for this with
-`--output-format json`; other agents report nothing unless their own
-headless flags produce the same shape. Interactive mode never reports
-usage: it keeps a real terminal for the human running it.
+`furmi` records what a headless run's stdout reports as `tokens_in`,
+`tokens_out` and `cost_usd` on the task (`furmi ls` shows them; the dashboard
+doesn't, since a column that is mostly dashes reads like accounting). Two
+shapes are understood:
+
+- one JSON object with a `usage` field — what `claude --output-format json`
+  prints at the end of a run;
+- an event stream, one JSON object per line, whose finished assistant
+  messages each report their own usage — what `pi --mode json` prints. Those
+  turns are summed into one total, and an `error`/`aborted` stop reason in
+  there counts as a failed run: that mode exits 0 either way, so the stream
+  is the only place a failure is reported.
+
+The `claude` and `pi` presets ask for those flags. Other agents report
+nothing unless their own headless flags produce one of the two shapes.
+Interactive mode never reports usage: it keeps a real terminal for the
+human running it.

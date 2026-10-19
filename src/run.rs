@@ -166,9 +166,10 @@ impl RunnerState {
 /// ended to `status_file` for [`poll_running`] to pick up. A headless
 /// agent's stdout and stderr are also streamed to the attempt's log file as
 /// they arrive (see [`StreamedLog`]), so the log survives tmux dying and
-/// isn't limited by its scrollback. If the agent's stdout is a JSON object
-/// reporting `usage`, also writes token/cost usage next to the status, at
-/// [`usage_file_for`].
+/// isn't limited by its scrollback. What that stdout said is parsed too (see
+/// [`Stream`]): token/cost usage goes next to the status, at
+/// [`usage_file_for`], and a failed run reported only in an event stream
+/// still ends up as a failure.
 pub fn exec(home: &Home, id: &str, status_file: &Path) -> Result<ExitCode> {
     let spawned = (|| {
         let config = Config::load(&home.config_path())?;
@@ -228,8 +229,18 @@ pub fn exec(home: &Home, id: &str, status_file: &Path) -> Result<ExitCode> {
                 (None, Some(sig)) => Exit::Signal(sig),
                 (None, None) => Exit::Code(1),
             };
-            let usage = captured.and_then(|out| Usage::parse(&out));
-            (exit, usage)
+            let stream = captured.map(|out| Stream::parse(&out)).unwrap_or_default();
+            let exit = match (exit, &stream.error) {
+                // pi's `--mode json` exits 0 even when the run failed; the
+                // stream is the only place that says so. Anything else (a
+                // non-zero exit) already speaks for itself.
+                (Exit::Code(0), Some(error)) => {
+                    eprintln!("error: {error}");
+                    Exit::Code(1)
+                }
+                (exit, _) => exit,
+            };
+            (exit, stream.usage)
         }
         Err(e) => {
             eprintln!("error: {e:#}");
@@ -370,10 +381,19 @@ fn usage_file_for(status_file: &Path) -> PathBuf {
     status_file.with_extension("usage")
 }
 
-/// Token/cost usage an agent reported for one attempt, parsed from its
-/// headless stdout. Only agents whose headless mode prints a final JSON
-/// object with a `usage` field (e.g. Claude Code's `--output-format json`)
-/// report anything; other agents simply have no usage file.
+/// Token/cost usage an agent reported for one attempt, and how the agent said
+/// it went, both parsed from its headless stdout.
+///
+/// Two shapes are understood, since that is what agents print:
+///
+/// - one final JSON object with a `usage` field (Claude Code's
+///   `--output-format json`);
+/// - an event stream, one JSON object per line, where each finished assistant
+///   message reports its own usage (pi's `--mode json`). Those are summed, and
+///   an error/aborted stop reason is picked up as well: that mode exits 0 even
+///   when the run failed.
+///
+/// Any other agent (plain text, or nothing printed yet) reports nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 struct Usage {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -384,12 +404,73 @@ struct Usage {
     cost_usd: Option<f64>,
 }
 
+/// What one attempt's headless stdout said: the usage it reported and, when
+/// the stream reports outcomes as events, the error it ended on.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Stream {
+    usage: Option<Usage>,
+    /// Why the agent said the run failed (its own words). `None` unless it
+    /// reported one, which for an event stream is not a non-zero exit.
+    error: Option<String>,
+}
+
+impl Stream {
+    fn parse(bytes: &[u8]) -> Stream {
+        let single = serde_json::from_slice::<serde_json::Value>(bytes).ok();
+        // One object for the whole stdout with a `usage` in it is how Claude
+        // Code reports. Anything else that parses as one object is simply a
+        // stream of one event, and is read like every other event below.
+        if let Some(value) = single.as_ref()
+            && let Some(usage) = Usage::from_claude(value)
+        {
+            return Stream {
+                usage: Some(usage),
+                error: None,
+            };
+        }
+        let mut stream = Stream::default();
+        match single {
+            Some(event) => stream.read_event(&event),
+            None => {
+                // One object per line, as pi's `--mode json` writes them; any
+                // other line (a warning, a plain-text agent) is skipped.
+                for line in bytes.split(|b| *b == b'\n') {
+                    if let Ok(event) = serde_json::from_slice::<serde_json::Value>(line) {
+                        stream.read_event(&event);
+                    }
+                }
+            }
+        }
+        stream
+    }
+
+    /// Folds one event of an agent's JSON stream into the totals: the usage of
+    /// a finished assistant message, and why it ended if it ended badly.
+    fn read_event(&mut self, event: &serde_json::Value) {
+        if event.get("type").and_then(serde_json::Value::as_str) != Some("message_end") {
+            return; // `agent_end` and friends repeat what `message_end` said
+        }
+        let Some(message) = event.get("message") else {
+            return;
+        };
+        if message.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
+            return;
+        }
+        if let Some(usage) = Usage::from_pi(message) {
+            self.usage = Some(match self.usage {
+                Some(total) => total.add(usage),
+                None => usage,
+            });
+        }
+        if let Some(error) = pi_error(message) {
+            self.error = Some(error);
+        }
+    }
+}
+
 impl Usage {
-    /// `None` if `bytes` isn't a JSON object reporting usage: either it
-    /// isn't valid JSON (a non-JSON agent, or a headless run that failed
-    /// before printing anything), or it has no `usage` to report.
-    fn parse(bytes: &[u8]) -> Option<Usage> {
-        let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    /// Usage as Claude Code reports it: a `usage` object plus a total cost.
+    fn from_claude(value: &serde_json::Value) -> Option<Usage> {
         let usage = value.get("usage")?;
         let tokens = |key: &str| usage.get(key).and_then(serde_json::Value::as_u64);
         let tokens_in = tokens("input_tokens").map(|n| {
@@ -401,16 +482,79 @@ impl Usage {
             .get("total_cost_usd")
             .or_else(|| value.get("cost_usd"))
             .and_then(serde_json::Value::as_f64);
-        (tokens_in.is_some() || tokens_out.is_some() || cost_usd.is_some()).then_some(Usage {
+        Some(Usage {
             tokens_in,
             tokens_out,
             cost_usd,
         })
+        .filter(Usage::reported)
+    }
+
+    /// Usage as one of pi's assistant messages reports it: `input`, `output`,
+    /// the cache counters, and a `cost.total`.
+    fn from_pi(message: &serde_json::Value) -> Option<Usage> {
+        let usage = message.get("usage")?;
+        let count = |key: &str| usage.get(key).and_then(serde_json::Value::as_u64);
+        let tokens_in = count("input")
+            .map(|n| n + count("cacheRead").unwrap_or(0) + count("cacheWrite").unwrap_or(0));
+        let tokens_out = count("output");
+        let cost_usd = usage
+            .get("cost")
+            .and_then(|cost| cost.get("total"))
+            .and_then(serde_json::Value::as_f64);
+        Some(Usage {
+            tokens_in,
+            tokens_out,
+            cost_usd,
+        })
+        .filter(Usage::reported)
+    }
+
+    /// Did anything in here report a number worth writing down?
+    fn reported(&self) -> bool {
+        self.tokens_in.is_some() || self.tokens_out.is_some() || self.cost_usd.is_some()
+    }
+
+    /// One turn plus another, field by field.
+    fn add(self, other: Usage) -> Usage {
+        Usage {
+            tokens_in: plus(self.tokens_in, other.tokens_in),
+            tokens_out: plus(self.tokens_out, other.tokens_out),
+            cost_usd: plus(self.cost_usd, other.cost_usd),
+        }
     }
 
     fn to_json(self) -> String {
         serde_json::to_string(&self).expect("Usage always serializes")
     }
+}
+
+fn plus<T: std::ops::Add<Output = T>>(a: Option<T>, b: Option<T>) -> Option<T> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a + b),
+        (a, None) => a,
+        (None, b) => b,
+    }
+}
+
+/// Why pi's assistant message ended badly, if it did: the reason is only in
+/// the event stream, since `--mode json` exits 0 either way.
+fn pi_error(message: &serde_json::Value) -> Option<String> {
+    let stop = message
+        .get("stopReason")
+        .and_then(serde_json::Value::as_str)?;
+    if !matches!(stop, "error" | "aborted") {
+        return None;
+    }
+    let said = message
+        .get("errorMessage")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|m| !m.is_empty());
+    Some(match said {
+        Some(said) => format!("the agent reported {stop}: {said}"),
+        None => format!("the agent reported {stop}"),
+    })
 }
 
 fn read_usage(path: &Path) -> Option<Usage> {
@@ -1469,16 +1613,79 @@ mod tests {
     #[test]
     fn parses_claude_code_usage() {
         let stdout = r#"{"type":"result","total_cost_usd":0.0512,"usage":{"input_tokens":120,"cache_creation_input_tokens":30,"cache_read_input_tokens":500,"output_tokens":80}}"#;
-        let usage = Usage::parse(stdout.as_bytes()).unwrap();
+        let stream = Stream::parse(stdout.as_bytes());
+        let usage = stream.usage.unwrap();
         assert_eq!(usage.tokens_in, Some(120 + 30 + 500));
         assert_eq!(usage.tokens_out, Some(80));
         assert_eq!(usage.cost_usd, Some(0.0512));
+        assert_eq!(stream.error, None);
+    }
+
+    #[test]
+    fn parses_pi_json_events_by_summing_turns() {
+        // Two turns, each reporting its own usage; the surrounding events
+        // (and a non-JSON line) must not add anything or trip it up.
+        let stdout = [
+            r#"{"type":"session","version":3,"id":"s"}"#,
+            r#"{"type":"agent_start"}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","stopReason":"toolUse","usage":{"input":100,"output":10,"cacheRead":5,"cacheWrite":2,"totalTokens":117,"cost":{"total":0.01}}}}"#,
+            "warning: something on stderr-ish stdout",
+            r#"{"type":"message_end","message":{"role":"user","content":"and then?"}}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","stopReason":"stop","usage":{"input":200,"output":20,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.02}}}}"#,
+            // agent_end repeats the same messages; counting those would double.
+            r#"{"type":"agent_end","messages":[{"role":"assistant","usage":{"input":100,"output":10}}]}"#,
+            r#"{"type":"agent_settled","aborted":false}"#,
+        ]
+        .join("\n");
+        let stream = Stream::parse(stdout.as_bytes());
+        let usage = stream.usage.unwrap();
+        assert_eq!(usage.tokens_in, Some((100 + 5 + 2) + 200));
+        assert_eq!(usage.tokens_out, Some(30));
+        assert_eq!(usage.cost_usd, Some(0.03));
+        assert_eq!(stream.error, None);
+    }
+
+    #[test]
+    fn a_pi_stream_error_is_reported_even_though_the_exit_was_zero() {
+        // pi's `--mode json` exits 0 for an aborted or errored response, so
+        // the reason has to come out of the stream.
+        let stdout = [
+            r#"{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"model is not available","usage":{"input":10,"output":0,"cost":{"total":0.001}}}}"#,
+        ]
+        .join("\n");
+        let stream = Stream::parse(stdout.as_bytes());
+        assert_eq!(
+            stream.error.as_deref(),
+            Some("the agent reported error: model is not available")
+        );
+        // The failed turn still reports what it spent.
+        assert_eq!(stream.usage.unwrap().tokens_in, Some(10));
+
+        // An abort with nothing said about why.
+        let aborted =
+            r#"{"type":"message_end","message":{"role":"assistant","stopReason":"aborted"}}"#;
+        assert_eq!(
+            Stream::parse(aborted.as_bytes()).error.as_deref(),
+            Some("the agent reported aborted")
+        );
+
+        // A stream that ends normally says nothing about failing.
+        let ok = r#"{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}"#;
+        let stream = Stream::parse(ok.as_bytes());
+        assert_eq!(stream.error, None);
+        assert_eq!(stream.usage, None);
     }
 
     #[test]
     fn no_usage_for_non_json_or_usage_less_output() {
-        assert!(Usage::parse(b"plain text output, not json").is_none());
-        assert!(Usage::parse(br#"{"type":"result","result":"ok"}"#).is_none());
+        assert_eq!(
+            Stream::parse(b"plain text output, not json"),
+            Stream::default()
+        );
+        assert_eq!(
+            Stream::parse(br#"{"type":"result","result":"ok"}"#),
+            Stream::default()
+        );
     }
 
     #[test]

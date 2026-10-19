@@ -39,9 +39,11 @@ timeout = "2h"
 # auto-approve flags (e.g. claude "--permission-mode", "acceptEdits";
 # codex "--full-auto"; gemini "--yolo") to suit your trust level.
 #
-# claude's headless preset asks for `--output-format json`: furmi parses that
-# final object for token/cost usage (see `tokens_in`/`tokens_out`/`cost_usd`
-# in FORMAT.md). Drop the flag and furmi just won't record usage for it.
+# claude's headless preset asks for `--output-format json`, and pi's for
+# `--mode json`: furmi parses those for token/cost usage (see
+# `tokens_in`/`tokens_out`/`cost_usd` in FORMAT.md), and pi's event stream is
+# the only place it says a run failed. Drop the flag and furmi just won't record
+# usage for that agent (pi's log also goes back to plain text).
 [agents.claude]
 headless = ["claude", "-p", "{prompt}", "--output-format", "json"]
 interactive = ["claude", "{prompt}"]
@@ -63,7 +65,7 @@ interactive = ["opencode", "--prompt", "{prompt}"]
 model_args = ["--model", "{model}"]
 
 [agents.pi]
-headless = ["pi", "-p", "{prompt}"]
+headless = ["pi", "--mode", "json", "{prompt}"]
 interactive = ["pi", "{prompt}"]
 model_args = ["--model", "{model}"]
 "#;
@@ -167,7 +169,10 @@ impl Default for Config {
 }
 
 /// Presets for common CLI agents: `(name, headless, interactive)`. All take
-/// `--model`.
+/// `--model`. The headless ones ask for JSON output where the agent has it
+/// (`claude --output-format json`, `pi --mode json`), because that is what
+/// carries the token/cost usage furmi records — and, for pi, the only place a
+/// failed run is reported (its JSON mode exits 0 either way).
 const PRESETS: &[(&str, &[&str], &[&str])] = &[
     (
         "claude",
@@ -189,7 +194,11 @@ const PRESETS: &[(&str, &[&str], &[&str])] = &[
         &["opencode", "run", "{prompt}"],
         &["opencode", "--prompt", "{prompt}"],
     ),
-    ("pi", &["pi", "-p", "{prompt}"], &["pi", "{prompt}"]),
+    (
+        "pi",
+        &["pi", "--mode", "json", "{prompt}"],
+        &["pi", "{prompt}"],
+    ),
 ];
 
 fn builtin_agents() -> BTreeMap<String, Agent> {
