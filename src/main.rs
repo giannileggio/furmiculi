@@ -4,6 +4,7 @@ mod config;
 mod control;
 mod doctor;
 mod edit;
+mod exe;
 mod frontmatter;
 mod fsutil;
 mod git;
@@ -27,9 +28,9 @@ use crate::home::Home;
 
 /// Queue and run coding-agent tasks defined as Markdown files.
 #[derive(Parser)]
-#[command(name = "lf", version)]
+#[command(name = "furmi", version)]
 struct Cli {
-    /// Data folder [default: $LF_HOME or ~/.loompa-forge]
+    /// Data folder [default: $FURMI_HOME or ~/.furmiculi]
     #[arg(long, global = true)]
     home: Option<PathBuf>,
     #[command(subcommand)]
@@ -39,7 +40,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Create the data folder, a config.toml, and the files agents use to
-    /// write tasks. Safe to re-run: refreshes lf's own files.
+    /// write tasks. Safe to re-run: refreshes furmi's own files.
     Init(cmd::InitArgs),
     /// List tasks (or archived tasks, or schedules).
     Ls {
@@ -66,7 +67,7 @@ enum Command {
     },
     /// Mark a task done: ends its session, runs on_finish, archives it.
     ///
-    /// For running, needs_review or failed tasks. ID defaults to $LF_TASK_ID,
+    /// For running, needs_review or failed tasks. ID defaults to $FURMI_TASK_ID,
     /// which is set inside each task's window.
     Done { id: Option<String> },
     /// Mark a running or needs_review task failed, without retrying.
@@ -104,24 +105,24 @@ enum Command {
     /// get going. Opens the dashboard in your browser.
     Start(web::WebArgs),
     /// Show which coding agents are installed, how to get the others, and
-    /// pick the default (`lf agents use <name>`).
+    /// pick the default (`furmi agents use <name>`).
     Agents {
         #[command(subcommand)]
         action: Option<AgentsAction>,
     },
-    /// Stop the runner that `lf run` or `lf start` began. Tasks already
+    /// Stop the runner that `furmi run` or `furmi start` began. Tasks already
     /// running keep going; start the runner again to resume the queue.
     Stop,
     /// Show whether the runner is alive, the queue, budget and failing schedules.
     Status,
     /// Check that tasks can run here: tools, config, agents, task files.
     Doctor,
-    /// Print a systemd or launchd unit that keeps `lf run` running.
+    /// Print a systemd or launchd unit that keeps `furmi run` running.
     Service {
         #[arg(value_enum)]
         manager: doctor::Manager,
     },
-    /// Launch a task's agent in the current process (used by `lf run`).
+    /// Launch a task's agent in the current process (used by `furmi run`).
     #[command(hide = true)]
     Exec {
         id: String,
@@ -137,6 +138,8 @@ enum AgentsAction {
 }
 
 fn main() -> ExitCode {
+    // Before anything else can replace the binary on disk.
+    exe::remember();
     let cli = Cli::parse();
     match run(cli) {
         Ok(code) => code,

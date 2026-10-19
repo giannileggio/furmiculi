@@ -42,7 +42,7 @@ pub fn start_runner(home: &Home) -> Result<bool> {
     if home.runner_alive() {
         return Ok(false);
     }
-    let exe = std::env::current_exe().context("finding the furmi binary to start the runner")?;
+    let exe = crate::exe::path().context("finding the furmi binary to start the runner")?;
     let mut child = Command::new(exe)
         .arg("--home")
         .arg(home.root())

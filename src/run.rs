@@ -1275,7 +1275,7 @@ fn prepare_workdir(home: &Home, config: &Config, task: &Task, eff: &Effective) -
 }
 
 fn exec_argv(home: &Home, id: &str, status_file: &Path) -> Result<Vec<String>> {
-    let exe = std::env::current_exe().context("locating the furmi binary")?;
+    let exe = crate::exe::path().context("locating the furmi binary")?;
     let path = |p: &Path| {
         p.to_str()
             .map(String::from)

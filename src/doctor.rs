@@ -1,4 +1,4 @@
-//! `lf status`, `lf doctor` and `lf service`: is the runner alive, is the
+//! `furmi status`, `furmi doctor` and `furmi service`: is the runner alive, is the
 //! machine set up to run tasks, and how to keep the runner running.
 
 use std::process::ExitCode;
@@ -49,7 +49,7 @@ pub fn status(home: &Home) -> Result<()> {
         }
     } else {
         println!(
-            "runner     NOT running: start it with `lf start` (or `lf run`; `lf service` keeps it up)"
+            "runner     NOT running: start it with `furmi start` (or `furmi run`; `furmi service` keeps it up)"
         );
     }
 
@@ -148,11 +148,11 @@ fn runner_check(home: &Home) -> Check {
     if home.runner_alive() {
         Check::Ok("a runner is running".into())
     } else {
-        Check::Warn("no runner is running: start it with `lf start` (or `lf run`)".into())
+        Check::Warn("no runner is running: start it with `furmi start` (or `furmi run`)".into())
     }
 }
 
-/// Everything `lf doctor` checks except whether a runner is up (see
+/// Everything `furmi doctor` checks except whether a runner is up (see
 /// [`runner_check`]): the tools, config, agents and task files. The
 /// dashboard shows these as its setup check.
 pub fn checks(home: &Home) -> Vec<Check> {
@@ -164,14 +164,14 @@ pub fn checks(home: &Home) -> Vec<Check> {
             add(Check::Ok(format!("{tool} is installed")));
         } else {
             add(Check::Fail(format!(
-                "{tool} is not on $PATH: `lf run` needs it"
+                "{tool} is not on $PATH: `furmi run` needs it"
             )));
         }
     }
 
     if home.ensure_initialized().is_err() {
         add(Check::Fail(format!(
-            "{} is not initialized: run `lf init`",
+            "{} is not initialized: run `furmi init`",
             home.root().display()
         )));
         return checks;
@@ -289,7 +289,7 @@ pub fn checks(home: &Home) -> Vec<Check> {
                 .any(|p| p.window == run::window_of(&t, &config).1)
             {
                 add(Check::Warn(format!(
-                    "{} is running but has no tmux window; `lf run` will requeue it",
+                    "{} is running but has no tmux window; `furmi run` will requeue it",
                     t.id
                 )));
             }
@@ -324,11 +324,11 @@ pub enum Manager {
     Launchd,
 }
 
-/// Prints a unit file that keeps `lf run` running (and restarts it), for
+/// Prints a unit file that keeps `furmi run` running (and restarts it), for
 /// systemd (Linux) or launchd (macOS), with the instructions to install it.
 pub fn service(home: &Home, manager: Manager) -> Result<()> {
-    let exe = std::env::current_exe().context("locating the lf binary")?;
-    let exe = exe.to_str().context("the lf path is not valid UTF-8")?;
+    let exe = crate::exe::path().context("locating the furmi binary")?;
+    let exe = exe.to_str().context("the furmi path is not valid UTF-8")?;
     let root = home
         .root()
         .to_str()
@@ -339,12 +339,12 @@ pub fn service(home: &Home, manager: Manager) -> Result<()> {
     }
     match manager {
         Manager::Systemd => print!(
-            "# Save as ~/.config/systemd/user/loompa-forge.service, then:\n\
-             #   systemctl --user daemon-reload && systemctl --user enable --now loompa-forge\n\
+            "# Save as ~/.config/systemd/user/furmiculi.service, then:\n\
+             #   systemctl --user daemon-reload && systemctl --user enable --now furmiculi\n\
              #   loginctl enable-linger $USER    # keep it running when logged out\n\
-             #   journalctl --user -u loompa-forge -f\n\
+             #   journalctl --user -u furmiculi -f\n\
              [Unit]\n\
-             Description=loompa-forge runner\n\
+             Description=furmiculi runner\n\
              \n\
              [Service]\n\
              ExecStart=\"{exe}\" --home \"{root}\" run\n\
@@ -358,13 +358,13 @@ pub fn service(home: &Home, manager: Manager) -> Result<()> {
         Manager::Launchd => {
             let xml = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
             print!(
-                "<!-- Save as ~/Library/LaunchAgents/dev.loompa-forge.plist, then:\n\
-                 \x20    launchctl load ~/Library/LaunchAgents/dev.loompa-forge.plist -->\n\
+                "<!-- Save as ~/Library/LaunchAgents/dev.furmiculi.plist, then:\n\
+                 \x20    launchctl load ~/Library/LaunchAgents/dev.furmiculi.plist -->\n\
                  <?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
                  <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
                  <plist version=\"1.0\">\n\
                  <dict>\n\
-                 \x20 <key>Label</key><string>dev.loompa-forge</string>\n\
+                 \x20 <key>Label</key><string>dev.furmiculi</string>\n\
                  \x20 <key>ProgramArguments</key>\n\
                  \x20 <array>\n\
                  \x20   <string>{}</string>\n\
