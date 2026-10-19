@@ -347,7 +347,9 @@
 <script>
 // The token: embedded at startup (loopback mode) or taken from `?token=` on
 // the first load of a remote dashboard, so it stays in memory only — never
-// localStorage or a cookie — and is then stripped from the address bar.
+// localStorage or a cookie — and is then stripped from the address bar. The
+// server sets its own HttpOnly cookie at the same time, so a reload of the
+// stripped URL still gets the page; from then on the meta tag has the token.
 const TOKEN = (() => {
   const given = new URLSearchParams(location.search).get("token");
   if (given) {

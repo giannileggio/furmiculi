@@ -19,9 +19,11 @@
 //! - **Remote (`--listen` with a non-loopback address, e.g. `0.0.0.0:7433`).**
 //!   For a headless box reached from browsers on other machines (a tailnet).
 //!   Every request — not just POSTs — must carry a shared bearer token
-//!   (`Authorization: Bearer …`; the first page load may pass it as
-//!   `?token=`, which the page keeps in memory only and strips from the URL),
-//!   and every `Host` must match one exact `--allowed-host` entry (defeats
+//!   (`Authorization: Bearer …`). The first page load may pass it as
+//!   `?token=` instead; the server then sets an `HttpOnly` cookie for it, so
+//!   a refresh or a bookmark doesn't have to carry the token in the URL (the
+//!   page itself keeps it in memory only and strips it from the address
+//!   bar). Every `Host` must match one exact `--allowed-host` entry (defeats
 //!   DNS rebinding over the wide bind). The per-run POST token and Origin
 //!   checks stay on top of the bearer gate. A non-loopback bind refuses to
 //!   start without a token and an allowlist.
@@ -83,6 +85,12 @@ const WORKERS: usize = 4;
 /// Largest request body read; the only body anyone sends is a short reason.
 const MAX_BODY_BYTES: u64 = 16 * 1024;
 const TOKEN_HEADER: &str = "X-Furmi-Token";
+/// The cookie a remote bind hands the browser after a first load carrying
+/// `?token=`, so a refresh (or a bookmark) doesn't ask for the token again.
+const TOKEN_COOKIE: &str = "furmi_token";
+/// How long that cookie lives. Long enough that a bookmark still works next
+/// month; it is re-set on every page load.
+const TOKEN_COOKIE_MAX_AGE: u64 = 30 * 24 * 60 * 60;
 
 struct Ctx<'a> {
     home: &'a Home,
@@ -396,6 +404,7 @@ fn handle(ctx: &Ctx, mut request: Request) {
     let origin = header("Origin");
     let token = header(TOKEN_HEADER);
     let authorization = header("Authorization");
+    let cookie = header("Cookie");
     let is_post = *request.method() == Method::Post;
 
     let result = if !host.as_deref().is_some_and(|h| hosts_ok(ctx, h)) {
@@ -404,7 +413,13 @@ fn handle(ctx: &Ctx, mut request: Request) {
         } else {
             reply(403, "text/plain", "forbidden: not a loopback host")
         }
-    } else if !bearer_ok(ctx, request.method(), &url, authorization.as_deref()) {
+    } else if !bearer_ok(
+        ctx,
+        request.method(),
+        &url,
+        authorization.as_deref(),
+        cookie.as_deref(),
+    ) {
         reply(
             401,
             "text/plain",
@@ -442,6 +457,20 @@ fn handle(ctx: &Ctx, mut request: Request) {
             "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
              connect-src 'self'; frame-ancestors 'none'",
         );
+        // Remote bind: the page has the token in memory from `?token=` and
+        // strips it from the address bar, so hand the browser a cookie of its
+        // own — otherwise every reload would be a 401. HttpOnly (the page
+        // never needs it) and Strict (a link from another site doesn't carry
+        // it; a bookmark or a reload does).
+        if ctx.remote {
+            add(
+                "Set-Cookie",
+                &format!(
+                    "{TOKEN_COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={TOKEN_COOKIE_MAX_AGE}",
+                    ctx.token
+                ),
+            );
+        }
     }
     let _ = request.respond(response);
 }
@@ -555,21 +584,42 @@ fn origins_ok(ctx: &Ctx, origin: &str) -> bool {
 }
 
 /// The bearer gate for a remote bind: `Authorization: Bearer <t>` on every
-/// route except the dashboard page on first load, which may instead carry
-/// the token as `?token=` (the page then keeps it in memory and strips it
-/// from the URL). Nothing to check on a loopback bind.
-fn bearer_ok(ctx: &Ctx, method: &Method, url: &str, authorization: Option<&str>) -> bool {
+/// route; the dashboard page also gets in on a first load carrying the token
+/// as `?token=` and, afterwards, on the cookie the server set for it (so a
+/// refresh or a bookmark doesn't have to carry the token in the URL).
+/// Nothing to check on a loopback bind.
+fn bearer_ok(
+    ctx: &Ctx,
+    method: &Method,
+    url: &str,
+    authorization: Option<&str>,
+    cookie: Option<&str>,
+) -> bool {
     if !ctx.remote {
         return true;
     }
-    match authorization.and_then(|a| a.strip_prefix("Bearer ")) {
-        Some(supplied) => same_token(supplied, &ctx.token),
-        None => {
-            *method == Method::Get
-                && url.split('?').next() == Some("/")
-                && query_param(url, "token").is_some_and(|t| same_token(t, &ctx.token))
-        }
+    if let Some(supplied) = authorization.and_then(|a| a.strip_prefix("Bearer ")) {
+        return same_token(supplied, &ctx.token);
     }
+    if *method == Method::Get
+        && url.split('?').next() == Some("/")
+        && query_param(url, "token").is_some_and(|t| same_token(t, &ctx.token))
+    {
+        return true;
+    }
+    cookie
+        .and_then(|c| cookie_value(c, TOKEN_COOKIE))
+        .is_some_and(|t| same_token(t, &ctx.token))
+}
+
+/// One `name` from a `Cookie` header, if it's there (the first match wins).
+fn cookie_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
+    header.split(';').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key.trim() == name)
+            .then(|| value.trim())
+            .filter(|v| !v.is_empty())
+    })
 }
 
 /// Does a `Host` header match one allowlist entry exactly? An entry may name
@@ -1254,6 +1304,24 @@ mod tests {
         })
         .unwrap();
         assert!(!loopback.remote);
+    }
+
+    #[test]
+    fn the_token_cookie_is_found_among_the_others() {
+        assert_eq!(cookie_value("furmi_token=abc", TOKEN_COOKIE), Some("abc"));
+        assert_eq!(
+            cookie_value("other=1; furmi_token=abc; third=2", TOKEN_COOKIE),
+            Some("abc")
+        );
+        assert_eq!(
+            cookie_value(" furmi_token = abc ", TOKEN_COOKIE),
+            Some("abc")
+        );
+        assert_eq!(cookie_value("other=1", TOKEN_COOKIE), None);
+        assert_eq!(cookie_value("furmi_token=", TOKEN_COOKIE), None);
+        assert_eq!(cookie_value("furmi_token", TOKEN_COOKIE), None);
+        assert_eq!(cookie_value("furmi_tokens=abc", TOKEN_COOKIE), None);
+        assert_eq!(cookie_value("", TOKEN_COOKIE), None);
     }
 
     #[test]

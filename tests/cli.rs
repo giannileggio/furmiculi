@@ -679,9 +679,37 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
     assert!(page.starts_with("HTTP/1.1 200"), "{page}");
     assert!(page.contains(TEST_TOKEN), "{page}");
     assert!(page.contains("furmi web"));
-    // ...and the token is not in the URL the server recorded anywhere.
+    // ...and the browser is handed a cookie of its own, so a reload of the
+    // now-stripped URL (or a bookmark) gets the page instead of a 401.
+    assert!(
+        page.contains(&format!("Set-Cookie: furmi_token={TEST_TOKEN}")),
+        "{page}"
+    );
+    assert!(page.contains("HttpOnly"), "{page}");
+    assert!(page.contains("SameSite=Strict"), "{page}");
+    let reloaded = http_at(
+        "127.0.0.1",
+        port,
+        "GET",
+        "/",
+        "toolnet.example",
+        &[("Cookie", &format!("other=1; furmi_token={TEST_TOKEN}"))],
+        "",
+    );
+    assert!(reloaded.starts_with("HTTP/1.1 200"), "{reloaded}");
+    let wrong_cookie = http_at(
+        "127.0.0.1",
+        port,
+        "GET",
+        "/",
+        "toolnet.example",
+        &[("Cookie", "furmi_token=not-the-token")],
+        "",
+    );
+    assert!(wrong_cookie.starts_with("HTTP/1.1 401"), "{wrong_cookie}");
 
-    // Without the bearer: every route refuses, including one a page visits less.
+    // Without the bearer or a cookie: every route refuses, including one a
+    // page visits less.
     for route in [
         "/",
         "/api/state",

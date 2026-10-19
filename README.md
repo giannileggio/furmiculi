@@ -187,10 +187,13 @@ interface). A non-loopback bind refuses to start without two more things:
   when it reaches the dashboard; requests with any other Host are rejected.
   An entry alone allows any port on that host; `host:port` pins the port.
 
-The first page load may pass the token as `?token=<t>`; the page keeps it in
-memory only (never localStorage or a cookie) and strips it from the URL, then
-sends it with every request. The per-run token and Origin checks POSTs already
-had stay in place on top of that.
+The first page load may pass the token as `?token=<t>`; the server answers
+with an `HttpOnly`, `SameSite=Strict` cookie holding it, and the page keeps it
+in memory only (never localStorage) and strips it from the URL, then sends it
+with every request. The cookie is what makes a reload — or a bookmark — work
+after the token is gone from the address bar; without it every refresh would
+be a 401. The per-run token and Origin checks POSTs already had stay in place
+on top of that, so the cookie alone can't change anything.
 
 On the headless box:
 
@@ -201,8 +204,10 @@ furmi web --listen 0.0.0.0:7433 --token-file ~/.furmiculi/web-token \
 
 From another machine on the tailnet, open
 `http://tools-your-hostname.ts.net:7433/?token=<the file's content>` once;
-from then on `http://tools-your-hostname.ts.net:7433` works on its own while
-that browser tab is open. (`furmi start` takes the same flags, and its runner
+the dashboard hands that browser a cookie, so from then on
+`http://tools-your-hostname.ts.net:7433` works on its own — reloads and
+bookmarks included — until the cookie expires (30 days, re-set on each page
+load) or you clear it. (`furmi start` takes the same flags, and its runner
 stops with the dashboard, as always.) The dashboard speaks plain HTTP: put
 `tailscale serve` in front of it if you want HTTPS. And the quietest pattern
 is still SSH: `ssh -L 7433:127.0.0.1:7433 your-box`, with `furmi web` keeping
