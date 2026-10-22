@@ -94,8 +94,9 @@ conveyor. Other shortlisted: morrow (crate name taken), docket, smelt, grist
 
 - [ ] Rename the repository (`giannileggio/loompa-forge`). GitHub redirects the
       old URL; released binaries point at the old installer/updater path, so
-      keep the redirect alive. (Not done: needs the GitHub account; the local
-      clone is still `~/Projects/loompa-forge`.)
+      keep the redirect alive. (Remote now resolves to `furmiculi` and the local
+      clone was moved to `~/Projects/furmiculi` on 2026-10-20; only the GitHub
+      account side — settings, description, redirect check — is outstanding.)
 - [ ] Create the `furmiculi` GitHub org if wanted.
 - [ ] Last release under the old name: add a notice pointing to the new name.
 - [ ] Cut a release under the new name; check `furmiculi-update` upgrades from
