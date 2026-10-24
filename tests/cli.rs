@@ -605,6 +605,168 @@ fn write_token_file(home: &Path) -> std::path::PathBuf {
     token_file
 }
 
+/// What `furmi web --setup` saves is all a plain `furmi web` needs: no flags,
+/// no questions, and the same gates as the flags would have set up.
+#[test]
+fn web_follows_the_web_section_in_config() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    add(home.path(), repo.path(), "w1", "do it");
+
+    let token_file = write_token_file(home.path());
+    let port = 18444u16;
+    let config_path = home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(
+        &config_path,
+        format!(
+            "{config}\n[web]\nlisten = \"0.0.0.0:{port}\"\nallowed_hosts = [\"toolnet.example\"]\n\
+             token_file = \"{}\"\n",
+            token_file.display()
+        ),
+    )
+    .unwrap();
+
+    let mut child = furmi(home.path())
+        .args(["web", "--no-open"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Serving other machines, gated exactly as with the flags.
+    let page = http_at(
+        "127.0.0.1",
+        port,
+        "GET",
+        &format!("/?token={TEST_TOKEN}"),
+        "toolnet.example",
+        &[],
+        "",
+    );
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    let denied = http_at(
+        "127.0.0.1",
+        port,
+        "GET",
+        "/api/state",
+        "toolnet.example",
+        &[],
+        "",
+    );
+    assert!(denied.starts_with("HTTP/1.1 401"), "{denied}");
+    // ...and a Host outside the saved list is still refused.
+    let rebound = http_at("127.0.0.1", port, "GET", "/", "evil.example", &[], "");
+    assert!(rebound.starts_with("HTTP/1.1 403"), "{rebound}");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+/// `--allowed-host '*'`: the address is served under whatever name a browser
+/// happens to use, and the token is still what gates it.
+#[test]
+fn web_can_serve_any_host_when_asked_to() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    add(home.path(), repo.path(), "w1", "do it");
+    let token_file = write_token_file(home.path());
+    let port = 18446u16;
+
+    let mut child = furmi(home.path())
+        .args([
+            "web",
+            "--no-open",
+            "--listen",
+            &format!("0.0.0.0:{port}"),
+            "--token-file",
+            &token_file.display().to_string(),
+            "--allowed-host",
+            "*",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Whatever name the browser sends is accepted...
+    for host in [
+        "box.ts.net",
+        &format!("100.64.0.10:{port}"),
+        "ledger.internal",
+    ] {
+        let denied = http_at("127.0.0.1", port, "GET", "/api/state", host, &[], "");
+        assert!(denied.starts_with("HTTP/1.1 401"), "{host}: {denied}");
+        let ok = http_at(
+            "127.0.0.1",
+            port,
+            "GET",
+            "/api/state",
+            host,
+            &[("Authorization", &format!("Bearer {TEST_TOKEN}"))],
+            "",
+        );
+        assert!(ok.starts_with("HTTP/1.1 200"), "{host}: {ok}");
+    }
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+/// A second `furmi web` on a busy address doesn't just fail: it knows whose
+/// dashboard holds it, says so, and takes over when told to.
+#[test]
+fn web_takes_over_an_address_its_own_dashboard_holds() {
+    let home = tempfile::tempdir().unwrap();
+    init(home.path());
+    let port = 18445u16;
+    let port_arg = port.to_string();
+
+    let mut first = furmi(home.path())
+        .args(["web", "--no-open", "--port", &port_arg])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let page = http_get(port, "/");
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+
+    // No terminal to ask, so the second one explains, naming the dashboard and
+    // how to take over.
+    let out = run(furmi(home.path()).args(["web", "--no-open", "--port", &port_arg]));
+    assert!(!out.status.success(), "should have refused");
+    let err = stderr(&out);
+    assert!(err.contains("--replace"), "{err}");
+    assert!(err.contains(&format!("pid {}", first.id())), "{err}");
+
+    // With --replace it stops the first and serves instead.
+    let mut second = furmi(home.path())
+        .args(["web", "--no-open", "--replace", "--port", &port_arg])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let page = http_get(port, "/");
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    // The dashboard it replaced is gone, not merely unbound.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if first.try_wait().unwrap().is_some() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the first dashboard is still running"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    second.kill().unwrap();
+    second.wait().unwrap();
+}
+
 #[test]
 fn web_refuses_a_non_loopback_listen_without_a_token() {
     let home = tempfile::tempdir().unwrap();
@@ -631,6 +793,7 @@ fn web_refuses_a_non_loopback_listen_without_a_token() {
     let err = String::from_utf8_lossy(&child.wait_with_output().unwrap().stderr).into_owned();
     assert!(err.contains("--token-file"), "{err}");
     assert!(err.contains("token"), "{err}");
+    assert!(err.contains("--setup"), "{err}");
 
     // A token but no allowlist: same refusal, for the Host header's sake.
     let token_file = write_token_file(home.path());

@@ -296,7 +296,69 @@ pub fn checks(home: &Home) -> Vec<Check> {
         }
     }
 
+    add(web_check(&config));
+
     checks
+}
+
+/// Where the dashboard is reachable, from `[web]` in config.toml: the URL
+/// when it serves other machines, and what to do about it when it doesn't.
+fn web_check(config: &Config) -> Check {
+    let web = &config.web;
+    let listen = web
+        .listen
+        .clone()
+        .unwrap_or_else(|| "127.0.0.1:7433".to_string());
+    if !crate::web::is_loopback_authority(&listen) {
+        let any_host = web.allowed_hosts.iter().any(|h| h.trim() == "*");
+        let Some(host) = web.allowed_hosts.first() else {
+            return Check::Warn(format!(
+                "the dashboard listens on {listen} but [web] allowed_hosts is empty, so every \
+                 request would be rejected: run `furmi web --setup`"
+            ));
+        };
+        // `*` has no name to advertise: use the box's tailnet name when that's
+        // visible, and just name the address otherwise.
+        let url = if any_host {
+            crate::web::tailnet()
+                .map(|tailnet| {
+                    format!(
+                        "{}, under any Host name",
+                        crate::web::url_for(&tailnet.name, &listen)
+                    )
+                })
+                .unwrap_or_else(|| format!("any Host name on {listen}"))
+        } else {
+            crate::web::url_for(host, &listen)
+        };
+        let Some(path) = &web.token_file else {
+            return Check::Warn(format!(
+                "the dashboard listens on {listen} but [web] has no token_file, so `furmi web` \
+                 won't start: run `furmi web --setup`"
+            ));
+        };
+        let path = crate::home::expand_tilde(path);
+        return if path.exists() {
+            Check::Ok(format!(
+                "dashboard: {url} (every request needs the token in {})",
+                crate::home::contract_tilde(&path)
+            ))
+        } else {
+            Check::Warn(format!(
+                "the dashboard's token file {} is missing: `furmi web --setup` creates it",
+                crate::home::contract_tilde(&path)
+            ))
+        };
+    }
+    match crate::web::tailnet() {
+        Some(tailnet) => Check::Warn(format!(
+            "the dashboard is reachable from this machine only (http://127.0.0.1:7433). To open it \
+             from your tailnet, run `furmi web --setup` once, then \
+             {} (every request carries the token it writes)",
+            crate::web::url_for(&tailnet.name, "0.0.0.0:7433")
+        )),
+        None => Check::Ok("dashboard: this machine only (http://127.0.0.1:7433)".into()),
+    }
 }
 
 fn report(checks: Vec<Check>) -> Result<ExitCode> {
@@ -324,9 +386,16 @@ pub enum Manager {
     Launchd,
 }
 
-/// Prints a unit file that keeps `furmi run` running (and restarts it), for
-/// systemd (Linux) or launchd (macOS), with the instructions to install it.
+/// Prints the unit files that keep `furmi run` and the dashboard running (and
+/// restart them), for systemd (Linux) or launchd (macOS), with the
+/// instructions to install them.
 pub fn service(home: &Home, manager: Manager) -> Result<()> {
+    print!("{}", units(home, manager)?);
+    Ok(())
+}
+
+/// The text [`service`] prints, as a String so it can be checked.
+fn units(home: &Home, manager: Manager) -> Result<String> {
     let exe = crate::exe::path().context("locating the furmi binary")?;
     let exe = exe.to_str().context("the furmi path is not valid UTF-8")?;
     let root = home
@@ -337,12 +406,20 @@ pub fn service(home: &Home, manager: Manager) -> Result<()> {
     if exe.contains('"') || root.contains('"') || path.contains('"') {
         bail!("paths with double quotes can't be put in a unit file");
     }
-    match manager {
-        Manager::Systemd => print!(
-            "# Save as ~/.config/systemd/user/furmiculi.service, then:\n\
-             #   systemctl --user daemon-reload && systemctl --user enable --now furmiculi\n\
-             #   loginctl enable-linger $USER    # keep it running when logged out\n\
-             #   journalctl --user -u furmiculi -f\n\
+    Ok(match manager {
+        Manager::Systemd => format!(
+            "# furmiculi as user services: the queue runner and the dashboard.\n\
+             # Save the two blocks below as ~/.config/systemd/user/furmiculi.service and\n\
+             # ~/.config/systemd/user/furmiculi-web.service, then:\n\
+             #   systemctl --user daemon-reload\n\
+             #   systemctl --user enable --now furmiculi furmiculi-web\n\
+             #   loginctl enable-linger $USER    # keep them running when logged out\n\
+             #   journalctl --user -u furmiculi -u furmiculi-web -f\n\
+             #\n\
+             # The dashboard follows [web] in config.toml (`furmi web --setup` writes it). With\n\
+             # nothing there it listens on 127.0.0.1:7433: this machine only.\n\
+             \n\
+             # ~/.config/systemd/user/furmiculi.service\n\
              [Unit]\n\
              Description=furmiculi runner\n\
              \n\
@@ -353,40 +430,156 @@ pub fn service(home: &Home, manager: Manager) -> Result<()> {
              RestartSec=10\n\
              \n\
              [Install]\n\
+             WantedBy=default.target\n\
+             \n\
+             # ~/.config/systemd/user/furmiculi-web.service\n\
+             [Unit]\n\
+             Description=furmiculi dashboard\n\
+             After=network-online.target\n\
+             \n\
+             [Service]\n\
+             ExecStart=\"{exe}\" --home \"{root}\" web --no-open\n\
+             Environment=\"PATH={path}\"\n\
+             Restart=always\n\
+             RestartSec=10\n\
+             \n\
+             [Install]\n\
              WantedBy=default.target\n"
         ),
         Manager::Launchd => {
             let xml = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
-            print!(
-                "<!-- Save as ~/Library/LaunchAgents/dev.furmiculi.plist, then:\n\
-                 \x20    launchctl load ~/Library/LaunchAgents/dev.furmiculi.plist -->\n\
-                 <?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-                 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
-                 <plist version=\"1.0\">\n\
-                 <dict>\n\
-                 \x20 <key>Label</key><string>dev.furmiculi</string>\n\
-                 \x20 <key>ProgramArguments</key>\n\
-                 \x20 <array>\n\
-                 \x20   <string>{}</string>\n\
-                 \x20   <string>--home</string>\n\
-                 \x20   <string>{}</string>\n\
-                 \x20   <string>run</string>\n\
-                 \x20 </array>\n\
-                 \x20 <key>EnvironmentVariables</key>\n\
-                 \x20 <dict><key>PATH</key><string>{}</string></dict>\n\
-                 \x20 <key>RunAtLoad</key><true/>\n\
-                 \x20 <key>KeepAlive</key><true/>\n\
-                 \x20 <key>StandardOutPath</key><string>{}/runner.stdout.log</string>\n\
-                 \x20 <key>StandardErrorPath</key><string>{}/runner.stdout.log</string>\n\
-                 </dict>\n\
-                 </plist>\n",
-                xml(exe),
-                xml(root),
-                xml(&path),
-                xml(root),
-                xml(root)
-            );
+            let plist = |label: &str, extra: &[&str], log: &str| {
+                let extra = extra
+                    .iter()
+                    .map(|a| format!("\x20   <string>{}</string>\n", xml(a)))
+                    .collect::<String>();
+                format!(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                     <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+                     <plist version=\"1.0\">\n\
+                     <dict>\n\
+                     \x20 <key>Label</key><string>{label}</string>\n\
+                     \x20 <key>ProgramArguments</key>\n\
+                     \x20 <array>\n\
+                     \x20   <string>{exe}</string>\n\
+                     \x20   <string>--home</string>\n\
+                     \x20   <string>{root}</string>\n\
+                     {extra}\x20 </array>\n\
+                     \x20 <key>EnvironmentVariables</key>\n\
+                     \x20 <dict><key>PATH</key><string>{path}</string></dict>\n\
+                     \x20 <key>RunAtLoad</key><true/>\n\
+                     \x20 <key>KeepAlive</key><true/>\n\
+                     \x20 <key>StandardOutPath</key><string>{root}/{log}</string>\n\
+                     \x20 <key>StandardErrorPath</key><string>{root}/{log}</string>\n\
+                     </dict>\n\
+                     </plist>\n",
+                    exe = xml(exe),
+                    root = xml(root),
+                    path = xml(&path),
+                )
+            };
+            format!(
+                "<!-- furmiculi as launchd agents: the queue runner and the dashboard.\n\
+                 \x20    Save each block below as ~/Library/LaunchAgents/<its Label>.plist, then:\n\
+                 \x20    launchctl load ~/Library/LaunchAgents/dev.furmiculi.plist\n\
+                 \x20    launchctl load ~/Library/LaunchAgents/dev.furmiculi-web.plist\n\
+                 \x20    The dashboard follows [web] in config.toml (`furmi web --setup` writes it).\n\
+                 \x20    With nothing there it listens on 127.0.0.1:7433: this machine only. -->\n\
+                 {}\n\
+                 <!-- dev.furmiculi-web.plist -->\n\
+                 {}",
+                plist("dev.furmiculi", &["run"], "runner.stdout.log"),
+                plist("dev.furmiculi-web", &["web", "--no-open"], "web.stdout.log"),
+            )
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 0600 token file in `dir`.
+    fn token_file(dir: &std::path::Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("web-token");
+        std::fs::write(&path, "t\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        path
+    }
+
+    #[test]
+    fn the_dashboard_check_says_where_to_reach_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let token = token_file(dir.path());
+
+        // Set up for the tailnet: the check is the URL to open.
+        let config = Config::parse(&format!(
+            "[web]\nlisten = \"0.0.0.0:7433\"\nallowed_hosts = [\"box.ts.net\"]\n\
+             token_file = \"{}\"\n",
+            token.display()
+        ))
+        .unwrap();
+        match web_check(&config) {
+            Check::Ok(message) => {
+                assert!(message.contains("http://box.ts.net:7433"), "{message}");
+                assert!(message.contains("web-token"), "{message}");
+            }
+            other => panic!("expected ok, got {}", other.message()),
+        }
+
+        // A missing token file, a missing allowlist, and a missing token_file
+        // each say what to run.
+        let missing = Config::parse(&format!(
+            "[web]\nlisten = \"0.0.0.0:7433\"\nallowed_hosts = [\"box.ts.net\"]\n\
+             token_file = \"{}\"\n",
+            dir.path().join("gone").display()
+        ))
+        .unwrap();
+        let message = web_check(&missing).message().to_string();
+        assert!(message.contains("is missing"), "{message}");
+        assert!(message.contains("--setup"), "{message}");
+
+        // Any Host: no name to advertise, and never a literal `*` URL.
+        let any = Config::parse(&format!(
+            "[web]\nlisten = \"0.0.0.0:7433\"\nallowed_hosts = [\"*\"]\n\
+             token_file = \"{}\"\n",
+            token.display()
+        ))
+        .unwrap();
+        let message = web_check(&any).message().to_string();
+        assert!(!message.contains("http://*"), "{message}");
+        assert!(message.contains("any Host"), "{message}");
+
+        for text in [
+            "[web]\nlisten = \"0.0.0.0:7433\"\ntoken_file = \"~/.furmiculi/web-token\"\n",
+            "[web]\nlisten = \"0.0.0.0:7433\"\nallowed_hosts = [\"box.ts.net\"]\n",
+        ] {
+            let config = Config::parse(text).unwrap();
+            let message = web_check(&config).message().to_string();
+            assert!(message.contains("--setup"), "{text}: {message}");
         }
     }
-    Ok(())
+
+    #[test]
+    fn the_units_keep_the_runner_and_the_dashboard() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+
+        let systemd = units(&home, Manager::Systemd).unwrap();
+        assert!(
+            systemd.contains(&format!("--home \"{}\"", dir.path().display())),
+            "{systemd}"
+        );
+        assert!(systemd.contains(" run\n"), "{systemd}");
+        assert!(systemd.contains(" web --no-open\n"), "{systemd}");
+        assert_eq!(systemd.matches("[Unit]").count(), 2, "{systemd}");
+        assert_eq!(systemd.matches("Restart=always").count(), 2, "{systemd}");
+
+        let launchd = units(&home, Manager::Launchd).unwrap();
+        assert!(launchd.contains("<string>run</string>"), "{launchd}");
+        assert!(launchd.contains("<string>web</string>"), "{launchd}");
+        assert!(launchd.contains("dev.furmiculi-web"), "{launchd}");
+        assert_eq!(launchd.matches("<plist version").count(), 2, "{launchd}");
+    }
 }

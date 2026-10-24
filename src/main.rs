@@ -100,6 +100,10 @@ enum Command {
     /// logs, once its worktree is gone.
     Clean(clean::CleanArgs),
     /// Serve a dashboard over the queue (with actions), until interrupted.
+    ///
+    /// The first run asks once where to serve from — your tailnet, or just
+    /// this machine — and saves the answer in config.toml; `--setup` asks
+    /// again.
     Web(web::WebArgs),
     /// Run the queue and serve the dashboard together: the one-command way to
     /// get going. Opens the dashboard in your browser.
@@ -117,7 +121,8 @@ enum Command {
     Status,
     /// Check that tasks can run here: tools, config, agents, task files.
     Doctor,
-    /// Print a systemd or launchd unit that keeps `furmi run` running.
+    /// Print systemd or launchd units that keep `furmi run` and the dashboard
+    /// (`furmi web`) running.
     Service {
         #[arg(value_enum)]
         manager: doctor::Manager,

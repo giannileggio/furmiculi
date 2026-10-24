@@ -84,6 +84,47 @@ impl Home {
         self.root.join("runner.json")
     }
 
+    /// Where a serving dashboard records itself (pid and address), under a
+    /// lock that dies with the process.
+    pub fn web_lock(&self) -> PathBuf {
+        self.root.join(".web.lock")
+    }
+
+    /// Records this process as the dashboard for this home, with `addr`, and
+    /// holds the record until the returned file is dropped (or the process
+    /// dies). Used to offer taking the address over: see
+    /// [`dashboard`](Self::dashboard).
+    pub fn claim_dashboard(&self, addr: &str) -> Result<std::fs::File> {
+        let path = self.web_lock();
+        // Like the runner's lock: not `File::create`, which would wipe the
+        // running dashboard's entry just by trying to take the lock.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        file.try_lock()
+            .map_err(|e| anyhow::anyhow!("locking {}: {e}", path.display()))?;
+        file.set_len(0)
+            .and_then(|()| write!(file, "{} {addr}", std::process::id()))
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(file)
+    }
+
+    /// The pid and address of the dashboard serving this home, if one is
+    /// holding the lock now. A stale file from a crashed dashboard is never
+    /// trusted: without the lock, its pid may long since have been reused.
+    pub fn dashboard(&self) -> Option<(u32, String)> {
+        let file = std::fs::File::open(self.web_lock()).ok()?;
+        if !matches!(file.try_lock_shared(), Err(TryLockError::WouldBlock)) {
+            return None;
+        }
+        let text = std::fs::read_to_string(self.web_lock()).ok()?;
+        let (pid, addr) = text.trim().split_once(' ')?;
+        Some((pid.parse().ok()?, addr.to_string()))
+    }
+
     /// Waits until no other `furmi` process is changing task files, and holds
     /// that lock until the returned file is dropped. Gives up after two
     /// minutes with an error, so a stuck process can't hang everything else.
@@ -212,6 +253,26 @@ pub fn contract_tilde(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dashboard_records_itself_only_while_it_serves() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        assert_eq!(home.dashboard(), None);
+
+        let claim = home.claim_dashboard("0.0.0.0:7433").unwrap();
+        assert_eq!(
+            home.dashboard(),
+            Some((std::process::id(), "0.0.0.0:7433".to_string()))
+        );
+        // Only the dashboard serving may hold the record.
+        assert!(home.claim_dashboard("127.0.0.1:7433").is_err());
+
+        // Once it's gone, the file is ignored: a crashed dashboard's pid may
+        // have been reused by now.
+        drop(claim);
+        assert_eq!(home.dashboard(), None);
+    }
 
     #[test]
     fn expand_and_contract_tilde_round_trip() {

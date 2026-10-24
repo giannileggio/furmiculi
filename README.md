@@ -50,8 +50,9 @@ to try next, and `furmi doctor` if something isn't running.
 Working now: `init`, `add`, `ls`, `validate`, `start`, `stop`, `agents`,
 `furmi run` (the runner and scheduler: tmux windows, git worktrees, retries,
 timeouts, `on_finish`), `done|fail|cancel|retry|attach`, `logs`, `clean`,
-`web` (a dashboard you can also act from), `status`/`doctor`/`service`
-(keeping the runner healthy), and the agent skill for writing tasks.
+`web` (a dashboard you can also act from, reachable from your other
+machines), `status`/`doctor`/`service` (keeping the runner and the dashboard
+running), and the agent skill for writing tasks.
 
 ## Install
 
@@ -131,12 +132,11 @@ furmi clean --archive --all --older-than 30d   # ...and their archived task file
 
 furmi status            # is the runner alive? queue, spend, failing schedules
 furmi doctor            # check tmux/git/agents/config/task files; non-zero on problems
-furmi service systemd   # print a unit that keeps `furmi run` running (or: launchd)
+furmi service systemd   # units that keep the runner and the dashboard up (or: launchd)
 
 furmi web               # dashboard at http://127.0.0.1:7433, until Ctrl-C
+furmi web --setup       # change where it serves (asked once anyway, see below)
 furmi web --port 8080   # a different port
-furmi web --listen 0.0.0.0:7433 --token-file ~/.furmiculi/web-token \
-  --allowed-host tools.example   # on a headless box, reached from a tailnet (see below)
 ```
 
 Inside a task's window, `id` defaults to that task, so an interactive
@@ -152,11 +152,11 @@ attempt's output is saved to `logs/<id>.<attempt>.log`.
 ## Keeping it running
 
 `furmi run` is a plain foreground process; `furmi service systemd` (Linux) or
-`furmi service launchd` (macOS) prints a unit file, with install instructions,
-that starts it at login and restarts it if it dies. Only one runner per home
-is allowed. `furmi status` shows whether it's alive and when its last pass was
-(it warns if the runner looks stuck), and `furmi run` also appends to
-`runner.log` in the home folder.
+`furmi service launchd` (macOS) prints unit files, with install instructions,
+that start the runner and the dashboard at login and restart them if they
+die. Only one runner per home is allowed. `furmi status` shows whether it's
+alive and when its last pass was (it warns if the runner looks stuck), and
+`furmi run` also appends to `runner.log` in the home folder.
 
 What `furmi` does so that a bad day doesn't lose work:
 
@@ -190,48 +190,82 @@ above what `furmi doctor` finds (tmux, git, task files), with a banner when
 something needs attention. furmi doesn't run the installs for you: they're global
 `npm install -g` commands and each agent needs you to sign in once.
 
-### On a headless box (your tailnet)
+### Serving your other machines (a tailnet)
 
-By default `furmi web` and `furmi start` bind to 127.0.0.1 only: the dashboard exists
-in your machine's loopback, checked with a loopback `Host` requirement (which
-defeats DNS rebinding), a per-run token POSTs must carry, and a loopback
-`Origin`. On a server without a screen there's nothing to open 127.0.0.1, so
-`--listen` names the address to bind instead (`0.0.0.0:7433` for every
-interface). A non-loopback bind refuses to start without two more things:
+By default `furmi web` and `furmi start` bind to 127.0.0.1 only: the dashboard
+exists in your machine's loopback, checked with a loopback `Host` requirement
+(which defeats DNS rebinding), a per-run token POSTs must carry, and a loopback
+`Origin`. On a box without a screen there's nothing to open 127.0.0.1, so the
+dashboard can serve your other machines instead.
 
-- `--token-file <path>` (or `--token <value>`, but the file keeps the secret
-  out of argv, shell history and `ps`): a shared secret every request must
-  carry — `Authorization: Bearer <t>`. Make the file 0600 and put a long
-  random string in it, e.g. `openssl rand -hex 16 > ~/.furmiculi/web-token`.
-- `--allowed-host <name>` (repeatable): the exact `Host` the browser sends
-  when it reaches the dashboard; requests with any other Host are rejected.
-  An entry alone allows any port on that host; `host:port` pins the port.
+The **first** `furmi web` asks about that, once:
 
-The first page load may pass the token as `?token=<t>`; the server answers
-with an `HttpOnly`, `SameSite=Strict` cookie holding it, and the page keeps it
-in memory only (never localStorage) and strips it from the URL, then sends it
-with every request. The cookie is what makes a reload — or a bookmark — work
-after the token is gone from the address bar; without it every refresh would
-be a 401. The per-run token and Origin checks POSTs already had stay in place
-on top of that, so the cookie alone can't change anything.
+```sh
+$ furmi web
+Setting up the dashboard; this is saved, so it only asks once.
+Serve other machines (your tailnet), not just this one? (y/n) [y]: y
+Host name(s) browsers use to reach this box, comma-separated [box.tailnet.ts.net, 100.64.0.10]:
+```
 
-On the headless box:
+It saves the answers as a `[web]` table in `config.toml` and creates
+`~/.furmiculi/web-token` (0600, 128 random bits), then serves — as a wide,
+token-gated bind. Answering "no" (or pressing enter) is saved the same way, as
+`configured = true` with nothing else, and keeps the loopback-only default. It
+only ever asks on a terminal: started from a unit or a script, it serves
+loopback silently rather than waiting for an answer. `furmi web --setup` asks
+again whenever you change your mind, and prefills what it knows.
+
+After that, a plain `furmi web` — no flags, no questions — does the same thing
+every time, and `furmi start`/`furmi service` follow the same table.
+`furmi doctor` prints the URL to open.
+
+Open the URL it prints once, with the token in the query string:
+
+```
+http://box.tailnet.ts.net:7433/?token=<the token in ~/.furmiculi/web-token>
+```
+
+The server answers with an `HttpOnly`, `SameSite=Strict` cookie holding the
+token, and the page keeps it in memory only (never localStorage) and strips it
+from the URL, then sends it with every request. The cookie is what makes a
+reload — or a bookmark — work after the token is gone from the address bar;
+without it every refresh would be a 401. The per-run token and Origin checks
+POSTs already had stay in place on top of that, so the cookie alone can't
+change anything. It lasts 30 days, re-set on each page load. (The URL with the
+token in it is printed only on a terminal; a unit's journal gets
+`?token=<the token>` instead, so the secret doesn't sit in logs.)
+
+Everything stays overridable by hand, and a flag always beats the saved value:
 
 ```sh
 furmi web --listen 0.0.0.0:7433 --token-file ~/.furmiculi/web-token \
-  --allowed-host tools-your-hostname.ts.net --no-open
+  --allowed-host box.tailnet.ts.net --no-open
 ```
 
-From another machine on the tailnet, open
-`http://tools-your-hostname.ts.net:7433/?token=<the file's content>` once;
-the dashboard hands that browser a cookie, so from then on
-`http://tools-your-hostname.ts.net:7433` works on its own — reloads and
-bookmarks included — until the cookie expires (30 days, re-set on each page
-load) or you clear it. (`furmi start` takes the same flags, and its runner
-stops with the dashboard, as always.) The dashboard speaks plain HTTP: put
-`tailscale serve` in front of it if you want HTTPS. And the quietest pattern
-is still SSH: `ssh -L 7433:127.0.0.1:7433 your-box`, with `furmi web` keeping
-every original protection untouched.
+- `--listen <addr>`: the address to bind (`0.0.0.0:7433` for every
+  interface).
+- `--token-file <path>` (or `--token <value>`, but the file keeps the secret
+  out of argv, shell history and `ps`): a shared secret every request must
+  carry — `Authorization: Bearer <t>`. It must be 0600; a group- or
+  world-readable one is refused.
+- `--allowed-host <name>` (repeatable): the exact `Host` the browser sends
+  when it reaches the dashboard; requests with any other Host are rejected.
+  An entry alone allows any port on that host; `host:port` pins the port. `*`
+  instead accepts any Host — for when the name isn't knowable up front (the
+  setup prompt takes it too) — and then the bearer token is the only gate,
+  so keep it 0600.
+
+Starting a second dashboard on an address that's already served doesn't just
+fail with "address already in use": the serving one is recorded (pid and
+address, in `~/.furmiculi/.web.lock`), so the new one offers to stop it and
+take over — or does it without asking, with `--replace`, for scripts and unit
+files. Anything that isn't this home's own dashboard is left alone, with the
+old error.
+
+The dashboard speaks plain HTTP: put `tailscale serve` in front of it if you
+want HTTPS. And the quietest pattern is still SSH:
+`ssh -L 7433:127.0.0.1:7433 your-box`, with `furmi web` keeping every original
+protection untouched.
 
 A task that is still *Waiting* has an **Edit** button: change what it does, the
 project, when it starts, or what happens when it's done (not once it has

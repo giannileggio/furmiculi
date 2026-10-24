@@ -216,6 +216,27 @@ Once the cost agents reported for tasks run today (local time) reaches
 ones finish. Only agents that report a cost count (see below). `furmi status`
 shows the day's spend.
 
+### The dashboard
+
+```toml
+[web]
+configured = true                    # the setup questions have been answered
+listen = "0.0.0.0:7433"              # optional: default 127.0.0.1:7433
+allowed_hosts = ["box.tailnet.ts.net"]  # the Host headers browsers send; ["*"] = any
+token_file = "~/.furmiculi/web-token"   # 0600, shared secret
+```
+
+Where `furmi web` and `furmi start` serve from, and how they guard it. Nothing
+here means loopback only, which is the default and needs no secret. A
+non-loopback `listen` refuses to start with an empty `allowed_hosts` or no
+`token_file`, and every request then needs `Authorization: Bearer` with that
+file's contents (the first page load may pass it as `?token=` instead, and
+gets a cookie for later ones). The first interactive `furmi web` asks the
+questions and writes this table — including `configured = true` on its own
+when the answer is "this machine only", so it never asks twice; `furmi web
+--setup` asks again. Flags override the table per setting. A table without
+`configured` (hand-written, say) is never asked about.
+
 ### Token/cost usage
 
 `furmi` records what a headless run's stdout reports as `tokens_in`,

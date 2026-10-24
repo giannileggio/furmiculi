@@ -27,9 +27,15 @@
 //!   DNS rebinding over the wide bind). The per-run POST token and Origin
 //!   checks stay on top of the bearer gate. A non-loopback bind refuses to
 //!   start without a token and an allowlist.
+//!
+//! Answering those three things is a chore, so it's asked once: `furmi web
+//! --setup` — and the same questions on their own the first time a wide bind
+//! is asked for without them — writes them into `[web]` in config.toml (see
+//! [`crate::config::Web`]) and creates the token file. Later runs are plain
+//! `furmi web`, with flags still winning over the saved answers.
 
 use std::cmp::Reverse;
-use std::io::{IsTerminal, Read};
+use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 
 use std::process::{Child, Command, Stdio};
@@ -41,10 +47,10 @@ use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 use crate::cmd::{NewTask, create_task, md_files};
-use crate::config::{Config, on_path};
+use crate::config::{Config, Web, on_path, set_web_config};
 use crate::control;
 use crate::edit::{self, ScheduleEdit, Start, TaskEdit};
-use crate::home::{Home, contract_tilde};
+use crate::home::{Home, contract_tilde, expand_tilde};
 use crate::run::{self, RunnerState};
 use crate::schedule::Schedule;
 use crate::spec::{OnFinish, TaskSpec};
@@ -69,9 +75,20 @@ pub struct WebArgs {
     #[arg(long)]
     token: Option<String>,
     /// Host an HTTP `Host` header must carry exactly to be served, for
-    /// non-loopback `--listen` binds. Repeatable. `host` or `host:port`.
+    /// non-loopback `--listen` binds. Repeatable. `host`, `host:port`, or `*`
+    /// to accept any host (the token still gates every request).
     #[arg(long = "allowed-host")]
     allowed_hosts: Vec<String>,
+    /// Ask where to serve from (your tailnet? which host name?) and save the
+    /// answers in config.toml, then serve. Also runs on its own the first
+    /// time a non-loopback `--listen` is given without a token and a host.
+    #[arg(long)]
+    setup: bool,
+    /// Stop a dashboard already serving this address in this home and take
+    /// it over, instead of failing. When the address is busy and furmi can
+    /// tell whose dashboard it is, running in a terminal asks instead.
+    #[arg(long)]
+    replace: bool,
     /// Don't open the dashboard in a browser.
     #[arg(long)]
     no_open: bool,
@@ -125,8 +142,8 @@ fn json_reply(status: u16, body: String) -> Reply {
 
 pub fn serve(home: &Home, args: WebArgs) -> Result<()> {
     home.ensure_initialized()?;
-    let serving = setup(&args)?;
-    let server = bind(&serving)?;
+    let serving = setup(home, &args)?;
+    let server = bind(home, &serving, args.replace)?;
     run_server(home, server, &serving, &args)
 }
 
@@ -134,8 +151,8 @@ pub fn serve(home: &Home, args: WebArgs) -> Result<()> {
 /// stops when the dashboard does, so there's nothing to clean up.
 pub fn start(home: &Home, args: WebArgs) -> Result<()> {
     home.ensure_initialized()?;
-    let serving = setup(&args)?;
-    let server = bind(&serving)?;
+    let serving = setup(home, &args)?;
+    let server = bind(home, &serving, args.replace)?;
     let _runner = if home.runner_alive() {
         println!("The runner is already running.");
         None
@@ -157,50 +174,364 @@ struct Serving {
     bearer: Option<String>,
     /// Exact `Host` allowlist for a remote bind.
     allowed_hosts: Vec<String>,
+    /// Where the bearer came from (`~/.furmiculi/web-token`, `--token`), for
+    /// the line that says how to get it.
+    token_from: Option<String>,
 }
 
-fn setup(args: &WebArgs) -> Result<Serving> {
-    let addr = args
-        .listen
-        .clone()
-        .unwrap_or_else(|| format!("127.0.0.1:{}", args.port));
-    let remote = !is_loopback_authority(host_of(&addr));
-    let bearer = match (&args.token_file, &args.token) {
-        (Some(path), None) => Some(read_token_file(path)?),
-        (None, Some(t)) => Some(t.clone()),
-        (Some(_), Some(_)) => {
-            anyhow::bail!("give the token one way: --token-file or --token, not both")
-        }
-        (None, None) => None,
-    };
-    if remote {
-        let Some(bearer) = bearer else {
-            anyhow::bail!(
-                "{addr} is not a loopback bind: browsers on other machines could reach it, \
-                 so it needs a shared secret. Give one with --token-file <file> (preferred) \
-                 or --token <value>, and set --allowed-host to the names those browsers use"
-            );
+impl Serving {
+    /// The URL a browser on another machine opens, for the first allowlisted
+    /// host. `with_token` puts the secret in the query string: only do that
+    /// on a terminal, never into a log file or the journal.
+    fn open_url(&self, token: &str, with_token: bool) -> Option<String> {
+        let url = match self.allowed_hosts.first()? {
+            // Any Host is accepted, so there's no one name to print: say where
+            // to put the box's name (or IP) instead.
+            any if is_any_host(any) => {
+                let port = split_authority(&self.addr).1.unwrap_or("7433");
+                format!("http://<this box's tailnet name or IP>:{port}")
+            }
+            host => url_for(host, &self.addr),
         };
-        if args.allowed_hosts.is_empty() {
-            anyhow::bail!(
-                "{addr} is not a loopback bind: without --allowed-host no Host header \
-                 could ever be trusted, so every request would be rejected. Name the \
-                 hosts that should be allowed, e.g. --allowed-host tools.example"
-            );
-        }
-        Ok(Serving {
-            addr,
-            remote: true,
-            bearer: Some(bearer),
-            allowed_hosts: args.allowed_hosts.clone(),
+        Some(if with_token {
+            format!("{url}/?token={token}")
+        } else {
+            format!("{url}/?token=<the token>")
         })
-    } else {
-        Ok(Serving {
+    }
+}
+
+/// The three things a wide bind needs, from the flags, then `[web]` in
+/// config.toml, then the defaults. Asks (once, saving the answers) when
+/// they're not there: `--setup` always asks, and so does whatever `furmi web`
+/// runs the first time it's pointed at a non-loopback address.
+fn setup(home: &Home, args: &WebArgs) -> Result<Serving> {
+    let mut web = match Config::load(&home.config_path()) {
+        Ok(config) => config.web,
+        // The dashboard is where a broken config gets explained (see
+        // `state_json`), so it doesn't refuse to start over one: it serves
+        // loopback, the safe default, and says what's wrong.
+        Err(e) => {
+            eprintln!("warning: {e:#} (serving the dashboard on loopback)");
+            Web::default()
+        }
+    };
+    // Asked once, ever, on a terminal: either because nobody has answered yet
+    // (a first run) or because a wide address is missing its token or hosts.
+    let asks = args.setup
+        || (std::io::stdin().is_terminal() && (never_asked(&web) || unanswered(args, &web)));
+    if asks {
+        web = interactive_setup(home, args, &web)?;
+    }
+    resolve(args, &web)
+}
+
+/// Has nobody answered `furmi web --setup`'s questions for this home yet?
+/// A table with any serving setting counts as answered, so a hand-written
+/// `[web]` is never asked about.
+fn never_asked(web: &Web) -> bool {
+    !web.configured
+        && web.listen.is_none()
+        && web.allowed_hosts.is_empty()
+        && web.token_file.is_none()
+}
+
+/// Would a wide bind be missing its token or its allowed host — the questions
+/// `--setup` asks?
+fn unanswered(args: &WebArgs, web: &Web) -> bool {
+    let addr = addr_of(args, web);
+    if is_loopback_authority(host_of(&addr)) {
+        return false;
+    }
+    let has_token = args.token.is_some() || args.token_file.is_some() || web.token_file.is_some();
+    let has_hosts = !args.allowed_hosts.is_empty() || !web.allowed_hosts.is_empty();
+    !(has_token && has_hosts)
+}
+
+fn resolve(args: &WebArgs, web: &Web) -> Result<Serving> {
+    let addr = addr_of(args, web);
+    let remote = !is_loopback_authority(host_of(&addr));
+    let (bearer, token_from) = token_of(args, web)?;
+    if !remote {
+        return Ok(Serving {
             addr,
             remote: false,
             bearer: None,
             allowed_hosts: Vec::new(),
-        })
+            token_from: None,
+        });
+    }
+    let Some(bearer) = bearer else {
+        anyhow::bail!(
+            "{addr} is not a loopback bind: browsers on other machines could reach it, \
+             so it needs a shared secret. Run `furmi web --setup` to answer that once (the \
+             answer is saved in config.toml), or pass --token-file <file> (preferred) or \
+             --token <value>"
+        );
+    };
+    let allowed_hosts = if args.allowed_hosts.is_empty() {
+        web.allowed_hosts.clone()
+    } else {
+        args.allowed_hosts.clone()
+    };
+    if allowed_hosts.is_empty() {
+        anyhow::bail!(
+            "{addr} is not a loopback bind: without an allowed host no Host header could \
+             ever be trusted, so every request would be rejected. Run `furmi web --setup`, or \
+             pass --allowed-host <name> — the name browsers use, e.g. this box's tailnet name"
+        );
+    }
+    Ok(Serving {
+        addr,
+        remote: true,
+        bearer: Some(bearer),
+        allowed_hosts,
+        token_from,
+    })
+}
+
+/// `--listen`, else `[web] listen`, else loopback on `--port`. A bind address
+/// with no port takes `--port`.
+fn addr_of(args: &WebArgs, web: &Web) -> String {
+    let addr = args
+        .listen
+        .clone()
+        .or_else(|| web.listen.clone())
+        .unwrap_or_else(|| format!("127.0.0.1:{}", args.port));
+    if host_of(&addr) == addr {
+        format!("{addr}:{}", args.port)
+    } else {
+        addr
+    }
+}
+
+/// The shared secret for a wide bind, and where it came from.
+fn token_of(args: &WebArgs, web: &Web) -> Result<(Option<String>, Option<String>)> {
+    match (&args.token_file, &args.token) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("give the token one way: --token-file or --token, not both")
+        }
+        (Some(path), None) => Ok((
+            Some(read_token_file(path)?),
+            Some(contract_tilde(&expand_tilde(path))),
+        )),
+        (None, Some(token)) => Ok((Some(token.clone()), Some("--token".to_string()))),
+        (None, None) => match &web.token_file {
+            Some(path) => {
+                let path = expand_tilde(path);
+                Ok((Some(read_token_file(&path)?), Some(contract_tilde(&path))))
+            }
+            None => Ok((None, None)),
+        },
+    }
+}
+
+/// The questions a wide bind needs answered, asked once: where it listens,
+/// which Host names browsers use, and (silently) a token file only this user
+/// can read. Saved in config.toml, so the next `furmi web` asks nothing.
+fn interactive_setup(home: &Home, args: &WebArgs, web: &Web) -> Result<Web> {
+    println!("Setting up the dashboard; this is saved, so it only asks once.");
+    let listen = args
+        .listen
+        .clone()
+        .or_else(|| web.listen.clone())
+        .unwrap_or_else(|| format!("0.0.0.0:{}", args.port));
+
+    if !ask_yes_no(
+        "Serve other machines (your tailnet), not just this one?",
+        true,
+    )? {
+        // Saved like any other answer, so this doesn't come up again;
+        // `furmi web --setup` asks again whenever you change your mind.
+        let web = Web {
+            configured: true,
+            ..Web::default()
+        };
+        set_web_config(&home.config_path(), &web)?;
+        println!(
+            "Okay: `furmi web` serves http://127.0.0.1:{} on this machine only \
+             (saved in {}; `furmi web --setup` asks again).",
+            args.port,
+            contract_tilde(&home.config_path())
+        );
+        return Ok(web);
+    }
+
+    // Saved answers first, then what tailscale says this box is called, so
+    // running --setup again is a matter of pressing enter.
+    let suggested = if web.allowed_hosts.is_empty() {
+        tailnet().map(|t| t.hosts().join(", ")).unwrap_or_default()
+    } else {
+        web.allowed_hosts.join(", ")
+    };
+    let hosts = loop {
+        let answer = ask(
+            "Host name(s) browsers use to reach this box, comma-separated",
+            (!suggested.is_empty()).then_some(suggested.as_str()),
+        )?;
+        let hosts = parse_hosts(if answer.is_empty() {
+            &suggested
+        } else {
+            &answer
+        });
+        if hosts.is_empty() {
+            println!(
+                "  need at least one, e.g. this-box.ts.net or 100.64.0.10 — or `*` to accept \
+                 any Host"
+            );
+            continue;
+        }
+        break hosts;
+    };
+
+    let token_file = home.root().join("web-token");
+    ensure_token_file(&token_file)?;
+    let web = Web {
+        configured: true,
+        listen: Some(listen.clone()),
+        allowed_hosts: hosts,
+        token_file: Some(PathBuf::from(contract_tilde(&token_file))),
+    };
+    set_web_config(&home.config_path(), &web)?;
+    println!(
+        "Saved to {}: listening on {listen}; Host: {}; token in {}.",
+        contract_tilde(&home.config_path()),
+        hosts_summary(&web.allowed_hosts),
+        contract_tilde(&token_file)
+    );
+    Ok(web)
+}
+
+/// This box as its tailnet sees it: the MagicDNS name and the tailscale IPv4
+/// a browser might use instead. None without a working, logged-in tailscale.
+pub struct Tailnet {
+    pub name: String,
+    pub ip: Option<String>,
+}
+
+impl Tailnet {
+    /// Names the dashboard should accept, advertised in this order.
+    pub fn hosts(&self) -> Vec<String> {
+        std::iter::once(self.name.clone())
+            .chain(self.ip.clone())
+            .collect()
+    }
+}
+
+pub fn tailnet() -> Option<Tailnet> {
+    let mut cmd = Command::new("tailscale");
+    cmd.args(["status", "--json"]);
+    let out = crate::fsutil::run_with_timeout(cmd, Duration::from_secs(5)).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let status: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let name = status
+        .pointer("/Self/DNSName")?
+        .as_str()?
+        .trim_end_matches('.')
+        .to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let ip = status
+        .pointer("/Self/TailscaleIPs/0")
+        .and_then(|ip| ip.as_str())
+        .map(str::to_string);
+    Some(Tailnet { name, ip })
+}
+
+/// Creates the token file (0600, 128 random bits) if it isn't there yet. An
+/// existing one is left alone, so cookies already handed out keep working.
+fn ensure_token_file(path: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    if path.exists() {
+        return Ok(());
+    }
+    let token = random_token()?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .with_context(|| format!("creating {}", contract_tilde(path)))?;
+    writeln!(file, "{token}")
+        .and_then(|()| file.sync_all())
+        .with_context(|| format!("writing {}", contract_tilde(path)))
+}
+
+/// One answer from stdin. `default` is shown in brackets and used for an
+/// empty answer; a closed stdin is an error, not a default — a setup that
+/// half-ran from a script shouldn't quietly serve a wide bind.
+fn ask(prompt: &str, default: Option<&str>) -> Result<String> {
+    let hint = default.map(|d| format!(" [{d}]")).unwrap_or_default();
+    print!("{prompt}{hint}: ");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line)? == 0 {
+        println!();
+        anyhow::bail!(
+            "no answer (stdin closed): run `furmi web --setup` in a terminal, or pass \
+             --listen, --allowed-host and --token-file by hand"
+        );
+    }
+    let answer = line.trim();
+    Ok(if answer.is_empty() {
+        default.unwrap_or_default().to_string()
+    } else {
+        answer.to_string()
+    })
+}
+
+fn ask_yes_no(prompt: &str, default: bool) -> Result<bool> {
+    let answer = ask(
+        &format!("{prompt} (y/n)"),
+        Some(if default { "y" } else { "n" }),
+    )?;
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Ok(true),
+        "n" | "no" => Ok(false),
+        other => anyhow::bail!("expected y or n, got `{other}`"),
+    }
+}
+
+/// `"box.ts.net, 100.64.0.5"` as allowlist entries: split on commas and
+/// whitespace, trailing dots off (MagicDNS names carry one), duplicates
+/// dropped.
+fn parse_hosts(text: &str) -> Vec<String> {
+    let mut hosts: Vec<String> = Vec::new();
+    for host in text.split([',', ' ', '\t']) {
+        let host = host.trim().trim_end_matches('.');
+        if !host.is_empty() && !hosts.iter().any(|h| h.eq_ignore_ascii_case(host)) {
+            hosts.push(host.to_string());
+        }
+    }
+    hosts
+}
+
+/// How the allowlist reads in a message: the names, or "any Host" for `*`.
+fn hosts_summary(hosts: &[String]) -> String {
+    if hosts.iter().any(|h| is_any_host(h)) {
+        "any Host".to_string()
+    } else {
+        hosts.join(", ")
+    }
+}
+
+/// A URL for an allowlist entry: its own port if it names one, else the port
+/// the dashboard listens on (80 stays implicit).
+pub(crate) fn url_for(entry: &str, listen: &str) -> String {
+    let (host, entry_port) = split_authority(entry);
+    let listen_port = split_authority(listen).1.unwrap_or("7433");
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    match entry_port {
+        Some(port) => format!("http://{host}:{port}"),
+        None if listen_port == "80" => format!("http://{host}"),
+        None => format!("http://{host}:{listen_port}"),
     }
 }
 
@@ -208,6 +539,7 @@ fn setup(args: &WebArgs) -> Result<Serving> {
 /// world-readable one is refused, the way a shared secret shouldn't sit.
 fn read_token_file(path: &std::path::Path) -> Result<String> {
     use std::os::unix::fs::PermissionsExt;
+    let path = &expand_tilde(path);
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("reading {}", contract_tilde(path)))?;
     let mode = std::fs::metadata(path)
@@ -246,17 +578,121 @@ fn host_of(addr: &str) -> &str {
     }
 }
 
-fn bind(serving: &Serving) -> Result<Server> {
+/// Binds the dashboard. When something already holds the address, and it's
+/// this home's own dashboard, offer to stop it and take over (`--replace`, or
+/// a yes at the prompt); everything else keeps the original error.
+fn bind(home: &Home, serving: &Serving, replace: bool) -> Result<Server> {
     let addr = &serving.addr;
-    Server::http(addr.as_str()).map_err(|e| {
-        anyhow::anyhow!(
-            "couldn't listen on {addr}: {e}. If `furmi web` or `furmi start` is already running, \
-             open http://{addr}; otherwise pick another address with --listen"
-        )
-    })
+    let busy = match Server::http(addr.as_str()) {
+        Ok(server) => return Ok(server),
+        // `&*e`: the box derefs to the error it holds; a `&Box<dyn Error>`
+        // wouldn't coerce, since `Box<dyn Error>` isn't itself `Error`.
+        Err(e) if !address_in_use(&*e) => return Err(busy_error(addr, &e.to_string())),
+        Err(e) => e.to_string(),
+    };
+    // The port is taken. Only one dashboard per home is recorded, and only
+    // that one is a candidate: for anything else, `kill` is your business.
+    let Some((pid, served)) = home
+        .dashboard()
+        .filter(|(_, served)| same_port(served, addr))
+    else {
+        return Err(busy_error(addr, &busy));
+    };
+    let take_over = replace
+        || (std::io::stdin().is_terminal()
+            && ask_yes_no(
+                &format!(
+                    "A dashboard is already serving http://{served} (pid {pid}). Stop it and \
+                     serve this address instead?"
+                ),
+                false,
+            )?);
+    if !take_over {
+        anyhow::bail!(
+            "a dashboard is already serving http://{served} (pid {pid}): open that, or take the \
+             address over with `furmi web --replace`"
+        );
+    }
+    stop_dashboard(pid, addr)?.map_or_else(
+        || {
+            Err(busy_error(
+                addr,
+                &format!("the dashboard on it (pid {pid}) stopped, but the address is still busy"),
+            ))
+        },
+        Ok,
+    )
+}
+
+/// Whether the bind failed because something already holds the port.
+fn address_in_use(e: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+    match e.downcast_ref::<std::io::Error>() {
+        Some(io) => io.kind() == std::io::ErrorKind::AddrInUse,
+        // tiny_http hands back its bind error boxed; if it ever stops exposing
+        // the io::Error, the message still says what happened.
+        None => e.to_string().contains("in use"),
+    }
+}
+
+fn busy_error(addr: &str, reason: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "couldn't listen on {addr}: {reason}. If `furmi web` or `furmi start` is already running, \
+         open http://{addr}; otherwise pick another address with --listen"
+    )
+}
+
+/// Same port, whatever the hosts are: `0.0.0.0:7433` and `127.0.0.1:7433`
+/// can't both be served, so they collide in practice.
+fn same_port(a: &str, b: &str) -> bool {
+    let port = |addr: &str| split_authority(addr).1.and_then(|p| p.parse::<u16>().ok());
+    port(a).zip(port(b)).is_some_and(|(a, b)| a == b)
+}
+
+/// Binds, retrying while the address is still busy — for the moment between
+/// asking a dashboard to stop and its port actually coming free.
+fn listen_waiting(addr: &str, timeout: Duration) -> Option<Server> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match Server::http(addr) {
+            Ok(server) => return Some(server),
+            Err(_) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Asks a running dashboard to stop (SIGTERM, so it shuts down the way Ctrl-C
+/// does) and waits for the address to come free — which is what this process
+/// needs, and which takes a moment for `furmi start` (it stops its runner
+/// too). A dashboard still there after ten seconds is killed.
+fn stop_dashboard(pid: u32, addr: &str) -> Result<Option<Server>> {
+    let Ok(pid) = i32::try_from(pid) else {
+        anyhow::bail!("pid {pid} is not a valid pid")
+    };
+    // SAFETY: plain kill(2), on the pid this home's lock file records.
+    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
+        anyhow::bail!(
+            "couldn't stop the dashboard (pid {pid}): {} — stop it by hand",
+            std::io::Error::last_os_error()
+        );
+    }
+    println!("Stopping the dashboard that was serving here (pid {pid}).");
+    if let Some(server) = listen_waiting(addr, Duration::from_secs(10)) {
+        return Ok(Some(server));
+    }
+    // SAFETY: same pid; SIGKILL for one that ignored the polite request.
+    unsafe { libc::kill(pid, libc::SIGKILL) };
+    Ok(listen_waiting(addr, Duration::from_secs(5)))
 }
 
 fn run_server(home: &Home, server: Server, serving: &Serving, args: &WebArgs) -> Result<()> {
+    // Record this dashboard (pid and address) for as long as it serves, so a
+    // second `furmi web` on the same address can offer to take over instead of
+    // just failing. Best-effort: a dashboard deliberately on another address
+    // doesn't need the record, and must not fail over it.
+    let _record = home.claim_dashboard(&serving.addr).ok();
     // Ctrl-C / SIGTERM request a clean stop: the signal handler only sets a
     // flag, so the request loop is unblocked below instead of dying in the
     // middle of a request.
@@ -283,19 +719,23 @@ fn run_server(home: &Home, server: Server, serving: &Serving, args: &WebArgs) ->
     };
     let addr = &serving.addr;
     let url = format!("http://{addr}");
+    let tty = std::io::stdout().is_terminal();
     println!("Dashboard: {url}  (Ctrl-C to stop)");
     if serving.remote {
+        // The token goes in the URL only on a terminal: a unit's journal or a
+        // log file shouldn't keep the secret around.
+        if let Some(open) = serving.open_url(&ctx.token, tty) {
+            println!("Serving other machines. Open this once, and the page keeps a cookie:");
+            println!("  {open}");
+        }
         println!(
-            "Serving other machines: every request needs the bearer token, and a Host of {}.",
-            serving
-                .allowed_hosts
-                .iter()
-                .map(|h| h.as_str())
-                .collect::<Vec<_>>()
-                .join(" / ")
+            "  Host: {}; token in {}",
+            hosts_summary(&serving.allowed_hosts),
+            serving.token_from.as_deref().unwrap_or("--token")
         );
     }
-    if !args.no_open && std::io::stdout().is_terminal() {
+    // A wide bind has no local browser worth opening; loopback does.
+    if !args.no_open && !serving.remote && tty {
         open_browser(&url);
     }
 
@@ -550,7 +990,7 @@ fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply {
 }
 
 /// `host`, `host:port` or `[::1]:port`: is the host part a loopback name?
-fn is_loopback_authority(authority: &str) -> bool {
+pub(crate) fn is_loopback_authority(authority: &str) -> bool {
     let host = match authority.strip_prefix('[') {
         Some(rest) => rest.split(']').next().unwrap_or(""),
         None => authority.split(':').next().unwrap_or(""),
@@ -622,10 +1062,23 @@ fn cookie_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
+/// The allowlist entry that stands for "any `Host`": for a wide bind whose
+/// name browsers will use isn't knowable (a laptop on several networks, a box
+/// reached under more than one name). The bearer token still gates every
+/// request; the allowlist just stops being the second lock.
+const ANY_HOST: &str = "*";
+
+fn is_any_host(entry: &str) -> bool {
+    entry.trim() == ANY_HOST
+}
+
 /// Does a `Host` header match one allowlist entry exactly? An entry may name
 /// a port, in which case the port must match too; a bare `host` entry allows
-/// any port, like agent-deck's.
+/// any port, like agent-deck's. `*` allows every host.
 fn host_allowed(host: &str, allowed: &[String]) -> bool {
+    if allowed.iter().any(|entry| is_any_host(entry)) {
+        return true;
+    }
     let (host, port) = split_authority(host);
     allowed.iter().any(|entry| {
         let (entry_host, entry_port) = split_authority(entry);
@@ -1139,6 +1592,221 @@ fn fmt_time(t: chrono::DateTime<chrono::FixedOffset>) -> String {
 mod tests {
     use super::*;
 
+    /// A 0600 token file, the way `furmi web --setup` makes one.
+    fn token_file(dir: &std::path::Path, token: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("web-token");
+        std::fs::write(&path, format!("{token}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        path
+    }
+
+    fn args(listen: Option<&str>, hosts: &[&str]) -> WebArgs {
+        WebArgs {
+            port: 7433,
+            listen: listen.map(str::to_string),
+            token_file: None,
+            token: None,
+            allowed_hosts: hosts.iter().map(|h| h.to_string()).collect(),
+            setup: false,
+            replace: false,
+            no_open: true,
+        }
+    }
+
+    #[test]
+    fn flags_beat_the_config_which_beats_the_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved_token = token_file(dir.path(), "saved");
+        let saved = Web {
+            configured: true,
+            listen: Some("0.0.0.0:9000".into()),
+            allowed_hosts: vec!["saved.ts.net".into()],
+            token_file: Some(saved_token.clone()),
+        };
+
+        // Nothing configured: loopback, and no shared secret needed.
+        let s = resolve(&args(None, &[]), &Web::default()).unwrap();
+        assert_eq!(s.addr, "127.0.0.1:7433");
+        assert!(!s.remote);
+        assert!(s.bearer.is_none());
+
+        // The saved answers, with no flags at all: wide and gated.
+        let s = resolve(&args(None, &[]), &saved).unwrap();
+        assert_eq!(s.addr, "0.0.0.0:9000");
+        assert!(s.remote);
+        assert_eq!(s.bearer.as_deref(), Some("saved"));
+        assert_eq!(s.allowed_hosts, ["saved.ts.net"]);
+        assert!(s.token_from.unwrap().ends_with("web-token"));
+
+        // A flag overrides what the file says, per setting.
+        let mut override_args = args(Some("0.0.0.0:1234"), &["flag.ts.net"]);
+        override_args.token = Some("from-flag".into());
+        let s = resolve(&override_args, &saved).unwrap();
+        assert_eq!(s.addr, "0.0.0.0:1234");
+        assert_eq!(s.bearer.as_deref(), Some("from-flag"));
+        assert_eq!(s.allowed_hosts, ["flag.ts.net"]);
+    }
+
+    #[test]
+    fn a_busy_port_is_told_apart_from_other_bind_failures() {
+        // Something else holds the port: that's the one worth offering to
+        // replace.
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let busy = held.local_addr().unwrap().to_string();
+        match Server::http(busy.as_str()) {
+            Ok(_) => panic!("bound {busy}, which was meant to be taken"),
+            Err(e) => assert!(address_in_use(&*e), "{e}"),
+        }
+
+        // A nonsense address fails for another reason, and isn't offered.
+        match Server::http("127.0.0.1:99999") {
+            Ok(_) => panic!("a nonsense port was accepted"),
+            Err(e) => assert!(!address_in_use(&*e), "{e}"),
+        }
+
+        // The same port on another interface or address is still a clash.
+        assert!(same_port("0.0.0.0:7433", "127.0.0.1:7433"));
+        assert!(same_port("[::]:7433", "0.0.0.0:7433"));
+        assert!(!same_port("0.0.0.0:7433", "0.0.0.0:8080"));
+        assert!(!same_port("box.ts.net", "box.ts.net:7433"));
+    }
+
+    #[test]
+    fn a_broken_config_still_serves_loopback() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("tasks")).unwrap();
+        std::fs::write(dir.path().join("config.toml"), "this is [not toml").unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        let serving = setup(&home, &args(None, &[])).unwrap();
+        assert_eq!(serving.addr, "127.0.0.1:7433");
+        assert!(!serving.remote);
+    }
+
+    #[test]
+    fn a_port_less_listen_takes_the_port_flag() {
+        let web = Web {
+            listen: Some("0.0.0.0".into()),
+            ..Web::default()
+        };
+        let mut with_port = args(None, &[]);
+        with_port.port = 8080;
+        assert_eq!(addr_of(&with_port, &web), "0.0.0.0:8080");
+        assert_eq!(addr_of(&args(Some("1.2.3.4:9"), &[]), &web), "1.2.3.4:9");
+        assert_eq!(addr_of(&args(None, &[]), &Web::default()), "127.0.0.1:7433");
+    }
+
+    #[test]
+    fn a_fresh_home_is_asked_once_however_it_serves() {
+        // Nothing answered yet: a first run asks, even for loopback.
+        assert!(never_asked(&Web::default()));
+        // Any answer at all is an answer — including "this machine only".
+        assert!(!never_asked(&Web {
+            configured: true,
+            ..Web::default()
+        }));
+        // A hand-written table is never asked about.
+        assert!(!never_asked(&Web {
+            listen: Some("0.0.0.0:7433".into()),
+            ..Web::default()
+        }));
+        assert!(!never_asked(&Web {
+            allowed_hosts: vec!["box.ts.net".into()],
+            ..Web::default()
+        }));
+    }
+
+    #[test]
+    fn setup_is_asked_only_while_a_wide_bind_lacks_its_answers() {
+        // Loopback never needs answering.
+        assert!(!unanswered(&args(None, &[]), &Web::default()));
+        // Wide with nothing: both answers missing.
+        assert!(unanswered(
+            &args(Some("0.0.0.0:7433"), &[]),
+            &Web::default()
+        ));
+        // A wide address saved in config counts just the same.
+        let wide = Web {
+            listen: Some("0.0.0.0:7433".into()),
+            ..Web::default()
+        };
+        assert!(unanswered(&args(None, &[]), &wide));
+        // One of the two given is still half an answer.
+        assert!(unanswered(
+            &args(Some("0.0.0.0:7433"), &["box.ts.net"]),
+            &Web::default()
+        ));
+        // Both given by flags: no questions.
+        let mut answered = args(Some("0.0.0.0:7433"), &["box.ts.net"]);
+        answered.token = Some("t".into());
+        assert!(!unanswered(&answered, &Web::default()));
+    }
+
+    #[test]
+    fn hosts_and_urls_are_cleaned_up_for_the_browser() {
+        assert_eq!(
+            parse_hosts(" box.ts.net. , 100.64.0.10 ,BOX.ts.net"),
+            ["box.ts.net", "100.64.0.10"]
+        );
+        assert!(parse_hosts("  ,  ").is_empty());
+
+        // The port comes from the allowlist entry, else from the bind.
+        assert_eq!(
+            url_for("box.ts.net", "0.0.0.0:7433"),
+            "http://box.ts.net:7433"
+        );
+        assert_eq!(
+            url_for("box.ts.net:9000", "0.0.0.0:7433"),
+            "http://box.ts.net:9000"
+        );
+        assert_eq!(url_for("box.ts.net", "0.0.0.0:80"), "http://box.ts.net");
+        assert_eq!(url_for("[fd7a::1]", "[::]:7433"), "http://[fd7a::1]:7433");
+    }
+
+    #[test]
+    fn a_star_allows_any_host() {
+        let any = vec!["*".to_string()];
+        assert!(host_allowed("box.ts.net", &any));
+        assert!(host_allowed("box.ts.net:7433", &any));
+        assert!(host_allowed("100.64.0.10:7433", &any));
+        assert!(host_allowed("anything.at.all", &any));
+        // ...for the POST Origin check too, which shares the rule.
+        assert!(origin_allowed("http://anything.at.all", &any));
+        // And it's only reachable through the allowlist: a loopback bind still
+        // checks for a loopback Host.
+        assert!(!host_allowed("evil.example", &["box.ts.net".to_string()]));
+    }
+
+    #[test]
+    fn the_open_url_keeps_the_token_off_non_terminals() {
+        let serving = Serving {
+            addr: "0.0.0.0:7433".into(),
+            remote: true,
+            bearer: Some("secret".into()),
+            allowed_hosts: vec!["box.ts.net".into()],
+            token_from: Some("~/.furmiculi/web-token".into()),
+        };
+        assert_eq!(
+            serving.open_url("secret", true).unwrap(),
+            "http://box.ts.net:7433/?token=secret"
+        );
+        assert_eq!(
+            serving.open_url("secret", false).unwrap(),
+            "http://box.ts.net:7433/?token=<the token>"
+        );
+
+        // Any Host: no name to print, so say where to put one — never a
+        // literal `http://*`.
+        let any = Serving {
+            allowed_hosts: vec!["*".into()],
+            ..serving
+        };
+        assert_eq!(
+            any.open_url("secret", false).unwrap(),
+            "http://<this box's tailnet name or IP>:7433/?token=<the token>"
+        );
+    }
+
     #[test]
     fn only_loopback_hosts_and_origins_pass() {
         for ok in ["127.0.0.1", "127.0.0.1:7433", "localhost:80", "[::1]:7433"] {
@@ -1318,11 +1986,15 @@ mod tests {
             token_file: None,
             token: None,
             allowed_hosts: vec![],
+            setup: false,
+            replace: false,
             no_open: true,
         };
-        let err = setup(&args).unwrap_err().to_string();
+        let none = Web::default();
+        let err = resolve(&args, &none).unwrap_err().to_string();
         assert!(err.contains("token"), "{err}");
         assert!(err.contains("--token-file"), "{err}");
+        assert!(err.contains("--setup"), "{err}");
 
         // ...and without an allowlist, even with a token in hand.
         let args = WebArgs {
@@ -1330,7 +2002,7 @@ mod tests {
             allowed_hosts: vec![],
             ..args
         };
-        let err = setup(&args).unwrap_err().to_string();
+        let err = resolve(&args, &none).unwrap_err().to_string();
         assert!(err.contains("--allowed-host"), "{err}");
 
         // With both, it's a remote serving setup.
@@ -1338,16 +2010,19 @@ mod tests {
             allowed_hosts: vec!["toolnet.example".into()],
             ..args
         };
-        let serving = setup(&args).unwrap();
+        let serving = resolve(&args, &none).unwrap();
         assert!(serving.remote);
         assert_eq!(serving.bearer.as_deref(), Some("t"));
 
         // The default port stays loopback, token or none.
-        let loopback = setup(&WebArgs {
-            listen: None,
-            allowed_hosts: vec!["toolnet.example".into()],
-            ..args
-        })
+        let loopback = resolve(
+            &WebArgs {
+                listen: None,
+                allowed_hosts: vec!["toolnet.example".into()],
+                ..args
+            },
+            &none,
+        )
         .unwrap();
         assert!(!loopback.remote);
     }

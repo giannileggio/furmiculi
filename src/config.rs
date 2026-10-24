@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::spec::{Mode, OnFinish};
 
@@ -68,6 +68,15 @@ model_args = ["--model", "{model}"]
 headless = ["pi", "--mode", "json", "{prompt}"]
 interactive = ["pi", "{prompt}"]
 model_args = ["--model", "{model}"]
+
+# The dashboard (`furmi web`, `furmi start`). The first `furmi web` asks once
+# whether to serve this machine only or your other machines too (a tailnet),
+# and writes this table, so it asks only that once. Flags beat it.
+# [web]
+# configured = true                       # the questions have been answered
+# listen = "0.0.0.0:7433"               # ...to serve other machines
+# allowed_hosts = ["this-box.ts.net"]   # the Host header those browsers send
+# token_file = "~/.furmiculi/web-token" # shared secret every request carries
 "#;
 
 /// The config `furmi init` writes, with `agent` as the default agent (left
@@ -89,6 +98,31 @@ pub struct Config {
     pub runner: Runner,
     pub defaults: Defaults,
     pub agents: BTreeMap<String, Agent>,
+    pub web: Web,
+}
+
+/// The dashboard, as `furmi web` / `furmi start` serve it. All optional: with
+/// nothing set the dashboard listens on loopback, where the per-run token and
+/// loopback checks are enough. A wide `listen` additionally needs
+/// `allowed_hosts` and a `token_file` (or the same as flags) — `furmi web
+/// --setup` fills all three in once.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Web {
+    /// Whether the questions `furmi web --setup` asks have been answered —
+    /// "this machine only" included. While this is false (and nothing else
+    /// here is set), the first interactive `furmi web` asks, then saves it.
+    pub configured: bool,
+    /// Address to bind, e.g. `0.0.0.0:7433`. Unset: `127.0.0.1:<--port>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listen: Option<String>,
+    /// Exact `Host` headers a non-loopback bind accepts. `host` or `host:port`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub allowed_hosts: Vec<String>,
+    /// File holding the shared bearer token for a non-loopback bind. `~` is
+    /// expanded; the file must be 0600.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -164,6 +198,7 @@ impl Default for Config {
             runner: Runner::default(),
             defaults: Defaults::default(),
             agents: builtin_agents(),
+            web: Web::default(),
         }
     }
 }
@@ -364,6 +399,70 @@ fn with_default_agent(text: &str, name: &str) -> String {
     out
 }
 
+/// Saves the dashboard's answers in the config file, leaving the rest of it
+/// (comments, ordering, the user's own edits) as it was. What `furmi web
+/// --setup` calls once; after that a plain `furmi web` reads this back.
+/// Refuses to write a file that wouldn't parse or wouldn't round-trip.
+pub fn set_web_config(path: &Path, web: &Web) -> Result<()> {
+    let text = if path.exists() {
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?
+    } else {
+        default_config_toml(None)
+    };
+    // Parse first: saving a dashboard setting isn't worth clobbering a config
+    // the user is still editing.
+    Config::parse(&text)?;
+    let updated = with_web(&text, web);
+    let check = Config::parse(&updated)?;
+    if &check.web != web {
+        bail!("couldn't save the [web] settings in {}", path.display());
+    }
+    crate::fsutil::write_atomic(path, updated)
+}
+
+/// `text` with a `[web]` table carrying `web`: an existing table is replaced
+/// in place (whatever sits above it kept), else one is appended.
+fn with_web(text: &str, web: &Web) -> String {
+    let block = web_table(web);
+    let mut out = String::with_capacity(text.len() + block.len());
+    let mut wrote = false;
+    let mut dropping = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if dropping {
+            if t.starts_with('[') {
+                dropping = false;
+            } else {
+                continue;
+            }
+        }
+        if !wrote && t == "[web]" {
+            out.push_str(&block);
+            wrote = true;
+            dropping = true;
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !wrote {
+        if !out.is_empty() && !out.ends_with("\n\n") {
+            out.push('\n');
+        }
+        out.push_str(&block);
+    }
+    out
+}
+
+/// The `[web]` table as TOML text, keys rendered by the serializer so nothing
+/// needs quoting by hand. The comment sits inside the table (not above it), so
+/// replacing the table on a later `--setup` replaces it too instead of piling
+/// up copies.
+fn web_table(web: &Web) -> String {
+    let body = toml::to_string(web).unwrap_or_default();
+    format!("[web]\n# Written by `furmi web --setup`; flags beat these.\n{body}")
+}
+
 /// Preset agents whose program is on `$PATH`, in preset order.
 pub fn installed_presets() -> Vec<&'static str> {
     PRESETS
@@ -558,6 +657,77 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn web_settings_are_optional_and_strict() {
+        let c = Config::parse(
+            "[web]\nlisten = \"0.0.0.0:7433\"\nallowed_hosts = [\"box.ts.net\"]\n\
+             token_file = \"~/.furmiculi/web-token\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.web.listen.as_deref(), Some("0.0.0.0:7433"));
+        assert_eq!(c.web.allowed_hosts, ["box.ts.net"]);
+        assert_eq!(
+            c.web.token_file.as_deref(),
+            Some(Path::new("~/.furmiculi/web-token"))
+        );
+        // Nothing set: loopback, as before [web] existed.
+        assert_eq!(Config::default().web, Web::default());
+        // "This machine only", answered: just the marker.
+        let only = Config::parse("[web]\nconfigured = true\n").unwrap();
+        assert!(only.web.configured);
+        assert_eq!(only.web.listen, None);
+        // A typo inside [web] is caught like anywhere else.
+        assert!(Config::parse("[web]\nallowed_host = [\"box.ts.net\"]\n").is_err());
+    }
+
+    #[test]
+    fn saves_the_web_settings_without_touching_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let web = Web {
+            configured: true,
+            listen: Some("0.0.0.0:7433".into()),
+            allowed_hosts: vec!["box.ts.net".into(), "100.64.0.10".into()],
+            token_file: Some(PathBuf::from("~/.furmiculi/web-token")),
+        };
+
+        // No config yet: created from the template, comments and all.
+        set_web_config(&path, &web).unwrap();
+        let first = std::fs::read_to_string(&path).unwrap();
+        assert!(first.contains("# furmiculi configuration."), "{first}");
+        assert_eq!(Config::load(&path).unwrap().web, web);
+        assert_eq!(
+            first.lines().filter(|l| l.trim() == "[web]").count(),
+            1,
+            "{first}"
+        );
+        // The template's commented-out example is left for the reader.
+        assert!(first.contains("# [web]\n"), "{first}");
+
+        // Changing it replaces the table rather than adding a second one, and
+        // writing the same settings twice doesn't grow the file.
+        let changed = Web {
+            allowed_hosts: vec!["other.ts.net".into()],
+            ..web.clone()
+        };
+        set_web_config(&path, &changed).unwrap();
+        let second = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            second.lines().filter(|l| l.trim() == "[web]").count(),
+            1,
+            "{second}"
+        );
+        assert!(second.contains("# furmiculi configuration."), "{second}");
+        assert_eq!(Config::load(&path).unwrap().web, changed);
+        set_web_config(&path, &changed).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), second);
+
+        // A file that doesn't parse is reported, not overwritten.
+        std::fs::write(&path, "this is [not toml").unwrap();
+        assert!(set_web_config(&path, &web).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "this is [not toml");
+    }
 
     #[test]
     fn default_template_matches_builtin_defaults() {
