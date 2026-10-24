@@ -359,15 +359,31 @@ fn interactive_setup(home: &Home, args: &WebArgs, web: &Web) -> Result<Web> {
 
     // Saved answers first, then what tailscale says this box is called, so
     // running --setup again is a matter of pressing enter.
-    let suggested = if web.allowed_hosts.is_empty() {
-        tailnet().map(|t| t.hosts().join(", ")).unwrap_or_default()
+    let (suggested, why_not) = if web.allowed_hosts.is_empty() {
+        match tailnet() {
+            TailnetLookup::Found(tailnet) => (tailnet.hosts().join(", "), None),
+            TailnetLookup::Unavailable(reason) => (String::new(), Some(reason)),
+        }
     } else {
-        web.allowed_hosts.join(", ")
+        (web.allowed_hosts.join(", "), None)
+    };
+    // Nothing to suggest (a container whose tailscaled runs on the host, say):
+    // say so instead of asking into the void, and let enter mean "any Host" —
+    // the token still gates every request.
+    let default = if !suggested.is_empty() {
+        suggested.clone()
+    } else {
+        println!(
+            "  No tailnet name to suggest ({}) — on the machine that runs tailscale it's in\n  \
+             `tailscale status --json` (the MagicDNS name), and `furmi web --setup` takes it later.",
+            why_not.unwrap_or_else(|| "tailscale isn't installed".into())
+        );
+        ANY_HOST.to_string()
     };
     let hosts = loop {
         let answer = ask(
-            "Host name(s) browsers use to reach this box, comma-separated",
-            (!suggested.is_empty()).then_some(suggested.as_str()),
+            "Host name(s) browsers use to reach this box, comma-separated (`*` accepts any)",
+            Some(default.as_str()),
         )?;
         let hosts = parse_hosts(if answer.is_empty() {
             &suggested
@@ -418,27 +434,65 @@ impl Tailnet {
     }
 }
 
-pub fn tailnet() -> Option<Tailnet> {
+/// [`tailnet`], and why there's nothing to offer when there isn't.
+pub enum TailnetLookup {
+    Found(Tailnet),
+    /// No name: `tailscale` isn't installed, or its daemon isn't reachable
+    /// from here — on a container the daemon usually runs on the host, so
+    /// this box can't ask it what it's called.
+    Unavailable(String),
+}
+
+impl TailnetLookup {
+    pub fn found(self) -> Option<Tailnet> {
+        match self {
+            Self::Found(tailnet) => Some(tailnet),
+            Self::Unavailable(_) => None,
+        }
+    }
+}
+
+pub fn tailnet() -> TailnetLookup {
     let mut cmd = Command::new("tailscale");
     cmd.args(["status", "--json"]);
-    let out = crate::fsutil::run_with_timeout(cmd, Duration::from_secs(5)).ok()?;
+    let out = match crate::fsutil::run_with_timeout(cmd, Duration::from_secs(5)) {
+        Ok(out) => out,
+        Err(e) => return TailnetLookup::Unavailable(format!("`tailscale status` didn't run: {e}")),
+    };
     if !out.status.success() {
-        return None;
+        let said = String::from_utf8_lossy(&out.stderr);
+        let said = said.lines().next().unwrap_or("").trim();
+        // Drop tailscale's own hint, like "(sudo systemctl start tailscaled ?)":
+        // in a container it points at the wrong machine.
+        let said = said.split(" (").next().unwrap_or(said).trim();
+        return TailnetLookup::Unavailable(if said.is_empty() {
+            "`tailscale status` failed".to_string()
+        } else {
+            format!("tailscale says: {said}")
+        });
     }
-    let status: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    let name = status
-        .pointer("/Self/DNSName")?
-        .as_str()?
-        .trim_end_matches('.')
-        .to_string();
-    if name.is_empty() {
-        return None;
-    }
+    parse_tailnet_status(&out.stdout)
+}
+
+/// The MagicDNS name and IPv4 out of `tailscale status --json`, split out so
+/// the shapes it comes in are testable without a tailnet.
+fn parse_tailnet_status(json: &[u8]) -> TailnetLookup {
+    let Ok(status) = serde_json::from_slice::<serde_json::Value>(json) else {
+        return TailnetLookup::Unavailable("`tailscale status` printed nothing usable".into());
+    };
+    let Some(name) = status
+        .pointer("/Self/DNSName")
+        .and_then(|name| name.as_str())
+        .map(|name| name.trim_end_matches('.').to_string())
+        .filter(|name| !name.is_empty())
+    else {
+        return TailnetLookup::Unavailable("tailscale isn't logged in on this machine".into());
+    };
     let ip = status
         .pointer("/Self/TailscaleIPs/0")
         .and_then(|ip| ip.as_str())
         .map(str::to_string);
-    Some(Tailnet { name, ip })
+    TailnetLookup::Found(Tailnet { name, ip })
 }
 
 /// Creates the token file (0600, 128 random bits) if it isn't there yet. An
@@ -1761,6 +1815,39 @@ mod tests {
         );
         assert_eq!(url_for("box.ts.net", "0.0.0.0:80"), "http://box.ts.net");
         assert_eq!(url_for("[fd7a::1]", "[::]:7433"), "http://[fd7a::1]:7433");
+    }
+
+    #[test]
+    fn the_tailnet_name_comes_out_of_tailscales_status() {
+        // The shape `tailscale status --json` prints (trimmed): the MagicDNS
+        // name carries a trailing dot, and the IPv4 is the first address.
+        let status = br#"{"Self":{"DNSName":"box.tailnet.ts.net.","TailscaleIPs":["100.64.0.10","fd7a::1"]}}"#;
+        match parse_tailnet_status(status) {
+            TailnetLookup::Found(tailnet) => {
+                assert_eq!(tailnet.name, "box.tailnet.ts.net");
+                assert_eq!(tailnet.ip.as_deref(), Some("100.64.0.10"));
+                assert_eq!(tailnet.hosts(), ["box.tailnet.ts.net", "100.64.0.10"]);
+            }
+            TailnetLookup::Unavailable(why) => panic!("expected a tailnet, got {why}"),
+        }
+
+        // Not logged in: nothing named, and it says so.
+        for json in [
+            br#"{"Self":{}}"#.as_slice(),
+            br#"{"Self":{"DNSName":""}}"#.as_slice(),
+            br#"{"BackendState":"NeedsLogin"}"#.as_slice(),
+        ] {
+            match parse_tailnet_status(json) {
+                TailnetLookup::Found(_) => panic!("expected nothing for {:?}", json as &[u8]),
+                TailnetLookup::Unavailable(why) => assert!(!why.is_empty()),
+            }
+        }
+
+        // Garbage in, nothing out — and never a panic.
+        match parse_tailnet_status(b"not json") {
+            TailnetLookup::Unavailable(why) => assert!(why.contains("usable"), "{why}"),
+            TailnetLookup::Found(_) => panic!("expected nothing"),
+        }
     }
 
     #[test]

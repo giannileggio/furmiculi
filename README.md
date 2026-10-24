@@ -209,7 +209,10 @@ Host name(s) browsers use to reach this box, comma-separated [box.tailnet.ts.net
 
 It saves the answers as a `[web]` table in `config.toml` and creates
 `~/.furmiculi/web-token` (0600, 128 random bits), then serves — as a wide,
-token-gated bind. Answering "no" (or pressing enter) is saved the same way, as
+token-gated bind. Where tailscale can't be asked what this box is called (in a
+container whose `tailscaled` runs on the host, say) there's no name to fill in
+and the default is `*`: enter accepts any Host, or type the name your browsers
+use, and `furmi web --setup` takes it later. Answering "no" (or pressing enter) is saved the same way, as
 `configured = true` with nothing else, and keeps the loopback-only default. It
 only ever asks on a terminal: started from a unit or a script, it serves
 loopback silently rather than waiting for an answer. `furmi web --setup` asks

@@ -321,6 +321,7 @@ fn web_check(config: &Config) -> Check {
         // visible, and just name the address otherwise.
         let url = if any_host {
             crate::web::tailnet()
+                .found()
                 .map(|tailnet| {
                     format!(
                         "{}, under any Host name",
@@ -350,7 +351,7 @@ fn web_check(config: &Config) -> Check {
             ))
         };
     }
-    match crate::web::tailnet() {
+    match crate::web::tailnet().found() {
         Some(tailnet) => Check::Warn(format!(
             "the dashboard is reachable from this machine only (http://127.0.0.1:7433). To open it \
              from your tailnet, run `furmi web --setup` once, then \
