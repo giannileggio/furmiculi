@@ -5,6 +5,14 @@ description: Create, schedule, edit or cancel furmiculi (furmi) tasks, the Markd
 
 # Managing furmi tasks
 
+If `furmi` isn't on the PATH, install it first (Linux or macOS; needs git
+and tmux), then run `furmi init` to set up `{home}`:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/giannileggio/furmiculi/releases/latest/download/furmiculi-installer.sh | sh
+```
+
 The queue lives in `{home}`. The full format is in `{home}/FORMAT.md`; read
 it if anything here is unclear. Run every command exactly as written here
 (`{furmi} ...`), from any folder.

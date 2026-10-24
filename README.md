@@ -64,6 +64,23 @@ furmi init         # optional: the first `furmi add`/`furmi start` sets up
                    # so agents can queue tasks
 ```
 
+### Install for your agent
+
+The curl installer above is the recommended path: it installs `furmi`, and
+`furmi init` then links the `furmi-tasks` skill into your agents' global
+skill folders (Claude Code, Codex, opencode, Pi and others), so you can queue
+work from any repo.
+
+If you'd rather get just the skill, for any agent supported by
+[`skills`](https://github.com/vercel-labs/skills):
+
+```sh
+npx skills add giannileggio/furmiculi
+```
+
+The skill tells the agent to install `furmi` if it's missing. Running
+`furmi init` later refreshes the skill to match your installed version.
+
 Prebuilt binaries are published for Linux and macOS (x86_64 and arm64); the
 script above fetches the right one and puts `furmi` on your `PATH`. It also
 installs `furmiculi-update`, so `furmiculi-update` upgrades an existing

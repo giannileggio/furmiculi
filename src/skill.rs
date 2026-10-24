@@ -203,6 +203,23 @@ pub fn prompt(question: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// `skills/furmi-tasks/SKILL.md` is what `npx skills add` finds in the
+    /// repo: the template with the default home. `BLESS=1 cargo test` rewrites it.
+    #[test]
+    fn published_skill_matches_template() {
+        let published = SKILL_MD
+            .replace("{home}", "~/.furmiculi")
+            .replace("{furmi}", "furmi");
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/skills/furmi-tasks/SKILL.md");
+        if std::env::var_os("BLESS").is_some() {
+            std::fs::write(path, &published).unwrap();
+        }
+        assert!(
+            std::fs::read_to_string(path).is_ok_and(|on_disk| on_disk == published),
+            "skills/furmi-tasks/SKILL.md is stale: run `BLESS=1 cargo test published_skill`"
+        );
+    }
+
     #[test]
     fn installs_into_home_and_keeps_user_files() {
         let dir = tempfile::tempdir().unwrap();
