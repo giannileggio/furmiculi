@@ -78,6 +78,12 @@ pub struct Task {
     /// Cost in USD the agent reported, if it reports usage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// The model the agent said it ran with, if it says (`provider/model` for
+    /// the agents that report both). A task that doesn't pin `model` still ran
+    /// with one — this is that answer, kept so a finished task can be read
+    /// without digging through its log. Written by furmiculi.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_used: Option<String>,
 
     #[serde(skip)]
     pub prompt: String,
@@ -99,6 +105,7 @@ const TASK_KEYS: &[&str] = &[
     "tokens_in",
     "tokens_out",
     "cost_usd",
+    "model_used",
 ];
 
 fn is_zero(n: &u32) -> bool {
@@ -156,6 +163,7 @@ impl Task {
             tokens_in: None,
             tokens_out: None,
             cost_usd: None,
+            model_used: None,
             prompt,
         }
     }
@@ -179,6 +187,51 @@ impl Task {
         self.tokens_in = sum(self.tokens_in, tokens_in);
         self.tokens_out = sum(self.tokens_out, tokens_out);
         self.cost_usd = sum(self.cost_usd, cost);
+    }
+
+    /// The model to name for this task, and where the name came from.
+    ///
+    /// A finished task is asked first what it actually ran with: a task that
+    /// pins no model still runs with whatever its agent defaults to, and only
+    /// the agent's own output knows which. Before it has run there is nothing
+    /// to report, so the task's own `model`, then its agent's configured one,
+    /// is the best answer. `"-"` and `"none"` when nothing says.
+    pub fn model_in_use(&self, config: &Config) -> (String, &'static str) {
+        let eff = self.spec.resolve(&config.defaults);
+        let agent_default = eff
+            .agent
+            .as_ref()
+            .and_then(|name| config.agents.get(name))
+            .and_then(|agent| agent.model.clone());
+        let finished = !matches!(self.status, Status::Pending | Status::Running);
+        for (model, source) in [
+            (
+                if finished {
+                    self.model_used.clone()
+                } else {
+                    None
+                },
+                "used",
+            ),
+            (eff.model.clone(), "task"),
+            (agent_default, "agent"),
+        ] {
+            if let Some(model) = model.filter(|m| !m.trim().is_empty()) {
+                return (model, source);
+            }
+        }
+        ("-".into(), "none")
+    }
+
+    /// Records the model an attempt said it ran with. The first answer wins:
+    /// a retry with a broken model that reports nothing shouldn't erase what
+    /// the working attempt ran with, and the pinned `model` is never touched.
+    pub fn set_model_used(&mut self, model: Option<&str>) {
+        if self.model_used.is_none()
+            && let Some(model) = model.map(str::trim).filter(|m| !m.is_empty())
+        {
+            self.model_used = Some(model.to_string());
+        }
     }
 
     pub fn parse(content: &str) -> Result<Self> {
@@ -340,6 +393,69 @@ Fix the redirect loop.
         assert_eq!(t.tokens_in, Some(150));
         assert_eq!(t.tokens_out, Some(10));
         assert_eq!(t.cost_usd, Some(0.75));
+    }
+
+    #[test]
+    fn the_model_in_use_is_what_ran_then_what_is_pinned_then_the_agents_default() {
+        let mut t = Task::parse(SAMPLE).unwrap();
+        let mut config = Config::default();
+        assert_eq!(t.model_in_use(&config), ("-".into(), "none"));
+
+        // The agent's configured model, for a task that pins none.
+        config.defaults.agent = Some("pi".into());
+        config.agents.insert(
+            "pi".into(),
+            crate::config::Agent {
+                headless: Vec::new(),
+                interactive: Vec::new(),
+                model_args: Vec::new(),
+                model: Some("agent/default".into()),
+            },
+        );
+        assert_eq!(t.model_in_use(&config), ("agent/default".into(), "agent"));
+
+        // A pinned model beats it.
+        t.spec.model = Some("pinned/model".into());
+        assert_eq!(t.model_in_use(&config), ("pinned/model".into(), "task"));
+
+        // Waiting: what it will run with, not what an earlier attempt reported.
+        t.model_used = Some("reported/model".into());
+        assert_eq!(t.model_in_use(&config), ("pinned/model".into(), "task"));
+
+        // Finished: the agent's own answer is the truth.
+        t.status = Status::Done;
+        t.finished_at = Some(now());
+        assert_eq!(t.model_in_use(&config), ("reported/model".into(), "used"));
+        t.model_used = None;
+        assert_eq!(t.model_in_use(&config), ("pinned/model".into(), "task"));
+    }
+
+    #[test]
+    fn the_first_model_a_task_reports_is_kept_and_never_overwrites_a_pin() {
+        let mut t = Task::parse(SAMPLE).unwrap();
+        t.set_model_used(None);
+        assert_eq!(t.model_used, None);
+        t.set_model_used(Some("  "));
+        assert_eq!(t.model_used, None);
+        t.set_model_used(Some(" opencode-go/deepseek-v4.1-flash "));
+        assert_eq!(
+            t.model_used.as_deref(),
+            Some("opencode-go/deepseek-v4.1-flash")
+        );
+        // A later attempt that reports another model doesn't rewrite history.
+        t.set_model_used(Some("other/model"));
+        assert_eq!(
+            t.model_used.as_deref(),
+            Some("opencode-go/deepseek-v4.1-flash")
+        );
+        // And it is a field of its own: the task still pins what it pinned.
+        assert_eq!(t.spec.model, None);
+
+        // It survives the round trip through the file.
+        t.spec.model = Some("pinned".into());
+        let again = Task::parse(&t.to_markdown().unwrap()).unwrap();
+        assert_eq!(again.model_used, t.model_used);
+        assert_eq!(again.spec.model.as_deref(), Some("pinned"));
     }
 
     #[test]

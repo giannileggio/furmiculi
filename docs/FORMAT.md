@@ -86,6 +86,7 @@ Don't edit these by hand. Use `furmi` commands to change the status.
 | `error`       | Last failure reason. |
 | `tokens_in`, `tokens_out` | Token usage summed over attempts, if the agent's headless mode reports it (built in for `claude`). |
 | `cost_usd`    | Cost in USD, same condition. |
+| `model_used`  | The model the agent said it ran with (out of the same output as the usage above), `provider/model` when it names both. Only when the task pins no `model` does it differ from a name you chose: it is how a finished task records what it actually cost. A task that ran before this was kept has none — the dashboard reads the model out of the attempt's log when you open the task instead. |
 
 `needs_review` means an interactive session ended without signalling
 `furmi done` or `furmi fail`.
@@ -245,12 +246,12 @@ when `furmi start` began one), and `furmi status` says whether one is serving
 and where. For a dashboard that also survives reboots, `furmi service
 systemd|launchd` prints units that do that.
 
-### Token/cost usage
+### Token/cost usage and the model that ran
 
 `furmi` records what a headless run's stdout reports as `tokens_in`,
-`tokens_out` and `cost_usd` on the task (`furmi ls` shows them; the dashboard
-doesn't, since a column that is mostly dashes reads like accounting). Two
-shapes are understood:
+`tokens_out`, `cost_usd` and `model_used` on the task (`furmi ls` and the
+dashboard show the model; neither shows the tokens, since a column that is
+mostly dashes reads like accounting). Two shapes are understood:
 
 - one JSON object with a `usage` field — what `claude --output-format json`
   prints at the end of a run;
@@ -261,6 +262,6 @@ shapes are understood:
   is the only place a failure is reported.
 
 The `claude` and `pi` presets ask for those flags. Other agents report
-nothing unless their own headless flags produce one of the two shapes.
-Interactive mode never reports usage: it keeps a real terminal for the
-human running it.
+nothing unless their own headless flags produce one of the two shapes, and a
+task run through them keeps only its own `model:` field. Interactive mode
+never reports usage: it keeps a real terminal for the human running it.

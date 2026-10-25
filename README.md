@@ -303,6 +303,26 @@ both answers stop the agent — so **Drop it** isn't offered there; that would
 mark something that ran as "cancelled". The **Agent** and **Model** columns
 carry a mark for the tool and the model family (Claude, OpenAI, Gemini,
 OpenCode, Qwen, DeepSeek, Meta, Mistral — a letter chip for anything else).
+A model the task pins reads plain; one that came from somewhere else is
+dimmed, with the source on hover: an agent's configured default, or what the
+run itself reported (recorded as `model_used`), which is the only way to know
+what a task that pins no model actually ran with. A run from before that was
+kept still gets an answer when you open it: the view reads it out of the
+attempt's log, saying where it found it.
+
+Clicking a row opens the task behind it: the whole prompt, the workspace it
+runs in, the agent, model and when-done step, what it cost, and the same
+buttons the row carries. The id has a copy button in the row and in that view.
+**Search** above the tables narrows them to what matches — id, ask, project,
+branch, agent, model, and every word counts — and `Esc` clears it.
+
+It reads like a list, too: `/` jumps to the search box, `1`–`4` switch tabs,
+`j`/`k` walk the rows, `Enter` opens the highlighted one, `o` shows what the
+agent printed, `n` queues a task, `Esc` backs out of whatever is open (and `?`
+lists all of that). On a narrow screen each row becomes a card with its own
+labels. The **Auto**/**Light**/**Dark** button in the header picks a theme:
+*Auto* follows the operating system, and the choice is remembered in the
+browser.
 
 The numbers across the top are also a way around: click *2 Failed* and you
 get the *Finished* list narrowed to failures (the count keeps counting
@@ -314,9 +334,13 @@ time at all is *asap* and never hidden. A *Working* row counts up while you
 watch it (`running 4m 12s`).
 The log viewer shows an agent's JSON output (what the `claude` and `pi`
 presets print) as the text it said and the tools it ran, with the raw bytes
-one click away. Token/cost usage isn't shown here: it only exists for
+one click away. While a task is still working, an open log follows it: it
+re-reads the end of the agent's output (the last 100 KB, saying so) rather
+than the whole thing, and hands back the scroll position if you scrolled up
+to read something. Token/cost usage isn't a column here: it only exists for
 completed headless runs of agents that report it, which would be a column of
-dashes pretending to be accounting. `furmi ls` shows what was reported.
+dashes pretending to be accounting. `furmi ls` shows what was reported, and so
+does the task view.
 
 It only binds to
 `127.0.0.1`, so anyone who can reach it could already run `furmi` locally
