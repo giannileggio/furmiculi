@@ -20,6 +20,13 @@ Queue and run coding-agent tasks defined as Markdown files.
 It works with any CLI coding agent: presets for Claude Code, Codex, Gemini
 CLI, opencode and Pi are built in, and others are a few lines of config.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/dashboard-dark.png">
+    <img src="assets/dashboard.png" alt="The furmi dashboard: counts for waiting, working, done, failed, needs review and repeating tasks, above the queue" width="820">
+  </picture>
+</p>
+
 Because the format is plain Markdown, you can write tasks by hand, with
 `furmi add`, or by asking an agent: open it in `~/.furmiculi` and say "add a
 task to fix the login redirect in ~/Projects/myapp tonight, open a PR".
@@ -94,12 +101,16 @@ script above fetches the right one and puts `furmi` on your `PATH`. `furmi`
 then prints a one-line notice when a newer release is out (set
 `FURMI_NO_UPDATE_CHECK=1` to turn that off), and `furmi update` installs it.
 
+Every release carries `sha256.sum` and GitHub Artifact Attestations, so a
+download can be checked before it runs: `gh attestation verify <file> --repo
+giannileggio/furmiculi`.
+
 Upgrading only works for installs the installer made: it is what leaves the
 install receipt `furmi update` reads to find and replace this binary. A
 `cargo install` or a from-source build upgrades the way it was installed. The
-releases live in a private repository, so `furmi update` signs in with a
-`GITHUB_TOKEN` (or `GH_TOKEN`) when one is set, or with whatever `gh` is
-signed in as.
+releases are public, so `furmi update` needs no credentials; it signs in with
+a `GITHUB_TOKEN` (or `GH_TOKEN`) when one is set, or with whatever `gh` is
+signed in as, which only lifts GitHub's anonymous rate limit.
 
 Building from source instead:
 
@@ -362,7 +373,19 @@ breaking the page.
 
 See [docs/FORMAT.md](docs/FORMAT.md) for the file formats.
 
-See [TODO.md](TODO.md) for open work and ideas.
+See [TODO.md](TODO.md) for the work in progress.
+
+## Contributing
+
+Issues and pull requests are welcome. `cargo fmt --all`, `cargo clippy
+--all-targets -- -D warnings` and `cargo test` are what CI runs, plus the
+browser tests in `e2e/` (see [Testing](#testing)).
+
+Security problems are not issues: see [SECURITY.md](SECURITY.md).
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
 
 ## Testing
 

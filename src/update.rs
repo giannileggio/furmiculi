@@ -29,10 +29,11 @@ pub struct UpdateArgs {
 
 /// A token for the GitHub API, when there is one to be had.
 ///
-/// The releases live in a private repository, so the API answers an anonymous
-/// request with a 404: the token the user already has is what makes this work.
-/// `GITHUB_TOKEN` and `GH_TOKEN` first (a service, a unit, a shell that exports
-/// one), then whatever the `gh` CLI is signed in as.
+/// The releases are public, so this is optional: it lifts GitHub's anonymous
+/// rate limit, and it is what makes an update work from a machine that can't
+/// reach the API signed out. `GITHUB_TOKEN` and `GH_TOKEN` first (a service,
+/// a unit, a shell that exports one), then whatever the `gh` CLI is signed in
+/// as.
 pub(crate) fn github_token() -> Option<String> {
     for var in ["GITHUB_TOKEN", "GH_TOKEN"] {
         if let Ok(token) = std::env::var(var) {
@@ -63,8 +64,8 @@ pub(crate) fn updater() -> AxoUpdater {
 }
 
 /// What to add to an update failure so it can be acted on.
-const NEEDS_TOKEN: &str = "The release repository needs a signed-in GitHub token: set \
-     GITHUB_TOKEN (or GH_TOKEN), or sign in with `gh auth login`.";
+const NEEDS_TOKEN: &str = "GitHub refused the request: set GITHUB_TOKEN (or GH_TOKEN), or \
+     sign in with `gh auth login`. An update signed out is rate-limited hard.";
 const NO_RELEASE: &str = "No release carries this app's installer yet: the newest one may \
      predate the rename, or none has been cut since. See {RELEASES}.";
 
@@ -73,8 +74,9 @@ pub(crate) fn hint(error: &axoupdater::AxoupdateError, signed_in: bool) -> Optio
     match error {
         axoupdater::AxoupdateError::NoStableReleases { .. }
         | axoupdater::AxoupdateError::NoInstallerForPackage {} => Some(NO_RELEASE),
-        // A private release repository answers an anonymous request with a 401,
-        // 403 or 404 rather than anything that names the problem.
+        // GitHub answers an anonymous request it won't serve with a bare 401,
+        // 403 or 404 (a rate limit, or a repository it won't show) rather than
+        // anything that names the problem.
         _ if !signed_in && mentions_status(&error.to_string()) => Some(NEEDS_TOKEN),
         _ => None,
     }
@@ -181,9 +183,9 @@ mod tests {
     }
 
     #[test]
-    fn a_private_repository_without_a_token_says_what_to_set() {
-        // What the GitHub API really answers an anonymous request (the release
-        // repository is private, so the API hides it behind a 404).
+    fn a_refused_request_without_a_token_says_what_to_set() {
+        // What GitHub answers when it won't serve an anonymous request (a rate
+        // limit, or a repository it hides).
         let text = "HTTP status client error (404 Not Found) for url \
                     (https://api.github.com/repos/giannileggio/furmiculi/releases)";
         assert!(mentions_status(text));

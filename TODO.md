@@ -1,6 +1,6 @@
 # TODO
 
-Open work for furmiculi. Move finished items out rather than ticking them,
+Work in flight for furmiculi. Move finished items out rather than ticking them,
 so the list stays short.
 
 ## Now
@@ -9,12 +9,11 @@ so the list stays short.
 
 ## Next
 
-- [ ] Decide whether `furmi web` needs optional auth for non-loopback binds
-      (README currently documents "loopback only" plus a Host check and a per-run
-      action token; there is no non-loopback bind option yet).
+- [ ] Decide what more than the bearer token the tailnet dashboard should
+      require: with `--allowed-host '*'` the token is the only gate (see
+      SECURITY.md).
 
 ## Ideas (unscheduled)
 
-Not tracked here. Feature ideas for furmi live in the vault kanban backlog so
-there is one list to review: `~/Projects/mindforge/01-Planning/kanban.md`,
-tagged `#furmiculi`. This file holds only active work.
+Not tracked here: feature ideas live in the maintainer's own backlog, tagged
+`#furmiculi`. This file holds only active work.
