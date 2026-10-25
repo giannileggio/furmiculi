@@ -192,6 +192,17 @@ pub fn has_changes(dir: &Path) -> Result<bool> {
     Ok(!git(dir, &["status", "--porcelain"])?.trim().is_empty())
 }
 
+/// The paths `git status --porcelain` reports as changed in `dir`, one
+/// `git` line each (` M src/lib.rs`, `?? new.txt`), so a caller can say what
+/// `on_finish` is about to commit.
+pub fn changed_paths(dir: &Path) -> Result<Vec<String>> {
+    Ok(git(dir, &["status", "--porcelain"])?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(String::from)
+        .collect())
+}
+
 /// Commits everything in `dir`. Returns false if there was nothing to commit.
 pub fn commit_all(dir: &Path, message: &str) -> Result<bool> {
     if !has_changes(dir)? {
@@ -423,6 +434,22 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("timed out"), "{err:#}");
+    }
+
+    #[test]
+    fn changed_paths_lists_what_a_commit_would_take() {
+        let repo = repo();
+        let p = repo.path();
+        std::fs::write(p.join("tracked.txt"), "a").unwrap();
+        git(p, &["add", "-A"]).unwrap();
+        git(p, &["commit", "-q", "-m", "tracked"]).unwrap();
+        std::fs::write(p.join("tracked.txt"), "b").unwrap();
+        std::fs::write(p.join("untracked.txt"), "c").unwrap();
+        let paths = changed_paths(p).unwrap();
+        assert_eq!(paths, [" M tracked.txt", "?? untracked.txt"]);
+        std::fs::remove_file(p.join("untracked.txt")).unwrap();
+        git(p, &["checkout", "--", "tracked.txt"]).unwrap();
+        assert!(changed_paths(p).unwrap().is_empty());
     }
 
     #[test]

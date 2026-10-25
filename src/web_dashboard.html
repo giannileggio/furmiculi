@@ -1435,7 +1435,10 @@ function renderTaskView(t) {
     t.branch ? ["Branch", `<span class="mono">${escapeHtml(t.branch)}</span>`] : null,
     ["Workspace", t.worktree
       ? `<span class="mono">${escapeHtml(t.worktree)}</span>`
-      : "the project folder itself (no separate worktree)"],
+      : t.worktree_off
+        ? "the project folder itself (no separate worktree) — the agent edits it, " +
+          "and the commit at the end takes everything in it"
+        : "the project folder itself (no separate worktree)"],
     ["Agent", t.agent ? marked(t.agent) : "-"],
     ["Model", t.model === "-"
       ? `<span title="${escapeHtml(MODEL_SOURCE_HELP.none)}">-</span>`

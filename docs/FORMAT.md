@@ -59,7 +59,7 @@ Add a regression test.
 | `id`           | yes      | —                 | `a-z`, `0-9`, `-`, max 64 chars. Must equal the file name without `.md`. |
 | `repo`         | yes      | —                 | Folder the task runs in: absolute, or starting with `~`. |
 | `branch`       | no       | `furmi/<id>` if `worktree` | Branch to work on. |
-| `worktree`     | no       | `true`            | Run in a dedicated git worktree for the branch. |
+| `worktree`     | no       | `true`            | Run in a dedicated git worktree for the branch. `false` runs in your own checkout — see below. |
 | `agent`        | no       | chosen at `furmi init` | Name of an agent in `config.toml` `[agents.*]`. |
 | `model`        | no       | the agent's own   | Model id, in the form that agent's CLI expects. |
 | `mode`         | no       | `headless`        | `headless`: non-interactive, exit code decides the outcome. `interactive`: a live session that finishes with `furmi done` / `furmi fail`. |
@@ -148,7 +148,11 @@ long specifications in a file in the repo and point the prompt at it.
 
 With `worktree: true`, an existing `worktrees/<id>` is reused only if it's
 really a worktree of the task's repo. With `worktree: false`, `furmi` refuses to
-switch the repo's branch while it has uncommitted changes.
+switch the repo's branch while it has uncommitted changes — and then runs in
+that checkout itself: the agent edits the files you may be editing, and its
+`on_finish` commits everything in the checkout under the task's message,
+including edits you made there meanwhile. Avoid `worktree: false` for long or
+unattended tasks; the runner logs a warning and the paths it commits.
 
 The agent runs with `FURMI_HOME` and `FURMI_TASK_ID` set.
 

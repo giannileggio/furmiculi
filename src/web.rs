@@ -1668,6 +1668,7 @@ fn task_view_json(home: &Home, id: &str) -> Result<String> {
         "repo": contract_tilde(&eff.repo),
         "branch": task.effective_branch(&config),
         "worktree": eff.worktree.then(|| contract_tilde(&worktree)).filter(|_| worktree.exists()),
+        "worktree_off": !eff.worktree,
         "agent": eff.agent,
         "model": model,
         "model_source": model_source,
