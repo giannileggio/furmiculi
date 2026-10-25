@@ -15,6 +15,6 @@ so the list stays short.
 
 ## Ideas (unscheduled)
 
-- [ ] Cost reporting beyond the daily budget: per-repo or per-schedule totals in
-      `furmi status`.
-- [ ] More built-in agent presets as other CLI agents appear.
+Not tracked here. Feature ideas for furmi live in the vault kanban backlog so
+there is one list to review: `~/Projects/mindforge/01-Planning/kanban.md`,
+tagged `#furmiculi`. This file holds only active work.
