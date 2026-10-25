@@ -1,6 +1,6 @@
 [package]
 name = "furmiculi"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # Let-chains (1.88) and File::lock (1.89) are used; CI checks this version.
 rust-version = "1.89"
