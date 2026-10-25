@@ -290,9 +290,9 @@ pub fn task_rows(config: &Config, tasks: &[Task]) -> Vec<Vec<String>> {
             when,
             contract_tilde(&eff.repo),
             t.effective_branch(config).unwrap_or_else(|| "-".into()),
-            match (eff.agent, eff.model) {
-                (Some(a), Some(m)) => format!("{a}/{m}"),
-                (Some(a), None) => a,
+            match (eff.agent, t.model_in_use(config).0) {
+                (Some(a), m) if m != "-" => format!("{a}/{m}"),
+                (Some(a), _) => a,
                 (None, _) => "-".into(),
             },
             fmt_tokens(t.tokens_in, t.tokens_out),

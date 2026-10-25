@@ -50,7 +50,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 use crate::cmd::{NewTask, create_task, md_files};
 use crate::config::{Config, Web, on_path, set_web_config};
 use crate::control;
-use crate::edit::{self, ScheduleEdit, Start, TaskEdit};
+use crate::edit::{self, ScheduleEdit, Start, TaskEdit, on_finish_str};
 use crate::home::{Home, contract_tilde, expand_tilde};
 use crate::run::{self, RunnerState};
 use crate::schedule::Schedule;
@@ -1165,11 +1165,24 @@ fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply {
                 Err(e) => json_reply(500, json_err(&e)),
             },
             ["api", "tasks", id] => detail_reply(edit::task_detail(home, id)),
+            ["api", "tasks", id, "view"] => match task_view_json(home, id) {
+                Ok(json) => json_reply(200, json),
+                Err(e) => json_reply(404, json_err(&e)),
+            },
             ["api", "schedules", id] => detail_reply(edit::schedule_detail(home, id)),
             ["api", "tasks", id, "logs"] => {
                 let attempt = query_param(url, "attempt").and_then(|v| v.parse().ok());
                 match control::logs(home, id, attempt) {
-                    Ok(log) => json_reply(200, json_log(&log)),
+                    Ok(log) => {
+                        // `?tail=<bytes>`: the end of a long log, for the live
+                        // view, instead of re-reading all of it every poll.
+                        let (log, cut) = match query_param(url, "tail").and_then(|v| v.parse().ok())
+                        {
+                            Some(limit) => tail_of(&log, limit),
+                            None => (log, false),
+                        };
+                        json_reply(200, json_log_with(&log, cut))
+                    }
                     Err(e) => json_reply(404, json_err(&e)),
                 }
             }
@@ -1562,9 +1575,78 @@ fn json_err(e: &anyhow::Error) -> String {
         .unwrap_or_else(|_| "{\"error\":\"internal error\"}".to_string())
 }
 
-fn json_log(log: &str) -> String {
-    serde_json::to_string(&serde_json::json!({ "log": log }))
-        .unwrap_or_else(|_| "{\"log\":\"\"}".to_string())
+/// A log reply, saying when only its end is there.
+fn json_log_with(log: &str, truncated: bool) -> String {
+    serde_json::to_string(&serde_json::json!({ "log": log, "truncated": truncated }))
+        .unwrap_or_else(|_| "{\"log\":\"\",\"truncated\":false}".to_string())
+}
+
+/// The last `limit` bytes of a log, starting at a line boundary, and whether
+/// anything was cut off.
+///
+/// A live log is re-read while the modal is open, and a runaway agent's log runs
+/// to 64 MB — so the page asks for the tail of it rather than for the whole
+/// thing every couple of seconds.
+fn tail_of(text: &str, limit: usize) -> (String, bool) {
+    if text.len() <= limit {
+        return (text.to_string(), false);
+    }
+    let mut start = text.len() - limit;
+    // Never split a multi-byte character (agent output has plenty), then drop
+    // the half line the cut leaves behind.
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    let cut = &text[start..];
+    let cut = cut.split_once('\n').map(|(_, rest)| rest).unwrap_or(cut);
+    (cut.to_string(), true)
+}
+
+/// Everything the page's task view shows, for a task in any state.
+///
+/// `/api/tasks/<id>` is the *edit* view: it refuses anything that has already
+/// started, because editing it would be a lie. This one only reads.
+fn task_view_json(home: &Home, id: &str) -> Result<String> {
+    crate::spec::validate_id(id).map_err(anyhow::Error::msg)?;
+    let config = Config::load(&home.config_path()).unwrap_or_default();
+    let task = [home.tasks(), home.archive()]
+        .iter()
+        .map(|dir| dir.join(format!("{id}.md")))
+        .find(|path| path.exists())
+        .with_context(|| format!("no task `{id}`"))
+        .and_then(|path| Task::load(&path))?;
+    let eff = task.spec.resolve(&config.defaults);
+    let worktree = home.worktrees().join(&task.id);
+    let (model, model_source) = task.model_in_use(&config);
+    let view = serde_json::json!({
+        "id": task.id,
+        // The whole prompt: this is the one place the page shows it.
+        "prompt": task.prompt,
+        "status": task.status.as_str(),
+        "repo": contract_tilde(&eff.repo),
+        "branch": task.effective_branch(&config),
+        "worktree": eff.worktree.then(|| contract_tilde(&worktree)).filter(|_| worktree.exists()),
+        "agent": eff.agent,
+        "model": model,
+        "model_source": model_source,
+        "on_finish": on_finish_str(eff.on_finish),
+        "mode": match eff.mode {
+            crate::spec::Mode::Headless => "headless",
+            crate::spec::Mode::Interactive => "interactive",
+        },
+        "created_at": task.created_at.map(fmt_time),
+        "scheduled_at": task.scheduled_at.map(fmt_time),
+        "started_at": task.started_at.map(fmt_time),
+        "finished_at": task.finished_at.map(fmt_time),
+        "attempts": task.attempts,
+        "interruptions": task.interruptions,
+        "exit_code": task.exit_code,
+        "error": task.error,
+        "tokens_in": task.tokens_in,
+        "tokens_out": task.tokens_out,
+        "cost_usd": task.cost_usd,
+    });
+    Ok(view.to_string())
 }
 
 fn query_param<'a>(url: &'a str, key: &str) -> Option<&'a str> {
@@ -1593,11 +1675,20 @@ struct Row {
     repo: String,
     branch: String,
     agent: String,
-    /// The model a task would run with: its own, else the agent's default, and
-    /// `"-"` when nothing says. Its own field rather than glued onto the agent
-    /// because real model names are long (`hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:\
-    /// UD-Q4_K_XL`).
+    /// The model this task is about: what it actually ran with once it has
+    /// run (its own `model_used`, from the agent's output), else the model it
+    /// pins, else the one its agent is configured with. `"-"` when nothing
+    /// says, e.g. an agent on its own default. Its own field rather than glued
+    /// onto the agent because real model names are long (`hf.co/unsloth/\
+    /// Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL`).
     model: String,
+    /// Which of those `model` came from, so the page can say where it got it:
+    /// `used` (the agent reported it), `task` (the task pins it), `agent` (the
+    /// agent's configured default) or `none`.
+    model_source: &'static str,
+    /// What the task asks for, on one line and short: enough to search it and
+    /// to tell two tasks in the same repo apart without opening either.
+    summary: String,
     /// Why a failed (or otherwise unfinished) task ended up that way.
     error: Option<String>,
 }
@@ -1802,6 +1893,7 @@ fn to_row(t: &Task, config: &Config) -> Row {
         (Some(at), _, _) | (None, Some(at), _) | (None, None, Some(at)) => Some(at),
         (None, None, None) => None,
     };
+    let (model, model_source) = t.model_in_use(config);
     Row {
         id: t.id.clone(),
         status: t.status.as_str(),
@@ -1809,10 +1901,29 @@ fn to_row(t: &Task, config: &Config) -> Row {
         when_at: at.map(|at| at.to_rfc3339()),
         repo: contract_tilde(&eff.repo),
         branch: t.effective_branch(config).unwrap_or_else(|| "-".into()),
-        agent: eff.agent.unwrap_or_else(|| "-".into()),
-        model: eff.model.unwrap_or_else(|| "-".into()),
+        agent: eff.agent.clone().unwrap_or_else(|| "-".into()),
+        summary: summary_of(&t.prompt),
+        model,
+        model_source,
         error: t.error.clone().filter(|e| !e.trim().is_empty()),
     }
+}
+
+/// A task's prompt on one line, cut short: the first non-empty line of it,
+/// which for a task written like a message is the ask.
+fn summary_of(prompt: &str) -> String {
+    let line = prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let line = line.trim_start_matches(['#', '-', '*', '>', ' ']);
+    let mut summary: String = line.chars().take(120).collect();
+    if summary.len() < line.len() {
+        summary = summary.trim_end().to_string();
+        summary.push('…');
+    }
+    summary
 }
 
 fn fmt_time(t: chrono::DateTime<chrono::FixedOffset>) -> String {
@@ -2167,6 +2278,65 @@ mod tests {
     }
 
     #[test]
+    fn the_model_column_names_what_ran_and_says_where_it_got_the_name() {
+        let spec = TaskSpec {
+            repo: "/tmp".into(),
+            branch: None,
+            worktree: None,
+            agent: None,
+            model: None,
+            mode: None,
+            on_finish: None,
+            retries: None,
+            retry_delay: None,
+            timeout: None,
+        };
+        let mut task = Task::new("t".into(), spec, "do it".into());
+        let mut config = Config::default();
+
+        // Nothing anywhere: nothing to name.
+        assert_eq!(to_row(&task, &config).model, "-");
+        assert_eq!(to_row(&task, &config).model_source, "none");
+
+        // The agent's configured model is the answer when the task pins none.
+        config.agents.insert(
+            "pi".into(),
+            crate::config::Agent {
+                headless: Vec::new(),
+                interactive: Vec::new(),
+                model_args: Vec::new(),
+                model: Some("agent/default".into()),
+            },
+        );
+        config.defaults.agent = Some("pi".into());
+        let row = to_row(&task, &config);
+        assert_eq!(row.model, "agent/default");
+        assert_eq!(row.model_source, "agent");
+
+        // A task that pins one says so, overriding the agent's.
+        task.spec.model = Some("pinned/model".into());
+        let row = to_row(&task, &config);
+        assert_eq!(row.model, "pinned/model");
+        assert_eq!(row.model_source, "task");
+
+        // Still waiting: what it *will* run with is the pinned model, even if
+        // an earlier attempt reported its own.
+        task.model_used = Some("reported/model".into());
+        assert_eq!(to_row(&task, &config).model, "pinned/model");
+
+        // Finished: the agent's own answer is the truth, model_used wins.
+        task.status = Status::Done;
+        task.finished_at = Some(now());
+        let row = to_row(&task, &config);
+        assert_eq!(row.model, "reported/model");
+        assert_eq!(row.model_source, "used");
+
+        // A finished task with no report of its own falls back to the pin.
+        task.model_used = None;
+        assert_eq!(to_row(&task, &config).model, "pinned/model");
+    }
+
+    #[test]
     fn tokens_are_random_hex() {
         let (a, b) = (random_token().unwrap(), random_token().unwrap());
         assert_eq!(a.len(), 32);
@@ -2375,8 +2545,24 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&err).unwrap();
         assert_eq!(v["error"], "boom");
 
-        let log = json_log("line one\nline two");
+        let log = json_log_with("line one\nline two", false);
         let v: serde_json::Value = serde_json::from_str(&log).unwrap();
         assert_eq!(v["log"], "line one\nline two");
+        assert_eq!(v["truncated"], false);
+
+        let long = "a".repeat(100) + "," + &"b".repeat(100);
+        let (tail, cut) = tail_of(&long, 100);
+        assert!(cut);
+        assert!(long.ends_with(&tail));
+        assert!(!tail.contains('\n'), "a cut log starts at a line");
+        assert_eq!(tail.len(), 100);
+        // Nothing to cut: the whole thing comes back untouched.
+        assert_eq!(tail_of("short", 100), ("short".to_string(), false));
+        // A cut inside a multi-byte character moves forward to a whole one.
+        let wide = format!("{}\n{}", "é".repeat(60), "ü".repeat(60));
+        let (tail, cut) = tail_of(&wide, 61);
+        assert!(cut);
+        assert!(!tail.contains('\u{fffd}'));
+        assert!("éü".contains(tail.chars().next().unwrap()));
     }
 }

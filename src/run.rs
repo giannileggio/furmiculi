@@ -394,7 +394,7 @@ fn usage_file_for(status_file: &Path) -> PathBuf {
 ///   when the run failed.
 ///
 /// Any other agent (plain text, or nothing printed yet) reports nothing.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct Usage {
     #[serde(skip_serializing_if = "Option::is_none")]
     tokens_in: Option<u64>,
@@ -402,6 +402,11 @@ struct Usage {
     tokens_out: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cost_usd: Option<f64>,
+    /// The model the agent said it ran with (`provider/model` when it names a
+    /// provider too). A task that pins no model still runs with one, and only
+    /// the agent's own output knows which.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
 }
 
 /// What one attempt's headless stdout said: the usage it reported and, when
@@ -457,7 +462,7 @@ impl Stream {
             return;
         }
         if let Some(usage) = Usage::from_pi(message) {
-            self.usage = Some(match self.usage {
+            self.usage = Some(match self.usage.take() {
                 Some(total) => total.add(usage),
                 None => usage,
             });
@@ -482,10 +487,15 @@ impl Usage {
             .get("total_cost_usd")
             .or_else(|| value.get("cost_usd"))
             .and_then(serde_json::Value::as_f64);
+        let model = value
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
         Some(Usage {
             tokens_in,
             tokens_out,
             cost_usd,
+            model,
         })
         .filter(Usage::reported)
     }
@@ -493,38 +503,63 @@ impl Usage {
     /// Usage as one of pi's assistant messages reports it: `input`, `output`,
     /// the cache counters, and a `cost.total`.
     fn from_pi(message: &serde_json::Value) -> Option<Usage> {
-        let usage = message.get("usage")?;
-        let count = |key: &str| usage.get(key).and_then(serde_json::Value::as_u64);
+        // `usage` can be missing (a message cut short before it reported any),
+        // but the model it names is still worth keeping.
+        let usage = message.get("usage");
+        let count = |key: &str| {
+            usage
+                .and_then(|u| u.get(key))
+                .and_then(serde_json::Value::as_u64)
+        };
         let tokens_in = count("input")
             .map(|n| n + count("cacheRead").unwrap_or(0) + count("cacheWrite").unwrap_or(0));
         let tokens_out = count("output");
         let cost_usd = usage
-            .get("cost")
+            .and_then(|u| u.get("cost"))
             .and_then(|cost| cost.get("total"))
             .and_then(serde_json::Value::as_f64);
+        // pi names the model on every assistant message, and the provider
+        // alongside it: the same `provider/model` a task's `model:` field
+        // takes, so the two read alike.
+        let model = message
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .map(
+                |model| match message.get("provider").and_then(serde_json::Value::as_str) {
+                    Some(provider) => format!("{provider}/{model}"),
+                    None => model.to_string(),
+                },
+            );
         Some(Usage {
             tokens_in,
             tokens_out,
             cost_usd,
+            model,
         })
         .filter(Usage::reported)
     }
 
-    /// Did anything in here report a number worth writing down?
+    /// Did anything in here report something worth writing down?
     fn reported(&self) -> bool {
-        self.tokens_in.is_some() || self.tokens_out.is_some() || self.cost_usd.is_some()
+        self.tokens_in.is_some()
+            || self.tokens_out.is_some()
+            || self.cost_usd.is_some()
+            || self.model.is_some()
     }
 
-    /// One turn plus another, field by field.
+    /// One turn plus another, field by field. The model isn't a total: the
+    /// first answer stands (a run that switches model mid-way still ran as the
+    /// one it started with, and a broken retry reports nothing at all).
     fn add(self, other: Usage) -> Usage {
         Usage {
             tokens_in: plus(self.tokens_in, other.tokens_in),
             tokens_out: plus(self.tokens_out, other.tokens_out),
             cost_usd: plus(self.cost_usd, other.cost_usd),
+            model: self.model.or(other.model),
         }
     }
 
-    fn to_json(self) -> String {
+    fn to_json(&self) -> String {
         serde_json::to_string(&self).expect("Usage always serializes")
     }
 }
@@ -757,6 +792,7 @@ fn poll_running(
             && let Some(usage) = read_usage(&usage_file(home, &task.id, task.attempts))
         {
             task.add_usage(usage.tokens_in, usage.tokens_out, usage.cost_usd);
+            task.set_model_used(usage.model.as_deref());
         }
         let mut stop_agent = false;
         let mut outcome = match (exit, pane) {
@@ -1612,13 +1648,66 @@ mod tests {
 
     #[test]
     fn parses_claude_code_usage() {
-        let stdout = r#"{"type":"result","total_cost_usd":0.0512,"usage":{"input_tokens":120,"cache_creation_input_tokens":30,"cache_read_input_tokens":500,"output_tokens":80}}"#;
+        let stdout = r#"{"type":"result","total_cost_usd":0.0512,"model":"claude-sonnet-4-5-20250929","usage":{"input_tokens":120,"cache_creation_input_tokens":30,"cache_read_input_tokens":500,"output_tokens":80}}"#;
         let stream = Stream::parse(stdout.as_bytes());
         let usage = stream.usage.unwrap();
         assert_eq!(usage.tokens_in, Some(120 + 30 + 500));
         assert_eq!(usage.tokens_out, Some(80));
         assert_eq!(usage.cost_usd, Some(0.0512));
+        assert_eq!(usage.model.as_deref(), Some("claude-sonnet-4-5-20250929"));
         assert_eq!(stream.error, None);
+    }
+
+    #[test]
+    fn records_the_model_a_pi_stream_says_it_ran_with() {
+        // A task that pins no `model` still runs with one, and pi's assistant
+        // messages are the only place that says which.
+        let stdout = [
+            r#"{"type":"message_end","message":{"role":"assistant","provider":"opencode-go","model":"deepseek-v4.1-flash","usage":{"input":10}}}"#,
+            // A second turn can name a different model; the first one is the
+            // one the run started with.
+            r#"{"type":"message_end","message":{"role":"assistant","provider":"opencode-go","model":"something-else","usage":{"input":10}}}"#,
+        ]
+        .join("\n");
+        let usage = Stream::parse(stdout.as_bytes()).usage.unwrap();
+        assert_eq!(usage.tokens_in, Some(20));
+        assert_eq!(
+            usage.model.as_deref(),
+            Some("opencode-go/deepseek-v4.1-flash")
+        );
+
+        // A model with no provider named is kept as it came.
+        let bare = r#"{"type":"message_end","message":{"role":"assistant","model":"bare","usage":{"input":1}}}"#;
+        assert_eq!(
+            Stream::parse(bare.as_bytes()).usage.unwrap().model,
+            Some("bare".into())
+        );
+
+        // A model on its own, with no usage numbers, is still worth writing
+        // down: the run's model is the whole point.
+        let model_only = r#"{"type":"message_end","message":{"role":"assistant","model":"m"}}"#;
+        let usage = Stream::parse(model_only.as_bytes()).usage.unwrap();
+        assert_eq!(usage.tokens_in, None);
+        assert_eq!(usage.model, Some("m".into()));
+    }
+
+    #[test]
+    fn the_first_model_a_stream_reports_wins_over_a_later_one() {
+        let usage = Usage {
+            model: Some("first".into()),
+            ..Usage::default()
+        };
+        let later = Usage {
+            model: Some("second".into()),
+            tokens_in: Some(5),
+            ..Usage::default()
+        };
+        let total = usage.add(later);
+        assert_eq!(total.model.as_deref(), Some("first"));
+        assert_eq!(total.tokens_in, Some(5));
+        // Nothing to override it with: the first answer stands.
+        let total = total.add(Usage::default());
+        assert_eq!(total.model.as_deref(), Some("first"));
     }
 
     #[test]
@@ -1694,6 +1783,7 @@ mod tests {
             tokens_in: Some(650),
             tokens_out: Some(80),
             cost_usd: Some(0.0512),
+            model: Some("opencode-go/deepseek-v4.1-flash".into()),
         };
         let read_back: Usage = serde_json::from_str(&usage.to_json()).unwrap();
         assert_eq!(usage, read_back);
