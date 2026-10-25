@@ -22,7 +22,10 @@ use crate::tmux;
 /// one to come up, before giving up.
 const RUNNER_WAIT: Duration = Duration::from_secs(10);
 
-fn wait_for(deadline: Duration, mut condition: impl FnMut() -> bool) -> bool {
+/// How long `furmi stop` waits for a dashboard to exit before giving up.
+const DASHBOARD_WAIT: Duration = Duration::from_secs(10);
+
+pub(crate) fn wait_for(deadline: Duration, mut condition: impl FnMut() -> bool) -> bool {
     let end = Instant::now() + deadline;
     loop {
         if condition() {
@@ -112,6 +115,30 @@ pub fn stop_runner(home: &Home) -> Result<Option<u32>> {
             "the runner (pid {pid}) is still running {}s after being asked to stop; \
              `kill -9 {pid}` will force it",
             RUNNER_WAIT.as_secs()
+        );
+    }
+    Ok(Some(pid))
+}
+
+/// Asks the dashboard serving this home to stop (SIGTERM, the same signal a
+/// Ctrl-C sends it) and waits for its record to go. Returns its pid, or `None`
+/// if none was serving. A `furmi start` dashboard stops its runner on the way
+/// out, so there may be nothing left for `stop_runner` to do afterwards.
+pub fn stop_dashboard(home: &Home) -> Result<Option<u32>> {
+    let Some((pid, addr)) = home.dashboard() else {
+        return Ok(None);
+    };
+    let pid_t = i32::try_from(pid).context("the dashboard's pid is out of range")?;
+    // SAFETY: plain kill(2) on a pid read from the lock the dashboard holds.
+    if unsafe { libc::kill(pid_t, libc::SIGTERM) } != 0 {
+        let err = std::io::Error::last_os_error();
+        bail!("couldn't stop the dashboard on http://{addr} (pid {pid}): {err}");
+    }
+    if !wait_for(DASHBOARD_WAIT, || home.dashboard().is_none()) {
+        bail!(
+            "the dashboard (pid {pid}) is still running {}s after being asked to stop; \
+             `kill -9 {pid}` will force it",
+            DASHBOARD_WAIT.as_secs()
         );
     }
     Ok(Some(pid))

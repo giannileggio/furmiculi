@@ -84,6 +84,12 @@ impl Home {
         self.root.join("runner.json")
     }
 
+    /// Where a backgrounded dashboard (`furmi start -d`, `furmi web -d`)
+    /// appends its output: it has no terminal to print to.
+    pub fn web_log(&self) -> PathBuf {
+        self.root.join("web.log")
+    }
+
     /// Where a serving dashboard records itself (pid and address), under a
     /// lock that dies with the process.
     pub fn web_lock(&self) -> PathBuf {

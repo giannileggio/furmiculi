@@ -18,6 +18,23 @@ struct Env {
 /// The tmux session tasks run in (see the config `Env::new` writes).
 const SESSION: &str = "furmit";
 
+/// The binary under test. `CARGO_BIN_EXE_furmi` is baked in at compile time,
+/// and cargo doesn't rebuild a test just because that path changed, so a test
+/// binary built before the checkout moved (it did: see docs/RENAME.md) spawns
+/// a path that no longer exists. Fall back to the `furmi` cargo just built
+/// next to the deps folder, i.e. `target/debug/deps/<test>` → `target/debug`.
+fn furmi_bin() -> PathBuf {
+    let baked = PathBuf::from(env!("CARGO_BIN_EXE_furmi"));
+    if baked.exists() {
+        return baked;
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("furmi")))
+        .filter(|path| path.exists())
+        .unwrap_or(baked)
+}
+
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .args(args)
@@ -63,7 +80,7 @@ impl Env {
     }
 
     fn furmi(&self) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_furmi"));
+        let mut cmd = Command::new(furmi_bin());
         cmd.env("HOME", self.home.path())
             .env("TMUX_TMPDIR", self.tmux.path())
             .env_remove("TMUX")

@@ -99,14 +99,16 @@ enum Command {
     /// deleted. With --archive, also deletes the archived task file and its
     /// logs, once its worktree is gone.
     Clean(clean::CleanArgs),
-    /// Serve a dashboard over the queue (with actions), until interrupted.
+    /// Serve a dashboard over the queue (with actions), until interrupted
+    /// (or in the background, with --detach).
     ///
     /// The first run asks once where to serve from — your tailnet, or just
     /// this machine — and saves the answer in config.toml; `--setup` asks
     /// again.
     Web(web::WebArgs),
     /// Run the queue and serve the dashboard together: the one-command way to
-    /// get going. Opens the dashboard in your browser.
+    /// get going. Opens the dashboard in your browser. With --detach it runs
+    /// in the background and hands the terminal back.
     Start(web::WebArgs),
     /// Show which coding agents are installed, how to get the others, and
     /// pick the default (`furmi agents use <name>`).
@@ -114,8 +116,9 @@ enum Command {
         #[command(subcommand)]
         action: Option<AgentsAction>,
     },
-    /// Stop the runner that `furmi run` or `furmi start` began. Tasks already
-    /// running keep going; start the runner again to resume the queue.
+    /// Stop the dashboard and the runner, whichever of `furmi start`,
+    /// `furmi web` and `furmi run` began them. Tasks already running keep
+    /// going; start again to resume the queue.
     Stop,
     /// Show whether the runner is alive, the queue, budget and failing schedules.
     Status,
@@ -203,12 +206,25 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             None => cmd::agents(&home)?,
             Some(AgentsAction::Use { name }) => cmd::use_agent(&home, &name)?,
         },
-        Command::Stop => match control::stop_runner(&home)? {
-            Some(pid) => {
-                println!("Stopped the runner (pid {pid}). Tasks already running keep going.")
+        Command::Stop => {
+            // A `furmi start` dashboard stops the runner it began as it goes,
+            // so ask for the runner only if there was one to begin with.
+            let had_runner = home.runner_alive();
+            match control::stop_dashboard(&home)? {
+                Some(pid) => println!("Stopped the dashboard (pid {pid})."),
+                None => println!("No dashboard is running."),
             }
-            None => println!("The runner isn't running."),
-        },
+            if had_runner {
+                match control::stop_runner(&home)? {
+                    Some(pid) => println!(
+                        "Stopped the runner (pid {pid}). Tasks already running keep going."
+                    ),
+                    None => println!("The runner stopped with the dashboard."),
+                }
+            } else {
+                println!("The runner isn't running.");
+            }
+        }
         Command::Doctor => return doctor::doctor(&home),
         Command::Service { manager } => doctor::service(&home, manager)?,
         Command::Exec { id, status_file } => return run::exec(&home, &id, &status_file),

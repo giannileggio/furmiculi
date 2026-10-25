@@ -53,6 +53,13 @@ pub fn status(home: &Home) -> Result<()> {
         );
     }
 
+    match home.dashboard() {
+        Some((pid, addr)) => println!("dashboard  running (pid {pid}) on http://{addr}"),
+        None => println!(
+            "dashboard  not running: `furmi start` serves it, or `furmi start -d` in the background"
+        ),
+    }
+
     let load = |dir: std::path::PathBuf| -> Vec<Task> {
         md_files(&dir)
             .unwrap_or_default()

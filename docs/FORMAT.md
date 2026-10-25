@@ -237,6 +237,14 @@ when the answer is "this machine only", so it never asks twice; `furmi web
 --setup` asks again. Flags override the table per setting. A table without
 `configured` (hand-written, say) is never asked about.
 
+With `-d`/`--detach` (`furmi start -d`, `furmi web -d`) the dashboard serves
+from its own process group, logging to `web.log` in the data folder, so the
+shell that started it can close: everything the foreground run would print is
+printed before the command returns. `furmi stop` stops it (and the runner,
+when `furmi start` began one), and `furmi status` says whether one is serving
+and where. For a dashboard that also survives reboots, `furmi service
+systemd|launchd` prints units that do that.
+
 ### Token/cost usage
 
 `furmi` records what a headless run's stdout reports as `tokens_in`,

@@ -33,7 +33,7 @@ cd ~/Projects/myapp
 furmi add "Fix the redirect loop after login"
 
 # 3. run it (starts the runner and opens the dashboard)
-furmi start
+furmi start                 # add -d to leave it in the background
 ```
 
 That's all: the first command you run sets up `~/.furmiculi` and picks the
@@ -103,7 +103,8 @@ furmi add --repo ~/Projects/myapp --on-finish pr --in 2h \
 echo "Update deps and run tests" | furmi add --repo ~/Projects/myapp --agent codex
 
 furmi start             # the runner and the dashboard together (--no-open: no browser)
-furmi stop              # stop the runner (work already underway keeps going in tmux)
+furmi start -d          # ...in the background: prints the URL and returns
+furmi stop              # stop the dashboard and the runner (work already underway keeps going in tmux)
 furmi agents            # which coding agents are installed, and how to install the rest
 furmi agents use codex   # make one the default for new tasks
 
@@ -135,6 +136,7 @@ furmi doctor            # check tmux/git/agents/config/task files; non-zero on p
 furmi service systemd   # units that keep the runner and the dashboard up (or: launchd)
 
 furmi web               # dashboard at http://127.0.0.1:7433, until Ctrl-C
+furmi web -d            # ...in the background, like `furmi start -d`
 furmi web --setup       # change where it serves (asked once anyway, see below)
 furmi web --port 8080   # a different port
 ```
@@ -181,7 +183,10 @@ What `furmi` does so that a bad day doesn't lose work:
 refreshed every couple of seconds) — a Sidekiq-style view of the same state
 `furmi ls` prints. **+ New task** queues work from a form (what to do, which
 project, when to start, what to do with the result), calling the same code as
-`furmi add`; `furmi start` is `furmi web` plus a runner that stops with it. If the runner is off,
+`furmi add`; `furmi start` is `furmi web` plus a runner that stops with it.
+Either one with `-d`/`--detach` keeps serving in the background (it logs to
+`~/.furmiculi/web.log`) and gives you the prompt back, so closing the terminal
+changes nothing; `furmi stop` ends both. If the runner is off,
 a banner says so with a **Start the runner** button (that runner keeps going
 after you close the dashboard; `furmi stop` or the **stop** link next to
 "runner: on" ends it), and **Setup** lists the coding agents (installed or not,

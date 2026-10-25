@@ -14,12 +14,29 @@ use std::process::{Command, Output, Stdio};
 /// the global-skill links `furmi init` may touch land inside the temp dir
 /// instead of the real user home.
 fn furmi(home: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_furmi"));
+    let mut cmd = Command::new(furmi_bin());
     cmd.env("HOME", home)
         .arg("--home")
         .arg(home)
         .stdin(Stdio::null());
     cmd
+}
+
+/// The binary under test. `CARGO_BIN_EXE_furmi` is baked in at compile time,
+/// and cargo doesn't rebuild a test just because that path changed, so a test
+/// binary built before the checkout moved (it did: see docs/RENAME.md) spawns
+/// a path that no longer exists. Fall back to the `furmi` cargo just built
+/// next to the deps folder, i.e. `target/debug/deps/<test>` → `target/debug`.
+fn furmi_bin() -> std::path::PathBuf {
+    let baked = std::path::PathBuf::from(env!("CARGO_BIN_EXE_furmi"));
+    if baked.exists() {
+        return baked;
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("furmi")))
+        .filter(|path| path.exists())
+        .unwrap_or(baked)
 }
 
 fn run(cmd: &mut Command) -> Output {
@@ -1174,6 +1191,39 @@ fn web_new_task_form_queues_a_task() {
 
     child.kill().unwrap();
     child.wait().unwrap();
+}
+
+#[test]
+fn start_detached_serves_in_the_background_until_stop() {
+    let home = tempfile::tempdir().unwrap();
+    init(home.path());
+
+    let port = 18348u16;
+    let port_arg = port.to_string();
+    let out = ok(run(
+        furmi(home.path()).args(["start", "--detach", "--port", &port_arg])
+    ));
+    let text = stdout(&out);
+    assert!(text.contains("Dashboard: http://127.0.0.1:18348"), "{text}");
+    assert!(text.contains("in the background"), "{text}");
+    assert!(text.contains("Runner started"), "{text}");
+
+    // The command has returned; the dashboard it left behind still answers.
+    assert!(http_get(port, "/api/state").contains("\"alive\":true"));
+    let status = wait_for_runner(home.path(), true);
+    assert!(status.contains("running (pid"), "{status}");
+    assert!(status.contains("dashboard  running (pid"), "{status}");
+
+    // A second one finds the first instead of stacking another.
+    let again = stdout(&ok(run(
+        furmi(home.path()).args(["start", "--detach", "--port", &port_arg])
+    )));
+    assert!(again.contains("already serving"), "{again}");
+
+    // `furmi stop` ends the dashboard and the runner it began.
+    let stopped = stdout(&ok(run(furmi(home.path()).arg("stop"))));
+    assert!(stopped.contains("Stopped the dashboard"), "{stopped}");
+    assert!(wait_for_runner(home.path(), false).contains("NOT running"));
 }
 
 #[test]
