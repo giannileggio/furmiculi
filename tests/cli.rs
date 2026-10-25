@@ -1227,6 +1227,33 @@ fn start_detached_serves_in_the_background_until_stop() {
 }
 
 #[test]
+fn start_detached_starts_the_runner_a_serving_dashboard_lacks() {
+    let home = tempfile::tempdir().unwrap();
+    init(home.path());
+
+    let port = 18349u16;
+    let port_arg = port.to_string();
+    // `furmi web` serves without a runner; `furmi start` on top of it is the
+    // natural next move, and used to say "already serving" and do nothing.
+    ok(run(
+        furmi(home.path()).args(["web", "--detach", "--port", &port_arg])
+    ));
+    assert!(wait_for_runner(home.path(), false).contains("NOT running"));
+
+    let again = stdout(&ok(run(
+        furmi(home.path()).args(["start", "--detach", "--port", &port_arg])
+    )));
+    assert!(again.contains("already serving"), "{again}");
+    assert!(again.contains("Runner started"), "{again}");
+
+    let status = wait_for_runner(home.path(), true);
+    assert!(status.contains("running (pid"), "{status}");
+
+    ok(run(furmi(home.path()).arg("stop")));
+    assert!(wait_for_runner(home.path(), false).contains("NOT running"));
+}
+
+#[test]
 fn start_runs_the_runner_and_the_dashboard_together() {
     let home = tempfile::tempdir().unwrap();
     init(home.path());

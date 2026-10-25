@@ -192,6 +192,12 @@ fn detach(home: &Home, with_runner: bool, args: WebArgs, serving: &Serving) -> R
             "A dashboard is already serving http://{served} (pid {pid}); \
              `furmi stop` stops it, `--replace` starts a new one."
         );
+        // That dashboard may be `furmi web`'s, or one whose runner was
+        // stopped since — either way the runner is the half `start` is here
+        // for, and no child of ours is going to spawn it.
+        if with_runner {
+            start_runner_here(home);
+        }
         return Ok(());
     }
     let exe = crate::exe::path().context("finding the furmi binary to background the dashboard")?;
@@ -273,6 +279,21 @@ fn detach(home: &Home, with_runner: bool, args: WebArgs, serving: &Serving) -> R
         open_browser(&format!("http://{addr}"));
     }
     Ok(())
+}
+
+/// Starts the runner for a `furmi start -d` that found a dashboard already
+/// serving, and says what happened: this is the process with the terminal, and
+/// the backgrounded child that would normally start the runner never ran.
+fn start_runner_here(home: &Home) {
+    let log = contract_tilde(&home.runner_log());
+    match control::start_runner(home) {
+        Ok(true) => println!("Runner started (it logs to {log})"),
+        Ok(false) => println!("The runner was already running (it logs to {log})."),
+        Err(e) => println!(
+            "The dashboard is serving, but the runner didn't start: {e:#}; \
+             see {log}"
+        ),
+    }
 }
 
 /// The last thing a backgrounded dashboard logged, for reporting why it
