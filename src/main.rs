@@ -15,6 +15,7 @@ mod skill;
 mod spec;
 mod task;
 mod tmux;
+mod update;
 mod update_check;
 mod watch;
 mod web;
@@ -122,6 +123,20 @@ enum Command {
     Stop,
     /// Show whether the runner is alive, the queue, budget and failing schedules.
     Status,
+    /// Install a new release over this one, keeping the same install.
+    ///
+    /// Only for installs made by the release installer, which is what leaves
+    /// the receipt this reads. `--check` says whether a newer release exists
+    /// without installing anything.
+    Update {
+        /// Say whether a newer release exists, and install nothing.
+        #[arg(long)]
+        check: bool,
+        /// Install this version instead of the latest, e.g. 0.4.2 (going back
+        /// to an earlier one works too).
+        #[arg(long, value_name = "VERSION")]
+        to: Option<String>,
+    },
     /// Check that tasks can run here: tools, config, agents, task files.
     Doctor,
     /// Print systemd or launchd units that keep `furmi run` and the dashboard
@@ -165,7 +180,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         cmd::welcome(&home)?;
         return Ok(ExitCode::SUCCESS);
     };
-    if !matches!(command, Command::Exec { .. }) {
+    // No point nagging about a new release in the command that installs one.
+    if !matches!(command, Command::Exec { .. } | Command::Update { .. }) {
         update_check::check(&home);
     }
     // Commands that make sense on a fresh machine set it up themselves.
@@ -225,6 +241,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 println!("The runner isn't running.");
             }
         }
+        Command::Update { check, to } => update::update(update::UpdateArgs { check, to })?,
         Command::Doctor => return doctor::doctor(&home),
         Command::Service { manager } => doctor::service(&home, manager)?,
         Command::Exec { id, status_file } => return run::exec(&home, &id, &status_file),

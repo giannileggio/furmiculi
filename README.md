@@ -54,7 +54,7 @@ to try next, and `furmi doctor` if something isn't running.
 
 ## Status
 
-Working now: `init`, `add`, `ls`, `validate`, `start`, `stop`, `agents`,
+Working now: `init`, `add`, `ls`, `validate`, `start`, `stop`, `agents`, `update`,
 `furmi run` (the runner and scheduler: tmux windows, git worktrees, retries,
 timeouts, `on_finish`), `done|fail|cancel|retry|attach`, `logs`, `clean`,
 `web` (a dashboard you can also act from, reachable from your other
@@ -90,10 +90,16 @@ The skill tells the agent to install `furmi` if it's missing. Running
 `furmi init` later refreshes the skill to match your installed version.
 
 Prebuilt binaries are published for Linux and macOS (x86_64 and arm64); the
-script above fetches the right one and puts `furmi` on your `PATH`. It also
-installs `furmiculi-update`, so `furmiculi-update` upgrades an existing
-install, and `furmi` itself prints a one-line notice when a newer version is
-out (set `FURMI_NO_UPDATE_CHECK=1` to turn that off).
+script above fetches the right one and puts `furmi` on your `PATH`. `furmi`
+then prints a one-line notice when a newer release is out (set
+`FURMI_NO_UPDATE_CHECK=1` to turn that off), and `furmi update` installs it.
+
+Upgrading only works for installs the installer made: it is what leaves the
+install receipt `furmi update` reads to find and replace this binary. A
+`cargo install` or a from-source build upgrades the way it was installed. The
+releases live in a private repository, so `furmi update` signs in with a
+`GITHUB_TOKEN` (or `GH_TOKEN`) when one is set, or with whatever `gh` is
+signed in as.
 
 Building from source instead:
 
@@ -137,6 +143,9 @@ furmi retry <id>        # requeue a failed/cancelled/needs_review task
 furmi clean             # remove worktrees of done tasks (-n: dry run)
 furmi clean --all --older-than 7d   # ...and of failed/cancelled ones, a week on
 furmi clean --archive --all --older-than 30d   # ...and their archived task files/logs
+
+furmi update            # install a new release over this one (--check: just ask)
+furmi update --to 0.4.1 # ...a specific version, back to an earlier one included
 
 furmi status            # is the runner alive? queue, spend, failing schedules
 furmi doctor            # check tmux/git/agents/config/task files; non-zero on problems

@@ -298,6 +298,34 @@ fn commands_that_need_existing_state_fail_clearly_before_init() {
 }
 
 #[test]
+fn update_refuses_to_replace_an_install_it_did_not_make() {
+    // No install receipt: this binary came from `cargo install` or a build, so
+    // there is no install to replace and nothing to compare versions against.
+    // The test's home has none, and neither may the environment point at one.
+    let home = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["update"],
+        vec!["update", "--check"],
+        vec!["update", "--to", "0.1.0"],
+    ] {
+        let out = failed(run(furmi(home.path())
+            .args(&args)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("AXOUPDATER_CONFIG_PATH")));
+        let err = stderr(&out);
+        assert!(
+            err.contains("wasn't installed by the release installer"),
+            "{}: {err}",
+            args.join(" ")
+        );
+        assert!(
+            err.contains("cargo install") && err.contains("/releases"),
+            "says what to do instead: {err}"
+        );
+    }
+}
+
+#[test]
 fn first_use_sets_everything_up() {
     let home = tempfile::tempdir().unwrap();
 
