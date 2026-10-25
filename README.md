@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <img src="assets/logo.png" alt="furmiculi" width="280">
+  </picture>
+</p>
+
 # furmiculi
 
 Queue and run coding-agent tasks defined as Markdown files.
