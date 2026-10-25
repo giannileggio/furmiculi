@@ -3,7 +3,6 @@ use std::time::{Duration, SystemTime};
 
 use crate::home::Home;
 
-const APP_NAME: &str = "furmiculi";
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 3600);
 const CHECK_TIMEOUT: Duration = Duration::from_millis(1500);
 
@@ -25,7 +24,7 @@ pub fn check(home: &Home) {
         // allows the same lint internally for the same reason.
         #[allow(clippy::result_large_err)]
         fn update_needed() -> axoupdater::AxoupdateResult<bool> {
-            axoupdater::AxoUpdater::new_for(APP_NAME)
+            crate::update::updater()
                 .load_receipt()?
                 .is_update_needed_sync()
         }
@@ -34,7 +33,7 @@ pub fn check(home: &Home) {
 
     if let Ok(true) = rx.recv_timeout(CHECK_TIMEOUT) {
         eprintln!(
-            "A new version of furmi is available. Run `furmiculi-update` to upgrade, or see \
+            "A new version of furmi is available. Run `furmi update` to install it, or see \
              https://github.com/giannileggio/furmiculi/releases."
         );
     }
