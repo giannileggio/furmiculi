@@ -375,6 +375,10 @@ cd e2e && npm ci && npx playwright install chromium
 npm test                    # FURMI_BIN=path/to/furmi to test another build
 ```
 
+See [e2e/README.md](e2e/README.md) for what those cover, how to add one, and
+what to do where there is no root to install the browser's system libraries
+(`scripts/e2e-deps.sh`).
+
 The browser tests start `furmi start`/`furmi web` for each test against a throwaway
 home, git repo and tmux server, with a stub agent that runs the prompt as a
 shell command, so they need `tmux` and `git` but no real coding agent and touch
