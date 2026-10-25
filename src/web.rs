@@ -162,7 +162,7 @@ pub fn serve(home: &Home, args: WebArgs) -> Result<()> {
     if args.detach {
         return detach(home, false, args, &serving);
     }
-    let server = bind(home, &serving, args.replace)?;
+    let (server, serving) = bind(home, &serving, args.replace)?;
     run_server(home, server, &serving, &args)
 }
 
@@ -174,7 +174,7 @@ pub fn start(home: &Home, args: WebArgs) -> Result<()> {
     if args.detach {
         return detach(home, true, args, &serving);
     }
-    let server = bind(home, &serving, args.replace)?;
+    let (server, serving) = bind(home, &serving, args.replace)?;
     let _runner = if home.runner_alive() {
         println!("The runner is already running.");
         None
@@ -349,7 +349,7 @@ fn child_args(args: &WebArgs) -> Vec<std::ffi::OsString> {
 /// How the dashboard listens. `remote` is a wide, headless-style bind:
 /// requests then have to prove themselves with a bearer token and an
 /// allowlisted `Host`, on top of the loopback-era checks.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Serving {
     addr: String,
     remote: bool,
@@ -364,6 +364,18 @@ struct Serving {
 }
 
 impl Serving {
+    /// This serving with the address the socket really got. A `:0` port (what
+    /// a caller that doesn't care which port it lands on asks for, so two of
+    /// them can run side by side) is only a request for a free port: the
+    /// placeholder has to be replaced by the real one before it is printed,
+    /// recorded in the lock file, or handed to a browser.
+    fn bound(&self, server: &Server) -> Serving {
+        Serving {
+            addr: real_addr(&self.addr, server),
+            ..self.clone()
+        }
+    }
+
     /// The URL a browser on another machine opens, for the first allowlisted
     /// host. `with_token` puts the secret in the query string: only do that
     /// on a terminal, never into a log file or the journal.
@@ -819,10 +831,31 @@ fn host_of(addr: &str) -> &str {
 /// Binds the dashboard. When something already holds the address, and it's
 /// this home's own dashboard, offer to stop it and take over (`--replace`, or
 /// a yes at the prompt); everything else keeps the original error.
-fn bind(home: &Home, serving: &Serving, replace: bool) -> Result<Server> {
+/// The address to report for a bound socket: `requested`, unless it asked for
+/// a port the OS picked (`:0`), in which case it is whatever the socket says.
+fn real_addr(requested: &str, server: &Server) -> String {
+    let port_is_placeholder = requested.rsplit_once(':').is_some_and(|(_, p)| p == "0");
+    if !port_is_placeholder {
+        return requested.to_string();
+    }
+    match server.server_addr().to_ip() {
+        Some(bound) => bound.to_string(),
+        // Not an IP socket (`ListenAddr` also covers unix sockets, which
+        // `Server::http` never makes): nothing better to say than this.
+        None => requested.to_string(),
+    }
+}
+
+/// Binds the address to serve, and returns what to serve it as: a `:0` port
+/// asks the OS for a free one, so the address the caller asked for is only a
+/// placeholder and the real one has to come back from the bound socket.
+fn bind(home: &Home, serving: &Serving, replace: bool) -> Result<(Server, Serving)> {
     let addr = &serving.addr;
     let busy = match Server::http(addr.as_str()) {
-        Ok(server) => return Ok(server),
+        Ok(server) => {
+            let bound = serving.bound(&server);
+            return Ok((server, bound));
+        }
         // `&*e`: the box derefs to the error it holds; a `&Box<dyn Error>`
         // wouldn't coerce, since `Box<dyn Error>` isn't itself `Error`.
         Err(e) if !address_in_use(&*e) => return Err(busy_error(addr, &e.to_string())),
@@ -851,7 +884,7 @@ fn bind(home: &Home, serving: &Serving, replace: bool) -> Result<Server> {
              address over with `furmi web --replace`"
         );
     }
-    stop_dashboard(pid, addr)?.map_or_else(
+    let server = stop_dashboard(pid, addr)?.map_or_else(
         || {
             Err(busy_error(
                 addr,
@@ -859,7 +892,9 @@ fn bind(home: &Home, serving: &Serving, replace: bool) -> Result<Server> {
             ))
         },
         Ok,
-    )
+    )?;
+    let bound = serving.bound(&server);
+    Ok((server, bound))
 }
 
 /// Whether the bind failed because something already holds the port.
@@ -2559,6 +2594,26 @@ mod tests {
         assert_eq!(cookie_value("furmi_token", TOKEN_COOKIE), None);
         assert_eq!(cookie_value("furmi_tokens=abc", TOKEN_COOKIE), None);
         assert_eq!(cookie_value("", TOKEN_COOKIE), None);
+    }
+
+    #[test]
+    fn a_port_zero_bind_reports_the_port_the_os_gave() {
+        // The e2e tests start one dashboard per test with `--port 0`, so the
+        // kernel picks a free port for each and two can never collide on one
+        // they merely guessed was free. That only works if the URL they read
+        // back carries the real port.
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let bound = real_addr("127.0.0.1:0", &server);
+        let port: u16 = bound.trim_start_matches("127.0.0.1:").parse().unwrap();
+        assert_ne!(port, 0);
+        assert_eq!(bound, server.server_addr().to_ip().unwrap().to_string());
+
+        // A port that was actually asked for is left exactly as asked, even
+        // when it is one the server would have chosen anyway: `--listen`
+        // names the host a browser uses, which is not always the IP bound.
+        let server = Server::http("127.0.0.1:0").unwrap();
+        assert_eq!(real_addr("box.tailnet:7433", &server), "box.tailnet:7433");
+        assert_eq!(real_addr("0.0.0.0:7433", &server), "0.0.0.0:7433");
     }
 
     #[test]

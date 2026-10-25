@@ -1,7 +1,6 @@
-import { test as base, expect, type Page } from "@playwright/test";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { test as base, expect, type Page, type TestInfo } from "@playwright/test";
+import { execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
-import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -24,29 +23,68 @@ export interface Forge {
   taskFile(id: string): string | undefined;
 }
 
-function freePort(): Promise<number> {
+/** Most of the dashboard's own output kept for a failure report. */
+const OUTPUT_KEEP = 64 * 1024;
+
+/** What the dashboard printed, trimmed to the last `OUTPUT_KEEP` bytes. */
+type Output = { text: string };
+
+/**
+ * Waits until the dashboard says where it is serving.
+ *
+ * The port is the OS's (`--port 0`), so it can only come from the server
+ * itself: one dashboard per test then holds a port no other test can have
+ * taken or be about to. Reading it from the output also means a dashboard
+ * that died on the way up is a failure here, at startup, with what it said —
+ * not a page that silently talks to whatever else answers on that port.
+ */
+function waitForUrl(child: ReturnType<typeof spawn>, output: Output): Promise<string> {
   return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.once("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const { port } = srv.address() as net.AddressInfo;
-      srv.close(() => resolve(port));
-    });
+    const deadline = Date.now() + 20_000;
+    const check = () => {
+      const found = /^Dashboard: (http:\S+)/m.exec(output.text);
+      if (found) {
+        clearInterval(timer);
+        resolve(found[1]);
+        return;
+      }
+      if (child.exitCode !== null || child.signalCode !== null) {
+        clearInterval(timer);
+        reject(
+          new Error(`the dashboard exited before serving (${describe(child)}): ${tail(output)}`),
+        );
+        return;
+      }
+      if (Date.now() > deadline) {
+        clearInterval(timer);
+        reject(new Error(`the dashboard never said where it serves: ${tail(output)}`));
+      }
+    };
+    const timer = setInterval(check, 25);
+    check();
   });
 }
 
-async function waitForServer(url: string, child: ChildProcess) {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`furmi exited early (${child.exitCode})`);
-    try {
-      if ((await fetch(url)).ok) return;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  throw new Error(`dashboard never came up at ${url}`);
+function describe(child: ReturnType<typeof spawn>): string {
+  return child.signalCode ?? `exit ${child.exitCode}`;
+}
+
+function tail(output: Output): string {
+  const text = output.text.trim();
+  return text === "" ? "(no output)" : `its last output was:\n${text}`;
+}
+
+/**
+ * Prints the dashboard's own output when a test fails, so a red run explains
+ * itself: a panic, a bind error and a dying process all look the same from the
+ * page side (a fetch that fails), and only the server can say which it was.
+ * Kept to failures: a passing run has nothing worth the lines.
+ */
+function reportOutput(testInfo: TestInfo, output: Output) {
+  if (testInfo.status === testInfo.expectedStatus) return;
+  process.stderr.write(
+    `--- dashboard output (${testInfo.title}) ---\n${output.text || "(none)"}\n---\n`,
+  );
 }
 
 function git(cwd: string, ...args: string[]) {
@@ -59,7 +97,7 @@ export const test = base.extend<{ forge: Forge; runner: boolean; config: string 
   /** Extra config.toml text appended after the stub agent. */
   config: ["", { option: true }],
 
-  forge: async ({ runner, config }, use) => {
+  forge: async ({ runner, config }, use, testInfo) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "furmi-e2e-"));
     const home = path.join(root, "home");
     const repo = path.join(root, "repo");
@@ -110,16 +148,28 @@ ${config}
 `,
     );
 
-    const port = await freePort();
-    const url = `http://127.0.0.1:${port}`;
+    // Its own port, picked by the kernel: a test never has to guess one that
+    // is free (and an ephemeral port two tests guessed at the same moment is
+    // a race that shows up as a dashboard nobody can reach).
     const server = spawn(
       FURMI_BIN,
-      ["--home", home, runner ? "start" : "web", "--no-open", "--port", String(port)],
-      { env, cwd: repo, stdio: "ignore" },
+      ["--home", home, runner ? "start" : "web", "--no-open", "--port", "0"],
+      { env, cwd: repo, stdio: ["ignore", "pipe", "pipe"] },
     );
+    // Kept, not just drained: a fetch that fails is all the page can say, so
+    // the dashboard's own words (a panic, a bind error) are what explains a
+    // red run. Both streams are read continuously so a chatty server never
+    // blocks on a full pipe.
+    const output: Output = { text: "" };
+    for (const stream of [server.stdout, server.stderr]) {
+      stream.setEncoding("utf8");
+      stream.on("data", (chunk: string) => {
+        output.text = (output.text + chunk).slice(-OUTPUT_KEEP);
+      });
+    }
 
     try {
-      await waitForServer(url, server);
+      const url = await waitForUrl(server, output);
       await use({
         url,
         home,
@@ -132,7 +182,13 @@ ${config}
             .map((d) => path.join(home, d, `${id}.md`))
             .find((p) => fs.existsSync(p)),
       });
+      // A dashboard that died on its own takes the page with it, and the test
+      // would otherwise report some later assertion as the cause.
+      if (server.exitCode !== null || server.signalCode !== null) {
+        throw new Error(`the dashboard died mid-test (${describe(server)}): ${tail(output)}`);
+      }
     } finally {
+      reportOutput(testInfo, output);
       server.kill();
       // `furmi start` leaves its runner behind on purpose; stop it and the
       // tmux server so nothing outlives the test.
