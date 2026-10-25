@@ -4,7 +4,7 @@
 //! prompt, so a stalled network or a credential prompt fails the call
 //! instead of freezing the runner.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -64,6 +64,14 @@ fn branch_exists(repo: &Path, branch: &str) -> bool {
 pub fn repo_root(dir: &Path) -> Result<std::path::PathBuf> {
     let out = git(dir, &["rev-parse", "--show-toplevel"])?;
     Ok(std::path::PathBuf::from(out.trim()))
+}
+
+/// One key per repository, whatever spelling `repo` has: the top level of
+/// the checkout containing it when it is inside a git repo, else the path as
+/// given. So `~/app`, `~/app/.`, a path through a symlink and `~/app/sub`
+/// all key the same repo.
+pub fn repo_key(repo: &Path) -> PathBuf {
+    repo_root(repo).unwrap_or_else(|_| repo.to_path_buf())
 }
 
 /// The repo's shared `.git` directory, as an absolute path. The same for a
@@ -313,6 +321,29 @@ mod tests {
             .unwrap()
             .trim()
             .into()
+    }
+
+    #[test]
+    fn one_key_per_repo_however_its_path_is_spelled() {
+        let repo = repo();
+        let root = repo.path().canonicalize().unwrap();
+        let sub = root.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+
+        assert_eq!(repo_key(&root), root);
+        // `Path` equality already ignores `.` components; every spelling
+        // still has to come back as the same, real root.
+        assert_eq!(repo_key(&root.join(".")), root);
+        assert_eq!(repo_key(&sub), root);
+        let links = tempfile::tempdir().unwrap();
+        let link = links.path().join("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        assert_eq!(repo_key(&link), root);
+
+        // Not a checkout: the path is kept as given.
+        let plain = tempfile::tempdir().unwrap();
+        let plain = plain.path().canonicalize().unwrap();
+        assert_eq!(repo_key(&plain), plain);
     }
 
     #[test]
