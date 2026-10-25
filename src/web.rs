@@ -1617,7 +1617,19 @@ fn task_view_json(home: &Home, id: &str) -> Result<String> {
         .and_then(|path| Task::load(&path))?;
     let eff = task.spec.resolve(&config.defaults);
     let worktree = home.worktrees().join(&task.id);
-    let (model, model_source) = task.model_in_use(&config);
+    let (mut model, mut model_source) = task.model_in_use(&config);
+    // A task that ran before `model_used` was kept still has its answer in the
+    // log. Only here, on demand: the tables are polled every couple of seconds
+    // and won't read a log per row for it.
+    if model_source == "none" {
+        let log = home
+            .logs()
+            .join(format!("{}.{}.log", task.id, task.attempts.max(1)));
+        if let Some(reported) = crate::run::model_from_log(&log) {
+            model = reported;
+            model_source = "log";
+        }
+    }
     let view = serde_json::json!({
         "id": task.id,
         // The whole prompt: this is the one place the page shows it.

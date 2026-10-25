@@ -86,7 +86,7 @@ Don't edit these by hand. Use `furmi` commands to change the status.
 | `error`       | Last failure reason. |
 | `tokens_in`, `tokens_out` | Token usage summed over attempts, if the agent's headless mode reports it (built in for `claude`). |
 | `cost_usd`    | Cost in USD, same condition. |
-| `model_used`  | The model the agent said it ran with (out of the same output as the usage above), `provider/model` when it names both. Only when the task pins no `model` does it differ from a name you chose: it is how a finished task records what it actually cost. |
+| `model_used`  | The model the agent said it ran with (out of the same output as the usage above), `provider/model` when it names both. Only when the task pins no `model` does it differ from a name you chose: it is how a finished task records what it actually cost. A task that ran before this was kept has none — the dashboard reads the model out of the attempt's log when you open the task instead. |
 
 `needs_review` means an interactive session ended without signalling
 `furmi done` or `furmi fail`.

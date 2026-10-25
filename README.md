@@ -306,7 +306,9 @@ OpenCode, Qwen, DeepSeek, Meta, Mistral — a letter chip for anything else).
 A model the task pins reads plain; one that came from somewhere else is
 dimmed, with the source on hover: an agent's configured default, or what the
 run itself reported (recorded as `model_used`), which is the only way to know
-what a task that pins no model actually ran with.
+what a task that pins no model actually ran with. A run from before that was
+kept still gets an answer when you open it: the view reads it out of the
+attempt's log, saying where it found it.
 
 Clicking a row opens the task behind it: the whole prompt, the workspace it
 runs in, the agent, model and when-done step, what it cost, and the same

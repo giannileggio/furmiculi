@@ -592,6 +592,23 @@ fn pi_error(message: &serde_json::Value) -> Option<String> {
     })
 }
 
+/// The model a saved attempt's log says it ran with.
+///
+/// For a task whose file records none: its run happened before `model_used` was
+/// kept, and the log is the only place left that knows. Reads the head of the
+/// log only — the first assistant message names the model, and a log can be
+/// 64 MB — and lets the cut-off last line fail to parse, like any other line
+/// that isn't an event.
+pub(crate) fn model_from_log(path: &Path) -> Option<String> {
+    const HEAD: u64 = 256 * 1024;
+    let file = std::fs::File::open(path).ok()?;
+    let mut head = Vec::new();
+    std::io::Read::take(file, HEAD)
+        .read_to_end(&mut head)
+        .ok()?;
+    Stream::parse(&head).usage?.model
+}
+
 fn read_usage(path: &Path) -> Option<Usage> {
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
@@ -1775,6 +1792,31 @@ mod tests {
             Stream::parse(br#"{"type":"result","result":"ok"}"#),
             Stream::default()
         );
+    }
+
+    #[test]
+    fn reads_the_model_out_of_a_saved_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.1.log");
+        std::fs::write(
+            &path,
+            [
+                r#"{"type":"session","version":3,"id":"s"}"#,
+                r#"{"type":"message_end","message":{"role":"assistant","provider":"opencode-go","model":"deepseek-v4.1-flash","usage":{"input":10}}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            model_from_log(&path).as_deref(),
+            Some("opencode-go/deepseek-v4.1-flash")
+        );
+
+        // A log with no model in it, a log that isn't an event stream, and one
+        // that isn't there at all say nothing rather than guessing.
+        std::fs::write(&path, "just some output\n").unwrap();
+        assert_eq!(model_from_log(&path), None);
+        assert_eq!(model_from_log(&dir.path().join("missing.log")), None);
     }
 
     #[test]

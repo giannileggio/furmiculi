@@ -101,6 +101,25 @@ test.describe("with the runner off", () => {
     await expect(reported.locator(".mark-text")).toHaveAttribute("title", /^DeepSeek/);
   });
 
+  test("a run from before furmi kept its model still says what it ran on", async ({ page, forge }) => {
+    // No `model_used` in the file (it predates the field); the log is the only
+    // place left that names the model, and the task view goes and reads it.
+    forge.add("old-run", "true");
+    finish(forge, "old-run");
+    fs.writeFileSync(
+      path.join(forge.home, "logs", "old-run.1.log"),
+      '{"type":"message_end","message":{"role":"assistant","provider":"opencode-go","model":"deepseek-v4.1-flash","usage":{"input":10}}}\n',
+    );
+
+    await openDashboard(page, forge);
+    await tab(page, "archive").click();
+    await expect(row(page, "old-run").locator("td").nth(6)).toHaveText("-");
+    await row(page, "old-run").click();
+    const model = page.locator("#task-body dd").nth(5);
+    await expect(model).toContainText("opencode-go/deepseek-v4.1-flash");
+    await expect(model.locator(".mark-text")).toHaveAttribute("title", /Read out of the run's saved log/);
+  });
+
   test("a row opens the task: the whole ask, the workspace, and its buttons", async ({ page, forge }) => {
     forge.add("big-ask", "First line of the ask\n\nand the rest of it, which the table hasn't room for");
     await openDashboard(page, forge);

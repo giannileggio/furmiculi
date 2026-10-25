@@ -716,13 +716,14 @@ const MARK_PATTERNS = [
 
 // Did the model's name come from somewhere other than the task itself?
 function inferred(source) {
-  return source === "used" || source === "agent";
+  return source === "used" || source === "agent" || source === "log";
 }
 
 // Where the Model column got its answer, for the tooltip.
 const MODEL_SOURCE_HELP = {
   used: "What the agent itself said it ran with",
   agent: "This agent's configured model: the task doesn't pin one",
+  log: "Read out of the run's saved log: it ran before furmi kept this",
   task: "Set on the task",
   none: "Nothing says: the task pins no model, and this agent doesn't report one",
 };
