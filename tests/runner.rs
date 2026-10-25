@@ -214,6 +214,36 @@ fn alive(pid: &str) -> bool {
 }
 
 #[test]
+fn a_no_worktree_run_warns_and_names_the_paths_it_commits() {
+    // `worktree: false` edits the user's own checkout, so the runner says so
+    // and lists what `on_finish` swept into the commit.
+    let env = Env::new("");
+    env.add(
+        "inplace",
+        "echo data > inplace.txt",
+        &["--no-worktree", "--on-finish", "commit"],
+    );
+
+    assert_eq!(env.run_until_archived("inplace"), "done");
+    let log = std::fs::read_to_string(env.home.path().join("runner.log")).unwrap();
+    assert!(log.contains("warning: inplace runs directly in"), "{log}");
+    assert!(log.contains("worktree: false"), "{log}");
+    assert!(
+        log.contains("inplace: on_finish commits 1 changed path(s)"),
+        "{log}"
+    );
+    assert!(log.contains("?? inplace.txt"), "{log}");
+    // It really did commit in the user's checkout.
+    assert_eq!(
+        git(
+            env.repo.path(),
+            &["show", "--name-only", "--format=", "HEAD"]
+        ),
+        "inplace.txt"
+    );
+}
+
+#[test]
 fn a_task_runs_to_done_and_its_work_is_committed() {
     let env = Env::new("");
     env.add(

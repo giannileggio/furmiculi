@@ -24,9 +24,9 @@ use crate::cmd::{md_files, unique_id};
 use crate::config::{Agent, Config};
 use crate::fsutil;
 use crate::git;
-use crate::home::Home;
+use crate::home::{Home, contract_tilde};
 use crate::schedule::Schedule;
-use crate::spec::{Effective, Mode};
+use crate::spec::{Effective, Mode, OnFinish};
 use crate::task::{Status, Task, now};
 use crate::tmux;
 
@@ -1187,7 +1187,43 @@ pub fn complete(
 fn run_on_finish(home: &Home, config: &Config, task: &Task) -> Result<()> {
     let eff = task.spec.resolve(&config.defaults);
     let dir = workdir(home, task, &eff);
+    if eff.on_finish != OnFinish::None {
+        log_finish_changes(&task.id, &dir);
+    }
     git::on_finish(eff.on_finish, &dir, &task.id, &task.prompt)
+}
+
+/// Says which paths `on_finish` is about to commit, before it commits
+/// everything in `dir`. With `worktree: false` that folder is the user's own
+/// checkout, so an edit swept into the task's commit can be recognised after
+/// the fact. Purely informational: it never stops the commit.
+fn log_finish_changes(id: &str, dir: &Path) {
+    /// Paths named in the log; a build folder's leftovers can be thousands.
+    const SHOWN: usize = 40;
+    let paths = match git::changed_paths(dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            log(&format!(
+                "{id}: could not list the changes on_finish commits in {}: {e:#}",
+                contract_tilde(dir)
+            ));
+            return;
+        }
+    };
+    if paths.is_empty() {
+        return;
+    }
+    let shown = paths.len().min(SHOWN);
+    let mut msg = format!(
+        "{id}: on_finish commits {} changed path(s) in {}:\n  {}",
+        paths.len(),
+        contract_tilde(dir),
+        paths[..shown].join("\n  ")
+    );
+    if shown < paths.len() {
+        msg.push_str(&format!("\n  ... and {} more", paths.len() - shown));
+    }
+    log(&msg);
 }
 
 fn record_finish(home: &Home, config: &Config, task: &mut Task, on_finish: Result<()>) {
@@ -1396,6 +1432,14 @@ fn start(
             task.status = Status::Running;
             task.tmux_window = Some(format!("{session}:{}", task.id));
             task.save(path)?;
+            if !eff.worktree {
+                log(&format!(
+                    "warning: {} runs directly in {} (worktree: false): the agent edits that \
+                     checkout and `on_finish` commits everything in it",
+                    task.id,
+                    contract_tilde(&eff.repo)
+                ));
+            }
             log(&format!(
                 "started {} (attempt {}) in tmux {session}:{}",
                 task.id, task.attempts, task.id
