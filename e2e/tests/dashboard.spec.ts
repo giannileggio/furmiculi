@@ -198,12 +198,25 @@ test.describe("with the runner off", () => {
     expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
       "rgb(15, 17, 21)",
     );
+    await expect(page.locator("#logo")).toHaveAttribute("src", "/logo-dark.png");
+
+    // The ant in the header is the README's logo, carried in the binary: it
+    // loads (so the page's policy allows its own images) and it changes with
+    // the page, since its artwork is two-coloured.
+    const logo = page.locator("#logo");
+    const mark = await page.request.get(`${forge.url}/logo-dark.png`);
+    expect(mark.status()).toBe(200);
+    expect(mark.headers()["content-type"]).toBe("image/png");
+    expect((await mark.body()).subarray(1, 4).toString()).toBe("PNG");
+    await expect(logo).toHaveAttribute("src", "/logo-dark.png");
+    expect(await logo.evaluate((img) => img.naturalWidth)).toBe(160);
 
     // A reload still knows; the choice is on this machine, in this browser.
     await page.reload();
     await expect(page.locator("#theme-toggle")).toHaveText("Dark");
     await page.locator("#theme-toggle").click();
     await expect(page.locator("#theme-toggle")).toHaveText("Auto");
+    await expect(page.locator("#logo")).toHaveAttribute("src", "/logo.png");
     await page.reload();
     await expect(page.locator("#theme-toggle")).toHaveText("Auto");
   });

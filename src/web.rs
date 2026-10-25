@@ -132,6 +132,8 @@ struct Reply {
     status: u16,
     content_type: &'static str,
     body: String,
+    /// A binary body (the logo), served as it is. `body` stays empty then.
+    asset: Option<&'static [u8]>,
 }
 
 fn reply(status: u16, content_type: &'static str, body: impl Into<String>) -> Reply {
@@ -139,8 +141,16 @@ fn reply(status: u16, content_type: &'static str, body: impl Into<String>) -> Re
         status,
         content_type,
         body: body.into(),
+        asset: None,
     }
 }
+
+/// The ant from the README, cropped to the mark itself and carried inside the
+/// binary: no file to install, no request off the box, and the same picture the
+/// repository shows. Two of them, because the artwork's own colours are two:
+/// dark brown for a light page, cream for a dark one.
+const LOGO: &[u8] = include_bytes!("../assets/logo-mark.png");
+const LOGO_DARK: &[u8] = include_bytes!("../assets/logo-mark-dark.png");
 
 fn json_reply(status: u16, body: String) -> Reply {
     reply(status, "application/json", body)
@@ -1114,21 +1124,33 @@ fn handle(ctx: &Ctx, mut request: Request) {
         route(ctx, request.method(), &url, &body)
     };
     let is_index = result.content_type.starts_with("text/html");
-    let mut response = Response::from_string(result.body).with_status_code(result.status);
+    let mut response = match result.asset {
+        Some(bytes) => Response::from_data(bytes).with_status_code(result.status),
+        None => Response::from_string(result.body).with_status_code(result.status),
+    };
     let mut add = |name: &str, value: &str| {
         if let Ok(h) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {
             response.add_header(h);
         }
     };
     add("Content-Type", result.content_type);
-    add("Cache-Control", "no-store");
+    // The state behind the page is never cached; the logo is the one thing that
+    // can be, and it only changes when the binary does.
+    add(
+        "Cache-Control",
+        if result.asset.is_some() {
+            "max-age=86400"
+        } else {
+            "no-store"
+        },
+    );
     add("X-Content-Type-Options", "nosniff");
     if is_index {
         add("X-Frame-Options", "DENY");
         add(
             "Content-Security-Policy",
             "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
-             connect-src 'self'; frame-ancestors 'none'",
+             img-src 'self'; connect-src 'self'; frame-ancestors 'none'",
         );
         // Remote bind: the page has the token in memory from `?token=` and
         // strips it from the address bar, so hand the browser a cookie of its
@@ -1155,6 +1177,14 @@ fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply {
     match method {
         Method::Get => match segments.as_slice() {
             [] => reply(200, "text/html; charset=utf-8", ctx.index.clone()),
+            ["logo.png"] => Reply {
+                asset: Some(LOGO),
+                ..reply(200, "image/png", "")
+            },
+            ["logo-dark.png"] => Reply {
+                asset: Some(LOGO_DARK),
+                ..reply(200, "image/png", "")
+            },
             ["api", "state"] => match state_json(home, ctx.cwd_repo.as_deref()) {
                 Ok(json) => json_reply(200, json),
                 Err(e) => json_reply(500, json_err(&e)),

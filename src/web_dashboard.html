@@ -5,6 +5,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Furmiculi</title>
+<link rel="icon" type="image/png" href="/logo.png" media="(prefers-color-scheme: light)">
+<link rel="icon" type="image/png" href="/logo-dark.png" media="(prefers-color-scheme: dark)">
 <style>
   :root {
     --bg: #f5f6f8;
@@ -57,8 +59,10 @@
     background: var(--panel);
     flex-wrap: wrap;
   }
-  header h1 { font-size: 16px; margin: 0; }
-  header h1 span { color: var(--accent); }
+  header h1 { font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px; }
+  /* The README's ant, cropped to the mark: it is the whole of the branding, so
+     the name stays text and the picture stays decorative. */
+  header .logo { height: 24px; width: auto; display: block; }
   header .home { color: var(--muted); font-size: 12px; }
   header .updated { margin-left: auto; color: var(--muted); font-size: 12px; }
   .dot {
@@ -397,7 +401,7 @@
 </head>
 <body>
 <header>
-  <h1><span>&#9670;</span> Furmiculi</h1>
+  <h1><img class="logo" id="logo" src="/logo.png" alt="" width="30" height="24"> Furmiculi</h1>
   <span class="home mono" id="home"></span>
   <span class="updated" id="runner"></span>
   <span class="updated"><span class="dot"></span>as of <span id="updated">-</span></span>
@@ -604,11 +608,22 @@ let theme = (() => {
   catch (e) { return "auto"; }
 })();
 
+// What the page is actually showing: the choice, or the system's answer when
+// the choice is to follow it.
+function resolvedTheme() {
+  if (theme !== "auto") return theme;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 function applyTheme(choice, remember) {
   theme = choice;
   const root = document.documentElement;
   if (choice === "auto") delete root.dataset.theme;
   else root.dataset.theme = choice;
+  // The ant's artwork is two-coloured, so the wrong one is invisible: pick the
+  // variant the page is wearing.
+  const logo = document.getElementById("logo");
+  if (logo) logo.src = resolvedTheme() === "dark" ? "/logo-dark.png" : "/logo.png";
   const btn = document.getElementById("theme-toggle");
   if (btn) {
     btn.textContent = THEME_LABELS[choice];
@@ -1846,6 +1861,11 @@ newForm.addEventListener("submit", async (e) => {
 });
 
 applyTheme(theme, false);
+// In Auto, a system that flips to dark at sunset should take the page with it —
+// the CSS already does; this is for the picture, which CSS can't choose.
+window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  if (theme === "auto") applyTheme("auto", false);
+});
 refresh();
 checkSetupQuietly();
 setInterval(refresh, 2000);
