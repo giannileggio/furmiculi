@@ -173,10 +173,12 @@ session ends with a plain `furmi done`, run by you or by the agent.
 
 `furmi run` starts each task in a window of the `furmi` tmux session, inside
 `~/.furmiculi/worktrees/<id>` (a git worktree on the task's branch) unless
-`worktree: false`. It respects `max_parallel` and `max_parallel_per_repo`,
-retries failures after `retry_delay`, kills attempts that exceed `timeout`,
-runs `on_finish` on success, and moves finished tasks to `archive/`. Each
-attempt's output is saved to `logs/<id>.<attempt>.log`.
+`worktree: false`. It respects `max_parallel` and `max_parallel_per_repo`
+(counted per repository, however its path is spelled) and never runs two
+`worktree: false` tasks in the same checkout at once. It retries failures
+after `retry_delay`, kills attempts that exceed `timeout`, runs `on_finish`
+on success, and moves finished tasks to `archive/`. Each attempt's output is
+saved to `logs/<id>.<attempt>.log`.
 
 ## Keeping it running
 

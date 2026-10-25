@@ -7,7 +7,7 @@
 //! in `;` and caps message size), and the outcome doesn't depend on tmux's
 //! own exit-status tracking (which lags behind `pane_dead`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -1357,11 +1357,17 @@ fn start_pending(home: &Home, config: &Config, now: DateTime<FixedOffset>) -> Re
         return Ok(());
     }
     let mut per_repo: HashMap<PathBuf, usize> = HashMap::new();
+    // Repos where a `worktree: false` task is running: a second one there
+    // would have its branch switched and its work committed under the first.
+    let mut in_place: HashSet<PathBuf> = HashSet::new();
     let running = load_tasks(home, Status::Running)?;
     for (_, t) in &running {
-        *per_repo
-            .entry(t.spec.resolve(&config.defaults).repo)
-            .or_default() += 1;
+        let eff = t.spec.resolve(&config.defaults);
+        let key = git::repo_key(&eff.repo);
+        *per_repo.entry(key.clone()).or_default() += 1;
+        if !eff.worktree {
+            in_place.insert(key);
+        }
     }
     let mut total = running.len();
 
@@ -1375,15 +1381,27 @@ fn start_pending(home: &Home, config: &Config, now: DateTime<FixedOffset>) -> Re
         if total >= config.runner.max_parallel {
             break;
         }
-        let repo = task.spec.resolve(&config.defaults).repo;
-        let in_repo = per_repo.entry(repo).or_default();
+        let eff = task.spec.resolve(&config.defaults);
+        let key = git::repo_key(&eff.repo);
+        let in_repo = per_repo.entry(key.clone()).or_default();
         if *in_repo >= config.runner.max_parallel_per_repo {
+            continue;
+        }
+        if !eff.worktree && in_place.contains(&key) {
+            log(&format!(
+                "{} waits: another task is running without a worktree in {}",
+                task.id,
+                key.display()
+            ));
             continue;
         }
         match start(home, config, &path, task, now) {
             Ok(true) => {
                 total += 1;
                 *in_repo += 1;
+                if !eff.worktree {
+                    in_place.insert(key);
+                }
             }
             Ok(false) => {}
             Err(e) => log(&format!("starting {}: {e:#}", path.display())),

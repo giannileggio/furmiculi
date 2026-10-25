@@ -97,8 +97,13 @@ impl Env {
 
     /// Queues a task running `prompt` in the test repo.
     fn add(&self, id: &str, prompt: &str, extra: &[&str]) {
-        let repo = self.repo.path().display().to_string();
-        let mut args = vec!["add", "--repo", &repo, "--id", id, "--prompt", prompt];
+        self.add_in(&self.repo.path().display().to_string(), id, prompt, extra);
+    }
+
+    /// Queues a task with an explicit `--repo`, to try another spelling of
+    /// the same path (e.g. through a symlink).
+    fn add_in(&self, repo: &str, id: &str, prompt: &str, extra: &[&str]) {
+        let mut args = vec!["add", "--repo", repo, "--id", id, "--prompt", prompt];
         args.extend(extra);
         self.furmi_ok(&args);
     }
@@ -1253,4 +1258,65 @@ fn a_task_with_an_unconfigured_agent_fails_with_an_explanation() {
     let error = env.field("ghost", "error").unwrap();
     assert!(error.contains("unknown agent `nosuchagent`"), "{error}");
     assert!(error.contains("[agents.nosuchagent]"), "{error}");
+}
+
+fn count_with_status(env: &Env, ids: &[&str], status: &str) -> usize {
+    ids.iter()
+        .filter(|id| env.field(id, "status").as_deref() == Some(status))
+        .count()
+}
+
+#[test]
+fn the_per_repo_limit_follows_the_repo_not_the_path_spelling() {
+    let env = Env::new("max_parallel_per_repo = 1");
+    env.add("in-root", "sleep 300", &["--retries", "0"]);
+    // The same repo through a symlink: `furmi add` keeps the path as given,
+    // so the two tasks only share a key if it is the repo's identity.
+    let links = tempfile::tempdir().unwrap();
+    let link = links.path().join("link");
+    std::os::unix::fs::symlink(env.repo.path(), &link).unwrap();
+    env.add_in(
+        &link.display().to_string(),
+        "via-link",
+        "sleep 300",
+        &["--retries", "0"],
+    );
+
+    env.tick();
+
+    let tasks = ["in-root", "via-link"];
+    assert_eq!(
+        count_with_status(&env, &tasks, "running"),
+        1,
+        "both ran in one repo: {:?} / {:?}",
+        env.field("in-root", "status"),
+        env.field("via-link", "status")
+    );
+    assert_eq!(count_with_status(&env, &tasks, "pending"), 1);
+
+    env.furmi_ok(&["cancel", "in-root"]);
+    env.furmi_ok(&["cancel", "via-link"]);
+}
+
+#[test]
+fn two_tasks_without_a_worktree_never_share_a_checkout() {
+    let env = Env::new("max_parallel_per_repo = 2");
+    env.add("first", "sleep 300", &["--no-worktree", "--retries", "0"]);
+    env.add("second", "sleep 300", &["--no-worktree", "--retries", "0"]);
+
+    env.tick();
+
+    let statuses: Vec<_> = ["first", "second"]
+        .iter()
+        .map(|id| env.field(id, "status").unwrap())
+        .collect();
+    assert_eq!(
+        statuses.iter().filter(|s| *s == "running").count(),
+        1,
+        "both ran in the same checkout: {statuses:?}"
+    );
+    assert_eq!(statuses.iter().filter(|s| *s == "pending").count(), 1);
+
+    env.furmi_ok(&["cancel", "first"]);
+    env.furmi_ok(&["cancel", "second"]);
 }
