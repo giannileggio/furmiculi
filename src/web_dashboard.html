@@ -21,7 +21,7 @@
     --review: #d97706;
   }
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       --bg: #0f1115;
       --panel: #171a21;
       --border: #2a2e37;
@@ -29,6 +29,16 @@
       --muted: #8b93a1;
       --accent: #818cf8;
     }
+  }
+  /* A choice made on the page overrules the system. Same palette as the media
+     query above, which is what "auto" means; keep the two in step. */
+  :root[data-theme="dark"] {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2e37;
+    --text: #e6e8eb;
+    --muted: #8b93a1;
+    --accent: #818cf8;
   }
   * { box-sizing: border-box; }
   body {
@@ -138,6 +148,8 @@
     align-items: center; justify-content: center; padding: 20px; z-index: 10;
   }
   .overlay.active { display: flex; }
+  /* Opened from a task view, the log sits on top of it and hands back to it. */
+  #logs-overlay { z-index: 12; }
   .modal {
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
     width: min(800px, 100%); max-height: 80vh; display: flex; flex-direction: column;
@@ -146,7 +158,7 @@
     display: flex; justify-content: space-between; align-items: center;
     padding: 10px 16px; border-bottom: 1px solid var(--border);
   }
-  .modal header h2 { font-size: 13px; margin: 0; }
+  .modal header h2 { font-size: 13px; margin: 0; display: flex; align-items: center; gap: 6px; }
   .modal header button { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; }
   .modal pre {
     margin: 0; padding: 16px; overflow: auto; font-size: 12px; white-space: pre-wrap;
@@ -191,6 +203,10 @@
   form.new-task .buttons { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
   form.new-task .error { color: var(--failed); font-size: 12px; margin-right: auto; white-space: pre-line; }
   .why { color: var(--muted); font-size: 11px; max-width: 280px; white-space: normal; margin-top: 2px; }
+  .summary {
+    color: var(--muted); font-size: 11px; margin-top: 2px;
+    max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   .mark-text { display: inline-flex; align-items: center; gap: 6px; }
   .mark { width: 14px; height: 14px; flex: none; opacity: .8; }
   .mark path { fill: currentColor; }
@@ -253,6 +269,130 @@
   th button.sort .arrow { font-size: 9px; }
   .warn { margin: 8px 16px; padding: 8px 12px; border: 1px solid var(--failed); border-radius: 6px; font-size: 13px; }
   .warn[hidden] { display: none; }
+
+  /* A row is a link to the task: clicking anywhere in it opens the view. */
+  tbody tr[data-id] { cursor: pointer; }
+  tbody tr.selected td { background: rgba(79,70,229,.12); }
+  tbody tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+  tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .idcell { display: flex; align-items: center; gap: 6px; }
+  .copy {
+    display: inline-flex; align-items: center; justify-content: center; flex: none;
+    width: 20px; height: 20px; padding: 0; border-radius: 4px; cursor: pointer;
+    border: 1px solid transparent; background: none; color: var(--muted);
+    line-height: 1; opacity: 0;
+  }
+  .copy svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; }
+  /* The id is there to copy when you go looking for it: on hover, by keyboard,
+     or always inside a modal where there is room. */
+  tr:hover .copy, tr.selected .copy, .copy:focus-visible, .modal .copy { opacity: 1; }
+  .copy:hover { border-color: var(--border); background: rgba(127,127,127,.12); color: var(--text); }
+  /* A model the task didn't pin is the right name, from a second-hand source. */
+  .model-inferred { color: var(--muted); }
+  .model-inferred .mono { color: inherit; }
+
+  .toolbar input[type="search"] {
+    font: inherit; padding: 4px 8px; border-radius: 6px; min-width: 190px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  .toolbar input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+  /* ---- The task view ---- */
+  .modal.wide { width: min(900px, 100%); }
+  .task-view { overflow: auto; padding: 0 16px 16px; }
+  .task-view h3 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); margin: 18px 0 6px;
+  }
+  .task-view .prompt {
+    white-space: pre-wrap; word-break: break-word; margin: 0;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px; font-size: 13px;
+    /* A prompt can be pages long; the run's facts shouldn't be pushed out of
+       sight by it. The block scrolls on its own instead. */
+    max-height: 38vh; overflow: auto;
+  }
+  .task-view dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; margin: 0; font-size: 13px; }
+  .task-view dt { color: var(--muted); }
+  .task-view dd { margin: 0; word-break: break-word; }
+  .task-view .why { max-width: none; }
+  .task-view .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 18px; }
+  .task-view .acts button {
+    font-size: 12px; padding: 5px 10px; border-radius: 4px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  }
+  .task-view .acts button:hover { background: rgba(127,127,127,.12); }
+  .task-view .acts button.danger { color: var(--failed); border-color: var(--failed); }
+
+  /* ---- Live logs ---- */
+  .modal header .live {
+    display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
+    font-size: 11px; font-weight: 400; color: var(--muted);
+    text-transform: none; letter-spacing: 0;
+  }
+  .modal header .live[hidden] { display: none; }
+  .modal header .live .dot { margin: 0; }
+  #logs-foot .cut { color: var(--review); }
+
+  kbd {
+    font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px;
+    padding: 1px 5px; background: var(--bg);
+  }
+  ul.keys { list-style: none; margin: 0; padding: 12px 16px; display: grid; grid-template-columns: max-content 1fr; gap: 9px 18px; font-size: 13px; }
+  ul.keys .k { display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
+
+  /* Narrow screens: a table is a card per task, each cell labelled where the
+     header would have been. A dashboard gets read on a phone, in bed. */
+  @media (max-width: 760px) {
+    header { padding: 12px 14px; gap: 8px; }
+    main { padding: 12px 14px 32px; }
+    /* Numbers as chips: a grid with a filler background would leave a grey
+       hole where the last row doesn't fill. */
+    .stats {
+      grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+      background: none; gap: 6px; padding: 10px 14px 0;
+    }
+    .stat { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+    .stat .n { font-size: 18px; }
+    .stat .l { font-size: 10px; }
+    .toolbar { margin: 10px 14px 0; gap: 8px; }
+    .toolbar input[type="search"] { min-width: 0; flex: 1 1 auto; }
+    table { border: none; background: none; display: block; }
+    thead { display: none; }
+    tbody { display: block; }
+    tbody tr {
+      display: block; background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; margin-bottom: 10px; padding: 4px 12px;
+    }
+    tbody tr:hover td { background: none; }
+    tbody tr.selected td { background: none; }
+    tbody tr.selected td:first-child { box-shadow: none; }
+    td {
+      /* `minmax(0, 1fr)`, not `1fr`: a nowrap summary would otherwise widen the
+         column past the card instead of being cut with an ellipsis. */
+      display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 4px 10px;
+      align-items: baseline; justify-items: start; padding: 5px 0; border: none;
+    }
+    /* Whatever a cell holds beyond its label stacks in the value column: the
+       ask under the id, and nothing squeezed into the label's width. */
+    td > * { grid-column: 2; }
+    /* 100% of the value column, not none: a grid item that only shrinks to its
+       own text would run past the card instead of being cut with an ellipsis. */
+    td .summary { max-width: 100%; }
+    td::before {
+      content: attr(data-label); color: var(--muted); font-size: 10px;
+      text-transform: uppercase; letter-spacing: .03em;
+    }
+    /* The actions cell has no heading to copy; it stays whole-width. */
+    td[data-label=""] { display: block; padding-top: 8px; }
+    td[data-label=""]::before { content: none; }
+    .why { max-width: none; }
+    .copy { opacity: 1; }
+    .modal pre { font-size: 11px; }
+    ul.keys { grid-template-columns: 1fr; }
+    ul.keys .k { justify-content: flex-start; }
+  }
 </style>
 </head>
 <body>
@@ -262,7 +402,9 @@
   <span class="updated" id="runner"></span>
   <span class="updated"><span class="dot"></span>as of <span id="updated">-</span></span>
   <button class="ghost" id="setup-open" title="Pick and install your coding agent, and check that tmux and git are set up">Setup</button>
-  <button class="primary" id="new-task-open">+ New task</button>
+  <button class="ghost" id="theme-toggle" title="Light, dark, or whatever this computer is set to">Auto</button>
+  <button class="ghost" id="keys-open" title="Keyboard shortcuts (?)">?</button>
+  <button class="primary" id="new-task-open" title="Queue a task, or repeat one on a schedule (n)">+ New task</button>
 </header>
 
 <div class="notice" id="runner-notice" hidden>
@@ -275,6 +417,10 @@
 <div class="stats" id="stats"></div>
 <div class="warn" id="invalid" hidden></div>
 <div class="toolbar" id="toolbar" hidden>
+  <label id="search-wrap">Search
+    <input type="search" id="search" placeholder="id, project, agent, model&hellip;"
+      autocomplete="off" spellcheck="false" title="Narrow the tables to what matches. Press / to jump here.">
+  </label>
   <label id="age-wrap">Time <select id="age"></select></label>
   <span class="note" id="toolbar-note"></span>
   <button class="linkish clear" id="toolbar-clear" data-action="clear-filters" hidden>Show everything</button>
@@ -298,11 +444,13 @@
   <div class="modal">
     <header>
       <h2 class="mono" id="logs-title">logs</h2>
+      <span class="live" id="logs-live" hidden><span class="dot"></span>live</span>
       <button id="logs-close" aria-label="Close">&times;</button>
     </header>
     <pre id="logs-body">loading&hellip;</pre>
     <div class="foot" id="logs-foot" hidden>
       <span id="logs-note">Rendered from the agent's JSON output</span>
+      <span class="cut" id="logs-cut" hidden>showing the end of a long log</span>
       <button class="btn secondary" id="logs-toggle">Show the raw output</button>
     </div>
   </div>
@@ -389,6 +537,36 @@
     </div>
   </div>
 </div>
+<div class="overlay" id="task-overlay">
+  <div class="modal wide">
+    <header>
+      <h2 class="mono" id="task-title">task</h2>
+      <button id="task-close" aria-label="Close">&times;</button>
+    </header>
+    <div class="task-view" id="task-body">loading&hellip;</div>
+  </div>
+</div>
+
+<div class="overlay" id="keys-overlay">
+  <div class="modal">
+    <header>
+      <h2>Keyboard</h2>
+      <button id="keys-close" aria-label="Close">&times;</button>
+    </header>
+    <ul class="keys">
+      <li class="k"><kbd>/</kbd></li><li>Search the tables</li>
+      <li class="k"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd></li><li>Waiting, Working, Finished, Repeating</li>
+      <li class="k"><kbd>k</kbd><kbd>j</kbd></li><li>Move up and down the table</li>
+      <li class="k"><kbd>Enter</kbd></li><li>Open the highlighted task</li>
+      <li class="k"><kbd>o</kbd></li><li>Show what the agent printed</li>
+      <li class="k"><kbd>n</kbd></li><li>New task</li>
+      <li class="k"><kbd>Esc</kbd></li><li>Close what's open, or clear the search</li>
+      <li class="k"><kbd>?</kbd></li><li>This list</li>
+    </ul>
+    <div class="foot"><span>Shortcuts are off while you're typing in a field.</span></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -411,8 +589,35 @@ const TOKEN = (() => {
 // and, on a remote dashboard, the bearer token the server gates on.
 const AUTH = () => ({
   "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}`,
-  Authorization: `Bearer ${TOKEN}`,
 });
+
+// ---- Light, dark, or whatever the computer says
+//
+// The page follows the system until you say otherwise. A dashboard read at
+// night shouldn't come back white in the morning, so the choice is kept — in
+// localStorage only: it says nothing about the tasks.
+const THEME_KEY = "furmi-theme";
+const THEMES = ["auto", "light", "dark"];
+const THEME_LABELS = { auto: "Auto", light: "Light", dark: "Dark" };
+let theme = (() => {
+  try { return THEMES.includes(localStorage.getItem(THEME_KEY)) ? localStorage.getItem(THEME_KEY) : "auto"; }
+  catch (e) { return "auto"; }
+})();
+
+function applyTheme(choice, remember) {
+  theme = choice;
+  const root = document.documentElement;
+  if (choice === "auto") delete root.dataset.theme;
+  else root.dataset.theme = choice;
+  const btn = document.getElementById("theme-toggle");
+  if (btn) {
+    btn.textContent = THEME_LABELS[choice];
+    btn.title = `Light, dark, or whatever this computer is set to (now: ${THEME_LABELS[choice].toLowerCase()})`;
+  }
+  if (remember) {
+    try { localStorage.setItem(THEME_KEY, choice); } catch (e) { /* private mode: the choice just forgets itself */ }
+  }
+}
 const STAT_LABELS = [
   ["pending", "Waiting"], ["running", "Working"], ["done", "Done"],
   ["failed", "Failed"], ["cancelled", "Cancelled"], ["needs_review", "Needs review"],
@@ -456,6 +661,11 @@ const AGE_OPTIONS = [
 ];
 let age = "any";
 const agePreset = (v) => AGE_OPTIONS.find(o => o.value === v) || AGE_OPTIONS[0];
+// What the search box holds; the tables are filtered by it in the browser.
+let query = "";
+// The row the keyboard is on (its task id), highlighted so j/k has somewhere to
+// go. Clicking a row opens it; j/k only moves.
+let selected = null;
 // The column being sorted, and which way. Nothing is sorted until asked.
 let sort = { key: null, dir: 1 };
 const STATUS_HELP = {
@@ -503,6 +713,19 @@ const MARK_PATTERNS = [
   [/llama|meta[-/]/, "meta"],
   [/mistral|mixtral|codestral|devstral|magistral/, "mistral"],
 ];
+
+// Did the model's name come from somewhere other than the task itself?
+function inferred(source) {
+  return source === "used" || source === "agent";
+}
+
+// Where the Model column got its answer, for the tooltip.
+const MODEL_SOURCE_HELP = {
+  used: "What the agent itself said it ran with",
+  agent: "This agent's configured model: the task doesn't pin one",
+  task: "Set on the task",
+  none: "Nothing says: the task pins no model, and this agent doesn't report one",
+};
 // A chip with a letter for everything else: a custom agent, or a model whose
 // family we don't know (a wrong brand mark would be worse than none).
 const MARK_INITIALS = { pi: "\u03c0" };
@@ -512,7 +735,12 @@ const MARK_INITIALS = { pi: "\u03c0" };
 /// says the same thing, so a screen reader shouldn't hear it twice.
 function markFor(name) {
   const text = String(name || "").toLowerCase();
-  const found = MARK_PATTERNS.find(([pattern]) => pattern.test(text));
+  // A model name can carry its provider in front (`opencode-go/deepseek-v4.1`):
+  // the family is the part after the last slash, and it is what the mark is
+  // about. An agent's name has no slash and is matched whole.
+  const family = text.slice(text.lastIndexOf("/") + 1);
+  const found = MARK_PATTERNS.find(([pattern]) => pattern.test(family))
+    || MARK_PATTERNS.find(([pattern]) => pattern.test(text));
   const brand = found ? MARKS[found[1]] : null;
   if (brand) {
     return {
@@ -525,10 +753,12 @@ function markFor(name) {
 }
 
 // A cell that leads with the mark for `value` (the agent or the model).
-function marked(value) {
+function marked(value, opts) {
+  const { className = "", note = "" } = opts || {};
   if (!value || value === "-") return "-";
   const mark = markFor(value);
-  return `<span class="mark-text" title="${escapeHtml(mark.brand)}">${mark.html}` +
+  const title = note ? `${mark.brand} — ${note}` : mark.brand;
+  return `<span class="mark-text ${className}" title="${escapeHtml(title)}">${mark.html}` +
     `<span class="mono">${escapeHtml(value)}</span></span>`;
 }
 
@@ -567,7 +797,7 @@ function inWindow(r) {
   return Number.isNaN(at) || at >= Date.now() - agePreset(age).ms;
 }
 
-function taskTable(rows, cols, empty, sortable) {
+function taskTable(rows, cols, empty, sortable, kind = "task") {
   if (rows.length === 0) return empty || `<div class="empty">Nothing here.</div>`;
   const head = cols.map(c => {
     if (!sortable || !SORT_VALUES[c.key]) return `<th>${escapeHtml(c.label)}</th>`;
@@ -576,7 +806,15 @@ function taskTable(rows, cols, empty, sortable) {
     return `<th aria-sort="${order}"><button class="sort${on ? " on" : ""}" data-sort="${c.key}"
       title="Sort by ${escapeHtml(c.label.toLowerCase())}">${escapeHtml(c.label)}<span class="arrow">${on ? (sort.dir > 0 ? "▲" : "▼") : ""}</span></button></th>`;
   }).join("");
-  const body = rows.map(r => `<tr>${cols.map(c => `<td class="${c.mono ? "mono" : ""}">${c.render ? c.render(r) : escapeHtml(r[c.key])}</td>`).join("")}</tr>`).join("");
+  // Each cell carries its column name, so a narrow screen can label it where
+  // the header used to be.
+  const body = rows.map(r => {
+    const cells = cols.map(c =>
+      `<td data-label="${escapeHtml(c.label || "")}" class="${c.mono ? "mono" : ""}">` +
+      `${c.render ? c.render(r) : escapeHtml(r[c.key])}</td>`).join("");
+    const on = r.id === selected ? ` class="selected"` : "";
+    return `<tr data-id="${escapeHtml(r.id)}" data-kind="${kind}"${on}>${cells}</tr>`;
+  }).join("");
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
@@ -613,16 +851,43 @@ function actionButtons(r) {
 }
 
 const TASK_COLS = [
-  { key: "id", label: "ID", mono: true },
+  { key: "id", label: "ID", mono: true, render: idCell },
   { key: "status", label: "Status", render: r => badge(r.status) +
       (r.error && r.status !== "done" ? `<div class="why">${escapeHtml(r.error)}</div>` : "") },
   { key: "when", label: "When", render: whenCell },
   { key: "repo", label: "Project", mono: true },
   { key: "branch", label: "Branch", mono: true },
   { key: "agent", label: "Agent", render: r => marked(r.agent) },
-  { key: "model", label: "Model", render: r => marked(r.model) },
+  {
+    key: "model", label: "Model",
+    // A model the task pinned reads plain; one that came from the agent's own
+    // report or its config is dimmed, with the source on hover. `-` says why.
+    render: r => (r.model === "-"
+      ? `<span title="${escapeHtml(MODEL_SOURCE_HELP.none)}">-</span>`
+      : marked(r.model, {
+          className: inferred(r.model_source) ? "model-inferred" : "",
+          note: inferred(r.model_source) ? MODEL_SOURCE_HELP[r.model_source] : "",
+        })),
+  },
   { key: "actions", label: "", render: r => `<div class="actions">${actionButtons(r)}</div>` },
 ];
+
+// The copy button's icon, drawn rather than typed: no font is guaranteed to
+// have a clipboard glyph, and a box where the button should be is worse than
+// none.
+const COPY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+  '<rect x="9" y="9" width="12" height="12" rx="2"/>' +
+  '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+
+// The task's id, with what it asks for under it: the fastest way to tell two
+// tasks in the same repo apart, and a click away from copying the id.
+function idCell(r) {
+  const summary = r.summary
+    ? `<div class="summary" title="${escapeHtml(r.summary)}">${escapeHtml(r.summary)}</div>` : "";
+  return `<div class="idcell"><span class="mono">${escapeHtml(r.id)}</span>` +
+    `<button class="copy" data-action="copy" data-text="${escapeHtml(r.id)}" ` +
+    `title="Copy the id: ${escapeHtml(r.id)}" aria-label="Copy the id ${escapeHtml(r.id)}">${COPY_ICON}</button></div>${summary}`;
+}
 
 // When it runs (or ran): for a working task that's when it started, plus how
 // long it has been going. The clock is filled in and kept current by the
@@ -700,15 +965,22 @@ const SCHEDULE_COLS = [
     </div>` },
 ];
 
+// The last state the server sent, kept so the page can redraw itself (a
+// keystroke in the search box, say) without asking again.
+let lastState = null;
+
 async function refresh() {
-  let state;
   try {
     const res = await fetch("/api/state", { headers: AUTH() });
-    state = await res.json();
+    lastState = await res.json();
   } catch (e) {
     return; // keep showing the last good state
   }
+  draw(lastState);
+}
 
+// Everything on the page comes from one state object.
+function draw(state) {
   document.getElementById("home").textContent = state.home;
   document.getElementById("updated").textContent = state.generated_at;
 
@@ -745,13 +1017,18 @@ async function refresh() {
   // The window is about when a task ran; a schedule is a rule, not a run.
   document.getElementById("age-wrap").hidden = activeTab() === "schedules";
   if (ageEl.value !== age) ageEl.value = age;
+  const narrowed = !!filter || age !== "any" || !!query; // the tables show less than everything
   document.getElementById("toolbar-note").innerHTML = filter ? `Showing only ${badge(filter)}` : "";
-  document.getElementById("toolbar-clear").hidden = !filter && age === "any";
+  document.getElementById("toolbar-clear").hidden = !narrowed;
+  if (searchEl.value !== query) searchEl.value = query;
 
   // Filtering and sorting happen here rather than in the server: the lists are
-  // small, and a clicked number or a window is a view, not a change.
-  const taskRows = (list) => sorted(list.filter(inWindow).filter(r => !filter || r.status === filter));
-  const emptyFor = (base) => (firstRun || (!filter && age === "any") ? base : windowMessage());
+  // small, and a clicked number, a window or a search is a view, not a change.
+  const taskRows = (list) => sorted(list
+    .filter(inWindow)
+    .filter(r => !filter || r.status === filter)
+    .filter(r => matches(r, TASK_SEARCH_FIELDS)));
+  const emptyFor = (base) => (firstRun || !narrowed ? base : windowMessage());
 
   document.getElementById("panel-queue").innerHTML = taskTable(taskRows(state.queue), TASK_COLS, emptyFor(firstRun
     ? `<div class="empty"><div class="big">No tasks yet</div>
@@ -762,14 +1039,31 @@ async function refresh() {
     emptyFor(`<div class="empty">Nothing is being worked on right now.</div>`), true);
   document.getElementById("panel-archive").innerHTML = taskTable(taskRows(state.archive), TASK_COLS,
     emptyFor(`<div class="empty">Nothing has finished yet.</div>`), true);
-  document.getElementById("panel-schedules").innerHTML = taskTable(state.schedules, SCHEDULE_COLS,
-    `<div class="empty">No repeating tasks yet. A schedule is a Markdown file in <code>${escapeHtml(state.home)}/schedules</code>; see the README.</div>`);
+  document.getElementById("panel-schedules").innerHTML = taskTable(
+    state.schedules.filter(r => matches(r, SCHEDULE_SEARCH_FIELDS)), SCHEDULE_COLS,
+    `<div class="empty">${query ? `Nothing matches “${escapeHtml(query)}”.` : "No repeating tasks yet."}` +
+      `${query ? "" : ` A schedule is a Markdown file in <code>${escapeHtml(state.home)}/schedules</code>; see the README.`}` +
+      `</div>`, false, "schedule");
   tickElapsed();
+}
+
+// What a search looks through, per kind of row.
+const TASK_SEARCH_FIELDS = ["id", "summary", "repo", "branch", "agent", "model", "status"];
+const SCHEDULE_SEARCH_FIELDS = ["id", "summary", "repo", "cron"];
+
+// What the search box holds, and whether a row answers to it: every word has to
+// turn up somewhere, so "pi failed" finds the failed task that ran on pi.
+function matches(r, fields) {
+  const words = query.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  const haystack = fields.map(f => String(r[f] ?? "")).join(" ").toLowerCase();
+  return words.every(word => haystack.includes(word.toLowerCase()));
 }
 
 // "No failed tasks from the last 24 hours" plus the way back out.
 function windowMessage() {
-  const what = filter ? `${STATUS_LABELS[filter]} tasks` : "tasks";
+  const what = query ? `tasks matching “${query}”`
+    : filter ? `${STATUS_LABELS[filter]} tasks` : "tasks";
   const span = age === "any" ? "" : ` from ${agePreset(age).phrase}`;
   return `<div class="empty">No ${escapeHtml(what)}${escapeHtml(span)}.
     <button class="linkish" data-action="clear-filters">Show everything</button></div>`;
@@ -813,6 +1107,14 @@ ageEl.innerHTML = AGE_OPTIONS.map(o =>
   `<option value="${o.value}">${escapeHtml(o.label)}</option>`).join("");
 ageEl.addEventListener("change", () => { age = ageEl.value; refresh(); });
 
+// The search box filters what's already on the page, so a keystroke redraws
+// instead of asking the server for the same list again.
+const searchEl = document.getElementById("search");
+searchEl.addEventListener("input", () => {
+  query = searchEl.value.trim();
+  if (lastState) draw(lastState);
+});
+
 let toastTimer = null;
 function toast(msg, ok) {
   const el = document.getElementById("toast");
@@ -828,42 +1130,113 @@ const logsTitle = document.getElementById("logs-title");
 const logsBody = document.getElementById("logs-body");
 const logsFoot = document.getElementById("logs-foot");
 const logsToggle = document.getElementById("logs-toggle");
+const logsLive = document.getElementById("logs-live");
+const logsCut = document.getElementById("logs-cut");
+const logsNote = document.getElementById("logs-note");
 
 // The log the modal is showing, and whether the raw or the readable view of
 // it is on screen.
 let logsRaw = "";
 let logsReadable = null; // null: this log is plain text, nothing to render
 let logsShowRaw = false;
+// Which task's log is on screen, whether only its end is here, and whether the
+// first read has landed (an empty log isn't "loading" forever).
+let logsId = null;
+let logsCutOff = false;
+let logsLoaded = false;
+let logsTimer = null;
+
+// How much of the end of a log the live view asks for. A runaway agent's log
+// reaches 64 MB; this is what a screenful or twenty of it needs.
+const LOG_TAIL_BYTES = 100_000;
 
 function drawLogs() {
-  logsFoot.hidden = logsReadable === null;
+  // The footer is for the readable view and for what got cut; a plain-text log
+  // that is all here needs neither.
+  logsNote.hidden = logsReadable === null;
+  logsToggle.hidden = logsReadable === null;
+  logsCut.hidden = !logsCutOff;
+  logsFoot.hidden = logsReadable === null && !logsCutOff;
   logsToggle.textContent = logsShowRaw ? "Show the readable view" : "Show the raw output";
   if (logsShowRaw || logsReadable === null) logsBody.textContent = logsRaw || "(empty)";
   else logsBody.innerHTML = logsReadable;
 }
 
+// Which of the dashboard's tasks is this id (wherever it lives).
+function taskRow(id) {
+  if (!lastState) return null;
+  return [...lastState.running, ...lastState.queue, ...lastState.archive]
+    .find(r => r.id === id) || null;
+}
+
 async function showLogs(id) {
+  logsId = id;
   logsTitle.textContent = id;
   logsBody.textContent = "loading…";
   logsFoot.hidden = true;
   logsReadable = null;
   logsShowRaw = false;
+  logsRaw = "";
+  logsCutOff = false;
+  logsLoaded = false;
   logsOverlay.classList.add("active");
+  await loadLogs();
+  startLogsPolling();
+}
+
+// Reads the end of the log and redraws only when it changed, so following a
+// running task doesn't fight with scrolling up to read something.
+async function loadLogs() {
+  if (!logsId) return;
+  const follow = logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 40;
+  let data;
   try {
-    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/logs`, { headers: AUTH() });
-    const data = await res.json();
-    if (!res.ok) {
-      logsRaw = `error: ${data.error}`;
-      logsReadable = null;
-    } else {
-      logsRaw = data.log || "";
-      logsReadable = readableAgentLog(logsRaw);
-    }
+    const res = await fetch(`/api/tasks/${encodeURIComponent(logsId)}/logs?tail=${LOG_TAIL_BYTES}`,
+      { headers: AUTH() });
+    data = await res.json();
+    if (!res.ok) throw new Error(data.error || "no log");
   } catch (e) {
-    logsRaw = `error: ${e}`;
+    logsRaw = `error: ${e.message}`;
     logsReadable = null;
+    logsCutOff = false;
+    logsLoaded = true;
+    drawLogs();
+    return;
   }
+  const text = data.log || "";
+  const cut = !!data.truncated;
+  if (logsLoaded && text === logsRaw && cut === logsCutOff) return; // nothing new
+  logsRaw = text;
+  logsReadable = readableAgentLog(text);
+  logsCutOff = cut;
+  logsLoaded = true;
   drawLogs();
+  const row = taskRow(logsId);
+  logsLive.hidden = !row || row.status !== "running";
+  if (follow) logsBody.scrollTop = logsBody.scrollHeight;
+}
+
+// While the modal is open and the task is still running, read its log again as
+// the agent writes to it. A finished task's log doesn't change: no requests.
+function startLogsPolling() {
+  stopLogsPolling();
+  logsTimer = setInterval(async () => {
+    if (!logsOverlay.classList.contains("active")) { stopLogsPolling(); return; }
+    const row = taskRow(logsId);
+    if (!row || row.status !== "running") { logsLive.hidden = true; return; }
+    await loadLogs();
+  }, 2000);
+}
+
+function stopLogsPolling() {
+  if (logsTimer) clearInterval(logsTimer);
+  logsTimer = null;
+}
+
+function closeLogs() {
+  logsOverlay.classList.remove("active");
+  stopLogsPolling();
+  logsId = null;
 }
 
 /// The readable view of an agent's transcript: what the assistant said and
@@ -933,9 +1306,9 @@ function brief(args) {
   return text.length > 140 ? `${text.slice(0, 140)}…` : text;
 }
 
-document.getElementById("logs-close").addEventListener("click", () => logsOverlay.classList.remove("active"));
+document.getElementById("logs-close").addEventListener("click", closeLogs);
 logsToggle.addEventListener("click", () => { logsShowRaw = !logsShowRaw; drawLogs(); });
-logsOverlay.addEventListener("click", (e) => { if (e.target === logsOverlay) logsOverlay.classList.remove("active"); });
+logsOverlay.addEventListener("click", (e) => { if (e.target === logsOverlay) closeLogs(); });
 
 async function runAction(id, action) {
   let body;
@@ -960,10 +1333,20 @@ async function runAction(id, action) {
   } catch (e) {
     toast(`${id}: ${e}`);
   }
-  refresh();
+  await refresh();
+  // Done, failed, retried: the view stays open, showing what it became.
+  if (taskShown === id) showTask(id);
 }
 
 document.addEventListener("click", (e) => {
+  // A row is the task: clicking it opens the view, unless the click was meant
+  // for one of its buttons.
+  const row = e.target.closest("tr[data-kind='task']");
+  if (row && !e.target.closest("button, a, input, select")) {
+    selected = row.dataset.id;
+    showTask(row.dataset.id);
+    return;
+  }
   const stat = e.target.closest("button[data-filter]");
   if (stat) { showStat(stat.dataset.filter); return; }
   const head = e.target.closest("button[data-sort]");
@@ -990,11 +1373,102 @@ document.addEventListener("click", (e) => {
   } else if (action === "clear-filters") {
     filter = null;
     age = "any";
+    query = "";
     refresh();
   } else {
     runAction(id, action);
   }
 });
+
+// ---- One task, up close
+//
+// The table has room for one line per task; this is everything else: the whole
+// prompt, the workspace, what the run cost, and the same buttons the row has.
+const taskOverlay = document.getElementById("task-overlay");
+const taskTitle = document.getElementById("task-title");
+const taskBody = document.getElementById("task-body");
+let taskShown = null; // the id the view is showing
+
+const ON_FINISH_HELP = {
+  none: "Leave the changes for you to look at",
+  commit: "Commit them",
+  push: "Commit and push",
+  pr: "Commit, push, and open a pull request",
+};
+
+// "1.5k in / 2.3M out · $0.0412", or nothing when the agent said nothing.
+function fmtUsage(t) {
+  const n = (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v));
+  const parts = [];
+  if (t.tokens_in != null || t.tokens_out != null) {
+    parts.push(`${t.tokens_in == null ? "?" : n(t.tokens_in)} in / ${t.tokens_out == null ? "?" : n(t.tokens_out)} out`);
+  }
+  if (t.cost_usd != null) parts.push(`$${t.cost_usd.toFixed(4)}`);
+  return parts.join(" · ");
+}
+
+function renderTaskView(t) {
+  taskTitle.innerHTML = `<span class="mono">${escapeHtml(t.id)}</span>` +
+    `<button class="copy" data-action="copy" data-text="${escapeHtml(t.id)}" ` +
+    `title="Copy the id" aria-label="Copy the id ${escapeHtml(t.id)}">${COPY_ICON}</button>`;
+
+  const facts = [
+    ["Status", badge(t.status)],
+    t.error ? ["Why it ended", `<span class="why">${escapeHtml(t.error)}</span>`] : null,
+    ["Project", `<span class="mono">${escapeHtml(t.repo)}</span>`],
+    t.branch ? ["Branch", `<span class="mono">${escapeHtml(t.branch)}</span>`] : null,
+    ["Workspace", t.worktree
+      ? `<span class="mono">${escapeHtml(t.worktree)}</span>`
+      : "the project folder itself (no separate worktree)"],
+    ["Agent", t.agent ? marked(t.agent) : "-"],
+    ["Model", t.model === "-"
+      ? `<span title="${escapeHtml(MODEL_SOURCE_HELP.none)}">-</span>`
+      : marked(t.model, { note: inferred(t.model_source) ? MODEL_SOURCE_HELP[t.model_source] : "" })],
+    ["When it's done", ON_FINISH_HELP[t.on_finish] || t.on_finish],
+    ["Runs", t.mode === "interactive" ? "in a terminal you can type into" : "on its own, no one watching"],
+    t.created_at ? ["Queued", escapeHtml(t.created_at)] : null,
+    t.scheduled_at ? ["Starts", escapeHtml(t.scheduled_at)] : null,
+    t.started_at ? ["Started", escapeHtml(t.started_at)] : null,
+    t.finished_at ? ["Finished", escapeHtml(t.finished_at)] : null,
+    ["Attempts", String(t.attempts) + (t.interruptions
+      ? ` (${t.interruptions} cut short from outside)` : "")],
+    t.exit_code != null ? ["Exit code", String(t.exit_code)] : null,
+    fmtUsage(t) ? ["Usage", escapeHtml(fmtUsage(t))] : null,
+  ].filter(Boolean);
+
+  taskBody.innerHTML =
+    `<h3>What it asks for</h3>` +
+    `<pre class="prompt">${escapeHtml(t.prompt.trim())}</pre>` +
+    `<h3>The run</h3>` +
+    `<dl>${facts.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${v}</dd>`).join("")}</dl>` +
+    `<div class="acts">${actionButtons(t)}</div>`;
+}
+
+async function showTask(id) {
+  taskShown = id;
+  taskTitle.textContent = id;
+  taskBody.innerHTML = "loading&hellip;";
+  taskOverlay.classList.add("active");
+  try {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/view`, { headers: AUTH() });
+    const data = await res.json();
+    if (!res.ok || taskShown !== id) {
+      if (taskShown === id) taskBody.innerHTML = `<p class="why">${escapeHtml(data.error || "can't read that task")}</p>`;
+      return;
+    }
+    renderTaskView(data);
+  } catch (e) {
+    if (taskShown === id) taskBody.innerHTML = `<p class="why">${escapeHtml(String(e))}</p>`;
+  }
+}
+
+function closeTask() {
+  taskShown = null;
+  taskOverlay.classList.remove("active");
+}
+
+document.getElementById("task-close").addEventListener("click", closeTask);
+taskOverlay.addEventListener("click", (e) => { if (e.target === taskOverlay) closeTask(); });
 
 // ---- Runner on/off
 
@@ -1229,11 +1703,84 @@ $("new-close").addEventListener("click", closeForm);
 $("new-cancel").addEventListener("click", closeForm);
 $("f-repeat").addEventListener("change", syncFormFields);
 newOverlay.addEventListener("click", (e) => { if (e.target === newOverlay) closeForm(); });
+// ---- Keyboard
+//
+// The dashboard is a list you work through, so it reads like one: j/k to move,
+// Enter to open, Esc to back out. Nothing fires while a field has the cursor,
+// where those keys are just letters.
+
+const keysOverlay = document.getElementById("keys-overlay");
+const KEYS_TABS = ["queue", "running", "archive", "schedules"];
+
+function typing() {
+  const el = document.activeElement;
+  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA"
+    || el.tagName === "SELECT" || el.isContentEditable);
+}
+
+// Back out of whatever is open, innermost first. On a plain page, Esc mean
+// "never mind the search".
+function escape() {
+  if (taskOverlay.classList.contains("active")) return closeTask();
+  if (logsOverlay.classList.contains("active")) return closeLogs();
+  if (keysOverlay.classList.contains("active")) return keysOverlay.classList.remove("active");
+  if (setupOverlay.classList.contains("active")) return setupOverlay.classList.remove("active");
+  if (newOverlay.classList.contains("active")) return closeForm();
+  if (query) {
+    query = "";
+    if (lastState) draw(lastState);
+    return;
+  }
+  if (document.activeElement === searchEl) searchEl.blur();
+}
+
+// Move the highlight down (+1) or up (-1) the table on screen, and scroll it
+// into view. Nothing is opened here: Enter does that.
+function moveSelection(step) {
+  const rows = [...document.querySelectorAll(`#panel-${activeTab()} tbody tr[data-kind="task"]`)];
+  if (rows.length === 0) return;
+  const at = rows.findIndex(r => r.dataset.id === selected);
+  const next = at === -1 ? (step > 0 ? 0 : rows.length - 1)
+    : Math.min(rows.length - 1, Math.max(0, at + step));
+  selected = rows[next].dataset.id;
+  for (const row of rows) row.classList.toggle("selected", row === rows[next]);
+  rows[next].scrollIntoView({ block: "nearest" });
+}
+
+document.getElementById("keys-open").addEventListener("click", () => keysOverlay.classList.add("active"));
+document.getElementById("keys-close").addEventListener("click", () => keysOverlay.classList.remove("active"));
+keysOverlay.addEventListener("click", (e) => { if (e.target === keysOverlay) keysOverlay.classList.remove("active"); });
+
+document.getElementById("theme-toggle").addEventListener("click", () => {
+  applyTheme(THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length], true);
+});
+
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    closeForm();
-    logsOverlay.classList.remove("active");
-    setupOverlay.classList.remove("active");
+  if (e.key === "Escape") { escape(); return; }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (typing()) return;
+  const tab = KEYS_TABS[Number(e.key) - 1];
+  if (e.key === "/") {
+    e.preventDefault();
+    searchEl.focus();
+    searchEl.select();
+  } else if (e.key === "?") {
+    e.preventDefault();
+    keysOverlay.classList.toggle("active");
+  } else if (e.key === "n") {
+    openForm("new");
+  } else if (tab) {
+    filter = null;
+    showTab(tab);
+    refresh();
+  } else if (e.key === "j") {
+    moveSelection(1);
+  } else if (e.key === "k") {
+    moveSelection(-1);
+  } else if (e.key === "Enter" && selected) {
+    showTask(selected);
+  } else if (e.key === "o" && selected) {
+    showLogs(selected);
   }
 });
 // Cmd/Ctrl+Enter submits from the prompt box.
@@ -1297,6 +1844,7 @@ newForm.addEventListener("submit", async (e) => {
   fSubmit.disabled = false;
 });
 
+applyTheme(theme, false);
 refresh();
 checkSetupQuietly();
 setInterval(refresh, 2000);
