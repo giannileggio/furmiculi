@@ -19,9 +19,9 @@ humantime-serde = "1.1.1"
 libc = "0.2.189"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
-serde_yaml_ng = "0.10.0"
 tiny_http = "0.12"
 toml = "1.1.6"
+yaml_serde = "0.10.7"
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -9,7 +9,7 @@
 
 use anyhow::{Context, Result, bail};
 use serde::de::DeserializeOwned;
-use serde_yaml_ng::Value;
+use yaml_serde::Value;
 
 /// Splits a document into its raw YAML frontmatter and its body.
 pub fn split(content: &str) -> Result<(&str, &str)> {
@@ -33,7 +33,7 @@ pub fn split(content: &str) -> Result<(&str, &str)> {
 /// frontmatter key not in `allowed` so typos surface as errors.
 pub fn parse<T: DeserializeOwned>(content: &str, allowed: &[&str]) -> Result<(T, String)> {
     let (yaml, body) = split(content)?;
-    let value: Value = serde_yaml_ng::from_str(yaml).context("invalid YAML in frontmatter")?;
+    let value: Value = yaml_serde::from_str(yaml).context("invalid YAML in frontmatter")?;
     let Value::Mapping(map) = &value else {
         bail!("frontmatter must be a YAML mapping");
     };
@@ -43,13 +43,13 @@ pub fn parse<T: DeserializeOwned>(content: &str, allowed: &[&str]) -> Result<(T,
             bail!("unknown field `{key}`");
         }
     }
-    let parsed = serde_yaml_ng::from_value(value)?;
+    let parsed = yaml_serde::from_value(value)?;
     Ok((parsed, body.trim().to_string()))
 }
 
 /// Renders `frontmatter` and `body` back into a document.
 pub fn render<T: serde::Serialize>(frontmatter: &T, body: &str) -> Result<String> {
-    let yaml = serde_yaml_ng::to_string(frontmatter)?;
+    let yaml = yaml_serde::to_string(frontmatter)?;
     Ok(format!("---\n{yaml}---\n\n{}\n", body.trim()))
 }
 
@@ -58,7 +58,7 @@ pub fn render<T: serde::Serialize>(frontmatter: &T, body: &str) -> Result<String
 pub fn has_key(content: &str, key: &str) -> bool {
     split(content)
         .ok()
-        .and_then(|(yaml, _)| serde_yaml_ng::from_str::<Value>(yaml).ok())
+        .and_then(|(yaml, _)| yaml_serde::from_str::<Value>(yaml).ok())
         .is_some_and(|v| v.get(key).is_some())
 }
 
