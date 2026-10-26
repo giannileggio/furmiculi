@@ -305,6 +305,51 @@ fn a_timeout_stops_the_agent_and_everything_it_started() {
 }
 
 #[test]
+fn a_child_left_holding_the_pipes_does_not_stall_the_run() {
+    let env = Env::new("");
+    // The agent exits at once, but leaves a `sleep` behind that inherited
+    // its stdout and stderr, so the tees never reach EOF. The attempt's exit
+    // status is what decides the run: waiting for the pipes would report a
+    // timeout for work that finished in a second.
+    env.add("leaky", "echo done; sleep 300 &", &["--retries", "0"]);
+
+    let started = Instant::now();
+    assert_eq!(env.run_until_archived("leaky"), "done");
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "a child the agent left behind held back the run's outcome"
+    );
+    let log = std::fs::read_to_string(env.home.path().join("logs/leaky.1.log")).unwrap();
+    assert!(log.contains("done"), "{log}");
+}
+
+/// pi retries a transient provider error in-process. The error appears in
+/// the stream, but the retry succeeds and the run is green: its exit stays 0.
+#[test]
+fn a_retried_provider_error_archives_as_done() {
+    let env = Env::new("");
+    let stream = [
+        r#"{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"Request timed out."}}"#,
+        r#"{"type":"auto_retry_start","attempt":1,"maxAttempts":3}"#,
+        r#"{"type":"auto_retry_end","attempt":1,"success":true}"#,
+        r#"{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}"#,
+        r#"{"type":"agent_settled","aborted":false}"#,
+    ]
+    .iter()
+    .map(|line| format!("'{line}'"))
+    .collect::<Vec<_>>()
+    .join(" ");
+    env.add(
+        "retried",
+        &format!("printf '%s\\n' {stream}"),
+        &["--retries", "0"],
+    );
+
+    assert_eq!(env.run_until_archived("retried"), "done");
+    assert_eq!(env.field("retried", "exit_code").as_deref(), Some("0"));
+}
+
+#[test]
 fn losing_the_tmux_server_requeues_without_using_a_retry() {
     let env = Env::new("");
     env.add("survivor", "sleep 300", &["--retries", "0"]);
@@ -641,6 +686,10 @@ fn fake_gh(dir: &Path, pr: FakePr) -> PathBuf {
 }
 
 fn finish_with_pr(pr: FakePr) -> usize {
+    finish_with_pr_prompt(pr, "echo work > f.txt")
+}
+
+fn finish_with_pr_prompt(pr: FakePr, prompt: &str) -> usize {
     let env = Env::new("");
     let origin = tempfile::tempdir().unwrap();
     git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
@@ -655,7 +704,7 @@ fn finish_with_pr(pr: FakePr) -> usize {
     );
     let bin = fake_gh(env.home.path(), pr);
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-    env.add("prtask", "echo work > f.txt", &["--on-finish", "pr"]);
+    env.add("prtask", prompt, &["--on-finish", "pr"]);
 
     wait_for("prtask to be archived", Duration::from_secs(60), || {
         ok(env
@@ -675,6 +724,14 @@ fn finish_with_pr(pr: FakePr) -> usize {
 #[test]
 fn on_finish_pr_opens_a_pr_when_there_is_none() {
     assert_eq!(finish_with_pr(FakePr::None), 1);
+}
+
+/// A task can legitimately change nothing. There is then no commit to push
+/// and no PR to open: `gh pr create` ("No commits between ...") must not
+/// turn that into a failed task.
+#[test]
+fn on_finish_pr_with_nothing_to_commit_archives_as_done() {
+    assert_eq!(finish_with_pr_prompt(FakePr::None, "true"), 0);
 }
 
 #[test]

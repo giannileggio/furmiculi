@@ -16,9 +16,11 @@ npx playwright install chromium          # the browser (add --with-deps with roo
 npm test                                 # FURMI_BIN=path/to/furmi for another build
 ```
 
-Each test gets its own `furmi` process, home, git repo and tmux server (see
-`tests/fixtures.ts`), so they run in parallel and touch nothing of yours: no
-`~/.furmiculi`, no real tmux session, no network. The agent is a stub that runs
+Each test gets its own `furmi` process, home, git repo, tmux server and port
+(see `tests/fixtures.ts`), so they run in parallel and touch nothing of yours:
+no `~/.furmiculi`, no real tmux session, no network. The port is one `furmi`
+asks the OS for (`--port 0`) and reports back, rather than one the test guessed
+and hoped stayed free until `furmi` bound it. The agent is a stub that runs
 the task's prompt as a shell command, so no coding agent is installed or
 needed — but `tmux` and `git` are. Tests that need the queue running opt in with
 `test.use({ runner: true })`.

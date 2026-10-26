@@ -13,7 +13,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -220,26 +220,17 @@ pub fn exec(home: &Home, id: &str, status_file: &Path) -> Result<ExitCode> {
                 )
             });
             let status = child.wait().context("waiting for the agent")?;
-            let captured = tees.and_then(|(out, err)| {
-                let _ = err.join();
-                out.join().ok()
-            });
+            // The child exiting is what decides the run. The tees only add
+            // what it printed: a process it left behind holding the pipes
+            // open must not keep the exit record from being written.
+            let captured = tees.and_then(collect_tees);
             let exit = match (status.code(), status.signal()) {
                 (Some(code), _) => Exit::Code(code),
                 (None, Some(sig)) => Exit::Signal(sig),
                 (None, None) => Exit::Code(1),
             };
             let stream = captured.map(|out| Stream::parse(&out)).unwrap_or_default();
-            let exit = match (exit, &stream.error) {
-                // pi's `--mode json` exits 0 even when the run failed; the
-                // stream is the only place that says so. Anything else (a
-                // non-zero exit) already speaks for itself.
-                (Exit::Code(0), Some(error)) => {
-                    eprintln!("error: {error}");
-                    Exit::Code(1)
-                }
-                (exit, _) => exit,
-            };
+            let exit = recorded_exit(exit, &stream);
             (exit, stream.usage)
         }
         Err(e) => {
@@ -304,20 +295,18 @@ impl StreamedLog {
 }
 
 /// Copies `src` to `dst` (the pane) and the log as it arrives. With
-/// `capture`, also returns (a bounded amount of) what it read.
-fn tee<R, W>(
-    mut src: R,
-    mut dst: W,
-    log: Arc<Mutex<StreamedLog>>,
-    capture: bool,
-) -> std::thread::JoinHandle<Vec<u8>>
+/// `capture`, also collects (a bounded amount of) what it read, readable at
+/// any time rather than only once the stream reaches EOF.
+fn tee<R, W>(mut src: R, mut dst: W, log: Arc<Mutex<StreamedLog>>, capture: bool) -> Tee
 where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
-    std::thread::spawn(move || {
+    let (tx, done) = mpsc::channel();
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let tee_captured = captured.clone();
+    let handle = std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
-        let mut captured = Vec::new();
         while let Ok(n) = src.read(&mut buf)
             && n > 0
         {
@@ -326,12 +315,57 @@ where
             if let Ok(mut log) = log.lock() {
                 log.write(&buf[..n]);
             }
-            if capture && captured.len() < MAX_CAPTURE_BYTES {
-                captured.extend_from_slice(&buf[..n]);
+            if capture
+                && let Ok(mut captured) = tee_captured.lock()
+                && captured.len() < MAX_CAPTURE_BYTES
+            {
+                let room = MAX_CAPTURE_BYTES - captured.len();
+                captured.extend_from_slice(&buf[..n.min(room)]);
             }
         }
-        captured
-    })
+        // The receiver may be gone (an abandoned tee): that's fine.
+        let _ = tx.send(());
+    });
+    Tee {
+        is_stdout: capture,
+        captured,
+        done,
+        handle,
+    }
+}
+
+/// A tee thread: what it captured so far is readable at any time, and `done`
+/// fires when the stream reaches EOF (never, if a leaked child keeps it open).
+struct Tee {
+    is_stdout: bool,
+    captured: Arc<Mutex<Vec<u8>>>,
+    done: mpsc::Receiver<()>,
+    handle: std::thread::JoinHandle<()>,
+}
+
+/// How long the tees get, in total, to reach EOF after the agent exited.
+/// Output a process the agent left behind still holds the pipe for is not
+/// waited for; whatever was captured by then is used. A leaked child must
+/// cost at most a tail of the log, never the run's outcome.
+const TEE_DRAIN_GRACE: Duration = Duration::from_secs(1);
+
+/// Returns what the stdout tee captured, waiting at most
+/// [`TEE_DRAIN_GRACE`] for the tees to reach EOF. A tee still blocked on a
+/// pipe a leaked child holds open is abandoned after that: its thread dies
+/// with this process.
+fn collect_tees((out, err): (Tee, Tee)) -> Option<Vec<u8>> {
+    let deadline = Instant::now() + TEE_DRAIN_GRACE;
+    let mut captured = None;
+    for tee in [out, err] {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if tee.done.recv_timeout(left).is_ok() {
+            let _ = tee.handle.join();
+        }
+        if tee.is_stdout {
+            captured = Some(tee.captured.lock().map(|b| b.clone()).unwrap_or_default());
+        }
+    }
+    captured
 }
 
 /// How the agent process ended, as recorded by [`exec`].
@@ -361,6 +395,19 @@ impl std::str::FromStr for Exit {
             "signal" => Ok(Exit::Signal(n)),
             _ => Err(bad()),
         }
+    }
+}
+
+/// The exit to record for a run: pi's `--mode json` exits 0 even when the
+/// run failed, so a stream that ended on an error turns that 0 into a
+/// failure. Anything else (a non-zero exit) already speaks for itself.
+fn recorded_exit(exit: Exit, stream: &Stream) -> Exit {
+    match (exit, &stream.error) {
+        (Exit::Code(0), Some(error)) => {
+            eprintln!("error: {error}");
+            Exit::Code(1)
+        }
+        (exit, _) => exit,
     }
 }
 
@@ -450,10 +497,23 @@ impl Stream {
     }
 
     /// Folds one event of an agent's JSON stream into the totals: the usage of
-    /// a finished assistant message, and why it ended if it ended badly.
+    /// a finished assistant message, and how the run ended. Only the final
+    /// outcome counts: pi retries a transient failure in-process, so an error
+    /// in a message that a later successful retry (or a later clean message)
+    /// recovered from must not fail the run.
     fn read_event(&mut self, event: &serde_json::Value) {
-        if event.get("type").and_then(serde_json::Value::as_str) != Some("message_end") {
-            return; // `agent_end` and friends repeat what `message_end` said
+        match event.get("type").and_then(serde_json::Value::as_str) {
+            Some("message_end") => {}
+            Some("auto_retry_end") => {
+                // A retry that succeeded means the error it was retrying is
+                // over, even if no later assistant message says so.
+                if event.get("success").and_then(serde_json::Value::as_bool) == Some(true) {
+                    self.error = None;
+                }
+                return;
+            }
+            // `agent_end` and friends repeat what `message_end` said.
+            _ => return,
         }
         let Some(message) = event.get("message") else {
             return;
@@ -467,9 +527,9 @@ impl Stream {
                 None => usage,
             });
         }
-        if let Some(error) = pi_error(message) {
-            self.error = Some(error);
-        }
+        // A message that ended cleanly after a failed one means the run
+        // recovered; a genuinely failed run ends on the error message.
+        self.error = pi_error(message);
     }
 }
 
@@ -1842,6 +1902,92 @@ mod tests {
         let stream = Stream::parse(ok.as_bytes());
         assert_eq!(stream.error, None);
         assert_eq!(stream.usage, None);
+    }
+
+    #[test]
+    fn a_retried_pi_error_does_not_fail_the_run() {
+        // pi retries a transient provider failure in-process: when the retry
+        // succeeds the run did not fail, so the earlier error must not stick.
+        let retried = [
+            r#"{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"Request timed out.","usage":{"input":10,"output":0}}}"#,
+            r#"{"type":"auto_retry_start","attempt":1,"maxAttempts":3}"#,
+            r#"{"type":"auto_retry_end","attempt":1,"success":true}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","stopReason":"stop","usage":{"input":20,"output":5}}}"#,
+            r#"{"type":"agent_settled","aborted":false}"#,
+        ]
+        .join("\n");
+        let stream = Stream::parse(retried.as_bytes());
+        assert_eq!(stream.error, None);
+        // The run's exit stays 0, and both turns still report their usage.
+        assert_eq!(recorded_exit(Exit::Code(0), &stream), Exit::Code(0));
+        assert_eq!(stream.usage.unwrap().tokens_in, Some(30));
+
+        // A successful retry clears the error even when no later assistant
+        // message follows it, and a later clean message clears it too.
+        let quiet_retry = [
+            r#"{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"Request timed out."}}"#,
+            r#"{"type":"auto_retry_end","success":true}"#,
+            r#"{"type":"agent_settled","aborted":false}"#,
+        ]
+        .join("\n");
+        assert_eq!(Stream::parse(quiet_retry.as_bytes()).error, None);
+        let later_clean = [
+            r#"{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"Request timed out."}}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}"#,
+        ]
+        .join("\n");
+        assert_eq!(Stream::parse(later_clean.as_bytes()).error, None);
+
+        // A run that really did fail still ends up failed.
+        let failed = [
+            r#"{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"model is not available"}}"#,
+            r#"{"type":"auto_retry_end","success":false}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"model is not available"}}"#,
+            r#"{"type":"agent_settled","aborted":false}"#,
+        ]
+        .join("\n");
+        let stream = Stream::parse(failed.as_bytes());
+        assert_eq!(
+            stream.error.as_deref(),
+            Some("the agent reported error: model is not available")
+        );
+        assert_eq!(recorded_exit(Exit::Code(0), &stream), Exit::Code(1));
+    }
+
+    #[test]
+    fn a_leaked_child_does_not_delay_the_outcome() {
+        // The agent prints its final answer and exits, but leaves a child
+        // behind that still holds stdout and stderr open, so the tees never
+        // see EOF. What was captured must still come back, without waiting.
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("printf '{\"type\":\"agent_settled\",\"aborted\":false}\\n'; sleep 3 & exit 0")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let log = Arc::new(Mutex::new(StreamedLog::create(&dir.path().join("t.log"))));
+        let tees = (
+            tee(
+                child.stdout.take().unwrap(),
+                std::io::sink(),
+                log.clone(),
+                true,
+            ),
+            tee(child.stderr.take().unwrap(), std::io::sink(), log, false),
+        );
+        child.wait().unwrap();
+
+        let started = Instant::now();
+        let captured = collect_tees(tees).expect("the stdout tail was still captured");
+        let waited = started.elapsed();
+        assert!(
+            waited < Duration::from_secs(2),
+            "waited {waited:?} for a child the agent left behind"
+        );
+        let text = String::from_utf8_lossy(&captured);
+        assert!(text.contains(r#""agent_settled""#), "{text}");
     }
 
     #[test]

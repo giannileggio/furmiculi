@@ -246,8 +246,14 @@ pub fn on_finish(action: OnFinish, dir: &Path, id: &str, prompt: &str) -> Result
     if action == OnFinish::None {
         return Ok(());
     }
+    // A task can legitimately change nothing ("remove the watermark if
+    // there is one"). There is then no branch to push and nothing to open a
+    // PR for: `gh pr create` would fail with "No commits between ...",
+    // turning a successful run into a failed one. Nothing to do is success.
     let message = commit_message(id, prompt);
-    commit_all(dir, &message)?;
+    if !commit_all(dir, &message)? {
+        return Ok(());
+    }
     if action == OnFinish::Commit {
         return Ok(());
     }
@@ -499,6 +505,19 @@ mod tests {
         let log = git(p, &["log", "-1", "--format=%B"]).unwrap();
         assert!(log.starts_with("Add a file\n\nAdd a file\n\nWith details."));
         assert!(log.contains("furmi task: t"));
+    }
+
+    #[test]
+    fn a_clean_tree_makes_pr_on_finish_succeed_without_a_pr() {
+        let repo = repo();
+        let p = repo.path();
+        // There is no `origin` to push to and no `gh` to open a PR with, so
+        // reaching either would fail: a clean tree must skip both.
+        on_finish(OnFinish::Pr, p, "t", "Remove the watermark if there is one").unwrap();
+        assert_eq!(
+            git(p, &["rev-list", "--count", "HEAD"]).unwrap().trim(),
+            "1"
+        );
     }
 
     #[test]
