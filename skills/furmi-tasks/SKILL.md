@@ -36,9 +36,11 @@ task it can carry out.
 - **Only set fields the user asked for.** Anything you leave out falls back
   to `[defaults]` in `~/.furmiculi/config.toml`, which is what the user expects.
   Examples: "open a PR" → `--on-finish pr`; "I'll drive it" →
-  `--mode interactive`; "use codex" → `--agent codex` (the allowed names are
-  the `[agents.*]` sections in config.toml); a named model → `--model` with
-  the model id in the form that agent's CLI expects.
+  `--mode interactive` (they follow it with `furmi attach <id>`); "use
+  codex" → `--agent codex` (the allowed names are the `[agents.*]` sections
+  in config.toml, and `furmi agents` shows which are installed — a task
+  whose agent isn't installed fails); a named model → `--model` with the
+  model id in the form that agent's CLI expects.
 
 ## 2. Write the prompt
 
@@ -75,13 +77,15 @@ regression test covers it. `npm test` passes.
 EOF
 ```
 
-Options (all optional except `--repo`):
+Options (pass `--repo` unless the task is for the repo you're in; the rest
+fall back to `[defaults]`):
 
 | Option | Meaning |
 |--------|---------|
+| `--repo <path>` | The project to run in. Defaults to the git repo you're in. |
 | `--id <id>` | File name and id: `a-z`, `0-9`, `-`. Default: derived from the prompt's first line. Pass a short descriptive one. |
 | `--branch <name>` | Default `furmi/<id>`. |
-| `--no-worktree` | Work directly in the repo checkout. |
+| `--no-worktree` | Work directly in the repo checkout. Only when the user asks: the agent edits the checkout they may be working in, and `on_finish` commits everything there. |
 | `--agent <name>`, `--model <id>` | See step 1. |
 | `--mode headless\|interactive` | |
 | `--on-finish none\|commit\|push\|pr` | |
@@ -89,8 +93,9 @@ Options (all optional except `--repo`):
 | `--at <RFC 3339>` | e.g. `2026-09-28T02:00:00+02:00`. Use the local UTC offset (`date +%:z`). |
 | `--in <duration>` | e.g. `2h`. |
 
-On success it prints the new file's path. On failure it lists the problems;
-fix them and run it again.
+On success it prints the new file's path (a person at a terminal sees a short
+summary instead). On failure it lists the problems; fix them and run it
+again.
 
 ## 4. Recurring work: schedules
 
@@ -113,10 +118,11 @@ Update dependencies to their latest compatible versions...
 ```
 
 Then run `furmi validate ~/.furmiculi/schedules/<id>.md` and fix anything it
-reports. Use an id that doesn't already exist in `~/.furmiculi/schedules/`. The schedule first
-fires at the next matching time after `furmi run` sees it. A firing is skipped
-while the previous task from the same schedule is still queued or running;
-add `allow_overlap: true` only if the user wants runs to pile up.
+reports. Use an id that doesn't already exist in `~/.furmiculi/schedules/`. The
+schedule first fires at the next matching time after the runner sees it
+(`furmi run` or `furmi start`). A firing is skipped while the previous
+task from the same schedule is still queued or running; add
+`allow_overlap: true` only if the user wants runs to pile up.
 
 ## 5. Changing or dropping queued work
 
@@ -126,18 +132,24 @@ add `allow_overlap: true` only if the user wants runs to pile up.
   `enabled: false`.
 - Change a status only with these commands, and confirm with the user first:
   `furmi cancel <id>` (pending or running), `furmi retry <id>` (failed,
-  cancelled or needs_review: requeues it), `furmi done <id>` (runs
-  `on_finish`, e.g. opens the PR) and `furmi fail <id> -r "<why>"`. The
-  `error:` field says why a task failed; `furmi logs <id>` prints its output.
+  cancelled or needs_review: requeues it), `furmi done <id>` (running,
+  needs_review or failed: runs `on_finish`, e.g. opens the PR) and
+  `furmi fail <id> -r "<why>"` (running or needs_review). The `error:` field
+  says why a task failed; `furmi logs <id>` prints its output.
 - Never edit fields furmi writes (`status`, `attempts`, `started_at`,
   `finished_at`, `exit_code`, `tmux_window`, `error`, `interruptions`,
-  `last_enqueued_at`),
-  and never delete task files.
+  `tokens_in`, `tokens_out`, `cost_usd`, `model_used`, and a schedule's
+  `last_enqueued_at`), and never delete task files.
 - Don't edit `running` tasks, or anything in `~/.furmiculi/archive/`, `logs/` or
   `worktrees/`.
 
 ## 6. Report back
 
 Tell the user the task id, when it will start, and what happens when it
-finishes (e.g. "opens a PR on `furmi/fix-login-redirect`"). If it should start
-soon, remind them that tasks only run while `furmi run` is running.
+finishes (e.g. "opens a PR on `furmi/fix-login-redirect`"). Tasks only run
+while the runner is up, and it starts nothing more once the day's reported
+cost reaches `[runner] daily_budget_usd` in config.toml; `furmi status`
+says both, so check it before promising a start time. If the runner is down,
+say that `furmi start` starts it and serves the dashboard (`furmi start -d`
+leaves both running after the shell closes), and that `furmi doctor` says
+what's missing when it won't run.
