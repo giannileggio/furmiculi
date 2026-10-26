@@ -1,0 +1,25 @@
+# Changelog
+
+Releases and their notes are on the
+[releases page](https://github.com/giannileggio/furmiculi/releases). This file
+lists what changed between them.
+
+## Unreleased
+
+- A dashboard served with `--allowed-host '*'` now prints a warning at start-up:
+  the bearer token is then the only gate.
+- The remote-access documentation moved to [docs/REMOTE.md](docs/REMOTE.md).
+- `on_finish: pr` no longer fails a task that changed nothing; the per-repo
+  parallelism limit keys on repository identity; a task run directly in a repo
+  checkout (`worktree: false`) is now loud about it (#24, #25, #26).
+
+## 0.2.0
+
+- `furmi update` installs a release over the running binary (#22).
+- The dashboard is a list you can work through, with keyboard shortcuts, and
+  the model a run used is recorded (#20).
+- The repository was prepared to be public.
+
+## 0.1.0
+
+First release.
