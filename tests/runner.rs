@@ -458,23 +458,22 @@ fn a_schedule_does_not_pile_up_runs_unless_allowed() {
 }
 
 #[test]
-fn the_daily_budget_stops_new_tasks_from_starting() {
-    let env = Env::new("daily_budget_usd = 1.0");
-    std::fs::write(
-        env.home.path().join("archive/spent.md"),
-        format!(
-            "---\nid: spent\nstatus: done\nrepo: {}\nfinished_at: {}\ncost_usd: 5.0\n---\n\nx\n",
-            env.repo.path().display(),
-            chrono::Local::now().to_rfc3339()
-        ),
-    )
-    .unwrap();
-    env.add("waiting", "true", &[]);
+fn status_totals_the_tokens_used_today() {
+    let env = Env::new("");
+    for (id, tokens_in, tokens_out) in [("one", 1200, 300), ("two", 800, 200)] {
+        std::fs::write(
+            env.home.path().join(format!("archive/{id}.md")),
+            format!(
+                "---\nid: {id}\nstatus: done\nrepo: {}\nfinished_at: {}\ntokens_in: {tokens_in}\ntokens_out: {tokens_out}\n---\n\nx\n",
+                env.repo.path().display(),
+                chrono::Local::now().to_rfc3339()
+            ),
+        )
+        .unwrap();
+    }
 
-    env.tick();
-    assert_eq!(env.field("waiting", "status").as_deref(), Some("pending"));
     let status = String::from_utf8_lossy(&env.furmi_ok(&["status"]).stdout).into_owned();
-    assert!(status.contains("$5.0000 of $1.0000"), "{status}");
+    assert!(status.contains("2.0k in / 500 out today"), "{status}");
 }
 
 #[test]

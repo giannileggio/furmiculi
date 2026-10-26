@@ -1399,7 +1399,7 @@ document.addEventListener("click", (e) => {
 // ---- One task, up close
 //
 // The table has room for one line per task; this is everything else: the whole
-// prompt, the workspace, what the run cost, and the same buttons the row has.
+// prompt, the workspace, the tokens it used, and the same buttons the row has.
 const taskOverlay = document.getElementById("task-overlay");
 const taskTitle = document.getElementById("task-title");
 const taskBody = document.getElementById("task-body");
@@ -1412,14 +1412,13 @@ const ON_FINISH_HELP = {
   pr: "Commit, push, and open a pull request",
 };
 
-// "1.5k in / 2.3M out · $0.0412", or nothing when the agent said nothing.
+// "1.5k in / 2.3M out", or nothing when the agent said nothing.
 function fmtUsage(t) {
   const n = (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v));
   const parts = [];
   if (t.tokens_in != null || t.tokens_out != null) {
     parts.push(`${t.tokens_in == null ? "?" : n(t.tokens_in)} in / ${t.tokens_out == null ? "?" : n(t.tokens_out)} out`);
   }
-  if (t.cost_usd != null) parts.push(`$${t.cost_usd.toFixed(4)}`);
   return parts.join(" · ");
 }
 

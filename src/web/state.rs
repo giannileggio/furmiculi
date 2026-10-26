@@ -25,7 +25,7 @@ struct Row {
     /// ticks the "running for" clock from it, since the printed form has
     /// minute precision and its own idea of "asap".
     ///
-    /// Token/cost usage deliberately isn't here: it only exists for completed
+    /// Token usage deliberately isn't here: it only exists for completed
     /// headless runs of agents that print JSON, so a column of it would be
     /// mostly dashes and easy to mistake for accounting. `furmi ls` and the task
     /// files still have it.

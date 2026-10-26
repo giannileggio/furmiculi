@@ -12,7 +12,7 @@ use crate::home::{Home, contract_tilde, expand_tilde};
 use crate::schedule::Schedule;
 use crate::skill;
 use crate::spec::{Mode, OnFinish, TaskSpec, slugify, validate_id};
-use crate::task::{Task, fmt_cost, fmt_tokens, now};
+use crate::task::{Task, fmt_tokens, now};
 
 #[derive(clap::Args)]
 pub struct InitArgs {
@@ -276,7 +276,7 @@ pub fn load_tasks(dir: &Path) -> Result<(Vec<Task>, Vec<String>)> {
 /// The header row plus one row per task, as `furmi ls` shows them.
 pub fn task_rows(config: &Config, tasks: &[Task]) -> Vec<Vec<String>> {
     let mut rows = vec![row([
-        "ID", "STATUS", "WHEN", "REPO", "BRANCH", "AGENT", "TOKENS", "COST",
+        "ID", "STATUS", "WHEN", "REPO", "BRANCH", "AGENT", "TOKENS",
     ])];
     for t in tasks {
         let eff = t.spec.resolve(&config.defaults);
@@ -296,7 +296,6 @@ pub fn task_rows(config: &Config, tasks: &[Task]) -> Vec<Vec<String>> {
                 (None, _) => "-".into(),
             },
             fmt_tokens(t.tokens_in, t.tokens_out),
-            fmt_cost(t.cost_usd),
         ]);
     }
     rows

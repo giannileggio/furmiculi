@@ -17,7 +17,6 @@ max_parallel = 3            # tasks running at once, overall
 max_parallel_per_repo = 1   # tasks running at once in the same repo
 tmux_session = "furmi"      # one session, one window per task
 poll_interval = "30s"       # how often `furmi run` rescans the folders
-# daily_budget_usd = 20.0   # stop starting tasks once today's reported cost reaches this
 
 # Fallbacks for any field a task or schedule doesn't set.
 [defaults]
@@ -40,8 +39,8 @@ timeout = "2h"
 # codex "--full-auto"; gemini "--yolo") to suit your trust level.
 #
 # claude's headless preset asks for `--output-format json`, and pi's for
-# `--mode json`: furmi parses those for token/cost usage (see
-# `tokens_in`/`tokens_out`/`cost_usd` in FORMAT.md), and pi's event stream is
+# `--mode json`: furmi parses those for token usage (see
+# `tokens_in`/`tokens_out` in FORMAT.md), and pi's event stream is
 # the only place it says a run failed. Drop the flag and furmi just won't record
 # usage for that agent (pi's log also goes back to plain text).
 [agents.claude]
@@ -133,10 +132,6 @@ pub struct Runner {
     pub tmux_session: String,
     #[serde(with = "humantime_serde")]
     pub poll_interval: Duration,
-    /// Once the cost agents reported for tasks run today reaches this,
-    /// `furmi run` starts no more until tomorrow. Unset: no limit. Only agents
-    /// that report a cost (see `cost_usd`) count towards it.
-    pub daily_budget_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -173,7 +168,6 @@ impl Default for Runner {
             max_parallel_per_repo: 1,
             tmux_session: "furmi".into(),
             poll_interval: Duration::from_secs(30),
-            daily_budget_usd: None,
         }
     }
 }
@@ -206,7 +200,7 @@ impl Default for Config {
 /// Presets for common CLI agents: `(name, headless, interactive)`. All take
 /// `--model`. The headless ones ask for JSON output where the agent has it
 /// (`claude --output-format json`, `pi --mode json`), because that is what
-/// carries the token/cost usage furmi records — and, for pi, the only place a
+/// carries the token usage furmi records — and, for pi, the only place a
 /// failed run is reported (its JSON mode exits 0 either way).
 const PRESETS: &[(&str, &[&str], &[&str])] = &[
     (
@@ -501,13 +495,6 @@ impl Config {
     fn check(&self) -> Result<()> {
         if self.runner.max_parallel == 0 || self.runner.max_parallel_per_repo == 0 {
             bail!("runner.max_parallel and runner.max_parallel_per_repo must be at least 1");
-        }
-        if self
-            .runner
-            .daily_budget_usd
-            .is_some_and(|b| b.is_nan() || b <= 0.0)
-        {
-            bail!("runner.daily_budget_usd must be a positive number");
         }
         for (name, agent) in &self.agents {
             if agent.headless.is_empty() || agent.interactive.is_empty() {

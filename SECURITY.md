@@ -46,8 +46,8 @@ What it *uses*:
 - **Running an agent is running an agent.** A prompt-injected task can do
   whatever that agent can. Keep unattended agents on the shortest leash their
   own flags allow (`--permission-mode`, `--full-auto`, …), and see the
-  `[runner]` limits in [docs/FORMAT.md](docs/FORMAT.md) (`daily_budget_usd`,
-  `max_parallel`, `timeout`).
+  `max_parallel` and `timeout` limits (see `furmi init`'s config.toml and
+  [docs/FORMAT.md](docs/FORMAT.md)).
 
 ## In scope
 

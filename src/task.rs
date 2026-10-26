@@ -75,9 +75,6 @@ pub struct Task {
     /// Total output tokens the agent reported, if it reports usage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens_out: Option<u64>,
-    /// Cost in USD the agent reported, if it reports usage.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_usd: Option<f64>,
     /// The model the agent said it ran with, if it says (`provider/model` for
     /// the agents that report both). A task that doesn't pin `model` still ran
     /// with one — this is that answer, kept so a finished task can be read
@@ -104,6 +101,7 @@ const TASK_KEYS: &[&str] = &[
     "error",
     "tokens_in",
     "tokens_out",
+    // No longer recorded; still accepted so older task files load.
     "cost_usd",
     "model_used",
 ];
@@ -139,11 +137,6 @@ fn fmt_count(n: u64) -> String {
     }
 }
 
-/// `"$0.0512"`, or `"-"` if the agent didn't report a cost.
-pub fn fmt_cost(cost_usd: Option<f64>) -> String {
-    cost_usd.map_or_else(|| "-".into(), |c| format!("${c:.4}"))
-}
-
 impl Task {
     pub fn new(id: String, spec: TaskSpec, prompt: String) -> Self {
         Self {
@@ -162,19 +155,13 @@ impl Task {
             error: None,
             tokens_in: None,
             tokens_out: None,
-            cost_usd: None,
             model_used: None,
             prompt,
         }
     }
 
     /// Adds one attempt's reported usage to the task's totals.
-    pub fn add_usage(
-        &mut self,
-        tokens_in: Option<u64>,
-        tokens_out: Option<u64>,
-        cost: Option<f64>,
-    ) {
+    pub fn add_usage(&mut self, tokens_in: Option<u64>, tokens_out: Option<u64>) {
         fn sum<T: std::ops::Add<Output = T> + Default + Copy>(
             a: Option<T>,
             b: Option<T>,
@@ -186,7 +173,6 @@ impl Task {
         }
         self.tokens_in = sum(self.tokens_in, tokens_in);
         self.tokens_out = sum(self.tokens_out, tokens_out);
-        self.cost_usd = sum(self.cost_usd, cost);
     }
 
     /// The model to name for this task, and where the name came from.
@@ -386,13 +372,12 @@ Fix the redirect loop.
     #[test]
     fn usage_adds_up_across_attempts() {
         let mut t = Task::parse(SAMPLE).unwrap();
-        t.add_usage(None, None, None);
-        assert_eq!((t.tokens_in, t.cost_usd), (None, None));
-        t.add_usage(Some(100), Some(10), Some(0.5));
-        t.add_usage(Some(50), None, Some(0.25));
+        t.add_usage(None, None);
+        assert_eq!((t.tokens_in, t.tokens_out), (None, None));
+        t.add_usage(Some(100), Some(10));
+        t.add_usage(Some(50), None);
         assert_eq!(t.tokens_in, Some(150));
         assert_eq!(t.tokens_out, Some(10));
-        assert_eq!(t.cost_usd, Some(0.75));
     }
 
     #[test]
@@ -464,12 +449,6 @@ Fix the redirect loop.
         t.prompt = "x".repeat(MAX_PROMPT_BYTES + 1);
         let problems = t.problems(&Config::default(), None);
         assert!(problems.iter().any(|p| p.contains("bytes")), "{problems:?}");
-    }
-
-    #[test]
-    fn formats_cost() {
-        assert_eq!(fmt_cost(None), "-");
-        assert_eq!(fmt_cost(Some(0.0512)), "$0.0512");
     }
 
     /// A failed save (full disk, read-only folder) must leave the

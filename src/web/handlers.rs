@@ -290,7 +290,6 @@ pub(super) fn task_view_json(home: &Home, id: &str) -> Result<String> {
         "error": task.error,
         "tokens_in": task.tokens_in,
         "tokens_out": task.tokens_out,
-        "cost_usd": task.cost_usd,
     });
     Ok(view.to_string())
 }
