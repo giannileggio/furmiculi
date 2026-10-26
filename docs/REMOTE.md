@@ -1,0 +1,79 @@
+# Serving the dashboard to other machines
+
+By default `furmi web` and `furmi start` bind to 127.0.0.1 only: the dashboard
+exists in your machine's loopback, checked with a loopback `Host` requirement
+(which defeats DNS rebinding), a per-run token POSTs must carry, and a loopback
+`Origin`. On a box without a screen there's nothing to open 127.0.0.1, so the
+dashboard can serve your other machines instead.
+
+The **first** `furmi web` asks about that, once:
+
+```sh
+$ furmi web
+Setting up the dashboard; this is saved, so it only asks once.
+Serve other machines (your tailnet), not just this one? (y/n) [y]: y
+Host name(s) browsers use to reach this box, comma-separated [box.tailnet.ts.net, 100.64.0.10]:
+```
+
+It saves the answers as a `[web]` table in `config.toml` and creates
+`~/.furmiculi/web-token` (0600, 128 random bits), then serves — as a wide,
+token-gated bind. Where tailscale can't be asked what this box is called (in a
+container whose `tailscaled` runs on the host, say) there's no name to fill in
+and the default is `*`: enter accepts any Host, or type the name your browsers
+use, and `furmi web --setup` takes it later. Answering "no" (or pressing enter) is saved the same way, as
+`configured = true` with nothing else, and keeps the loopback-only default. It
+only ever asks on a terminal: started from a unit or a script, it serves
+loopback silently rather than waiting for an answer. `furmi web --setup` asks
+again whenever you change your mind, and prefills what it knows.
+
+After that, a plain `furmi web` — no flags, no questions — does the same thing
+every time, and `furmi start`/`furmi service` follow the same table.
+`furmi doctor` prints the URL to open.
+
+Open the URL it prints once, with the token in the query string:
+
+```
+http://box.tailnet.ts.net:7433/?token=<the token in ~/.furmiculi/web-token>
+```
+
+The server answers with an `HttpOnly`, `SameSite=Strict` cookie holding the
+token, and the page keeps it in memory only (never localStorage) and strips it
+from the URL, then sends it with every request. The cookie is what makes a
+reload — or a bookmark — work after the token is gone from the address bar;
+without it every refresh would be a 401. The per-run token and Origin checks
+POSTs already had stay in place on top of that, so the cookie alone can't
+change anything. It lasts 30 days, re-set on each page load. (The URL with the
+token in it is printed only on a terminal; a unit's journal gets
+`?token=<the token>` instead, so the secret doesn't sit in logs.)
+
+Everything stays overridable by hand, and a flag always beats the saved value:
+
+```sh
+furmi web --listen 0.0.0.0:7433 --token-file ~/.furmiculi/web-token \
+  --allowed-host box.tailnet.ts.net --no-open
+```
+
+- `--listen <addr>`: the address to bind (`0.0.0.0:7433` for every
+  interface).
+- `--token-file <path>` (or `--token <value>`, but the file keeps the secret
+  out of argv, shell history and `ps`): a shared secret every request must
+  carry — `Authorization: Bearer <t>`. It must be 0600; a group- or
+  world-readable one is refused.
+- `--allowed-host <name>` (repeatable): the exact `Host` the browser sends
+  when it reaches the dashboard; requests with any other Host are rejected.
+  An entry alone allows any port on that host; `host:port` pins the port. `*`
+  instead accepts any Host — for when the name isn't knowable up front (the
+  setup prompt takes it too) — and then the bearer token is the only gate,
+  so keep it 0600.
+
+Starting a second dashboard on an address that's already served doesn't just
+fail with "address already in use": the serving one is recorded (pid and
+address, in `~/.furmiculi/.web.lock`), so the new one offers to stop it and
+take over — or does it without asking, with `--replace`, for scripts and unit
+files. Anything that isn't this home's own dashboard is left alone, with the
+old error.
+
+The dashboard speaks plain HTTP: put `tailscale serve` in front of it if you
+want HTTPS. And the quietest pattern is still SSH:
+`ssh -L 7433:127.0.0.1:7433 your-box`, with `furmi web` keeping every original
+protection untouched.

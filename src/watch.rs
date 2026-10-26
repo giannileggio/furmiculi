@@ -215,6 +215,7 @@ impl RawTerminal {
     fn enter() -> Result<Self> {
         // SAFETY: termios is plain data; tcgetattr fills it in.
         let mut saved: libc::termios = unsafe { std::mem::zeroed() };
+        // SAFETY: `saved` is a valid termios for tcgetattr to fill.
         if unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut saved) } != 0 {
             bail!("stdin is not a terminal");
         }
@@ -223,6 +224,7 @@ impl RawTerminal {
         raw.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ISIG);
         raw.c_cc[libc::VMIN] = 0;
         raw.c_cc[libc::VTIME] = 0;
+        // SAFETY: `raw` is a termios obtained from tcgetattr above.
         if unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw) } != 0 {
             bail!("couldn't switch the terminal to raw mode");
         }
@@ -236,6 +238,7 @@ impl Drop for RawTerminal {
     fn drop(&mut self) {
         print!("\x1B[?25h\x1B[?1049l");
         std::io::stdout().flush().ok();
+        // SAFETY: restores the termios saved by `enter`.
         unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.saved) };
     }
 }
@@ -248,10 +251,12 @@ fn read_keys(timeout: Option<Duration>) -> Vec<Key> {
         revents: 0,
     };
     let ms = timeout.map_or(-1, |t| t.as_millis().min(i32::MAX as u128) as i32);
+    // SAFETY: `fd` is one valid pollfd, matching the count of 1.
     if unsafe { libc::poll(&mut fd, 1, ms) } <= 0 {
         return Vec::new();
     }
     let mut buf = [0u8; 64];
+    // SAFETY: reads at most `buf.len()` bytes into `buf`.
     let n = unsafe { libc::read(libc::STDIN_FILENO, buf.as_mut_ptr().cast(), buf.len()) };
     if n <= 0 {
         return Vec::new();
@@ -260,7 +265,9 @@ fn read_keys(timeout: Option<Duration>) -> Vec<Key> {
 }
 
 fn terminal_size() -> (usize, usize) {
+    // SAFETY: winsize is plain data; the ioctl below fills it in.
     let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    // SAFETY: TIOCGWINSZ writes a winsize into `ws`.
     let ok = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) } == 0;
     if ok && ws.ws_col > 0 && ws.ws_row > 0 {
         (ws.ws_col as usize, ws.ws_row as usize)
