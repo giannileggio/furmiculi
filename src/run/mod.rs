@@ -8,13 +8,12 @@
 //! own exit-status tracking (which lags behind `pane_dead`).
 //!
 //! Split by what the runner does: [`scheduler`] enqueues due schedules,
-//! [`starting`] starts pending tasks (within the parallelism limits and the
-//! daily budget in [`budget`]), [`reaping`] reaps running ones and
+//! [`starting`] starts pending tasks (within the parallelism limits),
+//! [`reaping`] reaps running ones and
 //! [`finishing`] closes them out, and [`mod@exec`] is the per-task process that
 //! runs the agent (parsing its output for usage in [`usage`]). [`mod@log`] is
 //! the runner log.
 
-mod budget;
 mod exec;
 mod finishing;
 mod log;

@@ -1,4 +1,4 @@
-//! The token/cost usage an agent reported, and the failure it reported in its
+//! The token usage an agent reported, and the failure it reported in its
 //! event stream: both parsed from one attempt's headless stdout.
 
 use std::io::Read;
@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-/// Token/cost usage an agent reported for one attempt, and how the agent said
+/// Token usage an agent reported for one attempt, and how the agent said
 /// it went, both parsed from its headless stdout.
 ///
 /// Two shapes are understood, since that is what agents print:
@@ -25,8 +25,6 @@ pub(super) struct Usage {
     pub(super) tokens_in: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) tokens_out: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) cost_usd: Option<f64>,
     /// The model the agent said it ran with (`provider/model` when it names a
     /// provider too). A task that pins no model still runs with one, and only
     /// the agent's own output knows which.
@@ -112,7 +110,7 @@ impl Stream {
 }
 
 impl Usage {
-    /// Usage as Claude Code reports it: a `usage` object plus a total cost.
+    /// Usage as Claude Code reports it: a `usage` object.
     fn from_claude(value: &serde_json::Value) -> Option<Usage> {
         let usage = value.get("usage")?;
         let tokens = |key: &str| usage.get(key).and_then(serde_json::Value::as_u64);
@@ -121,10 +119,6 @@ impl Usage {
                 + tokens("cache_read_input_tokens").unwrap_or(0)
         });
         let tokens_out = tokens("output_tokens");
-        let cost_usd = value
-            .get("total_cost_usd")
-            .or_else(|| value.get("cost_usd"))
-            .and_then(serde_json::Value::as_f64);
         let model = value
             .get("model")
             .and_then(serde_json::Value::as_str)
@@ -132,14 +126,13 @@ impl Usage {
         Some(Usage {
             tokens_in,
             tokens_out,
-            cost_usd,
             model,
         })
         .filter(Usage::reported)
     }
 
     /// Usage as one of pi's assistant messages reports it: `input`, `output`,
-    /// the cache counters, and a `cost.total`.
+    /// and the cache counters.
     fn from_pi(message: &serde_json::Value) -> Option<Usage> {
         // `usage` can be missing (a message cut short before it reported any),
         // but the model it names is still worth keeping.
@@ -152,10 +145,6 @@ impl Usage {
         let tokens_in = count("input")
             .map(|n| n + count("cacheRead").unwrap_or(0) + count("cacheWrite").unwrap_or(0));
         let tokens_out = count("output");
-        let cost_usd = usage
-            .and_then(|u| u.get("cost"))
-            .and_then(|cost| cost.get("total"))
-            .and_then(serde_json::Value::as_f64);
         // pi names the model on every assistant message, and the provider
         // alongside it: the same `provider/model` a task's `model:` field
         // takes, so the two read alike.
@@ -171,7 +160,6 @@ impl Usage {
         Some(Usage {
             tokens_in,
             tokens_out,
-            cost_usd,
             model,
         })
         .filter(Usage::reported)
@@ -179,10 +167,7 @@ impl Usage {
 
     /// Did anything in here report something worth writing down?
     fn reported(&self) -> bool {
-        self.tokens_in.is_some()
-            || self.tokens_out.is_some()
-            || self.cost_usd.is_some()
-            || self.model.is_some()
+        self.tokens_in.is_some() || self.tokens_out.is_some() || self.model.is_some()
     }
 
     /// One turn plus another, field by field. The model isn't a total: the
@@ -192,7 +177,6 @@ impl Usage {
         Usage {
             tokens_in: plus(self.tokens_in, other.tokens_in),
             tokens_out: plus(self.tokens_out, other.tokens_out),
-            cost_usd: plus(self.cost_usd, other.cost_usd),
             model: self.model.or(other.model),
         }
     }
@@ -264,7 +248,6 @@ mod tests {
         let usage = stream.usage.unwrap();
         assert_eq!(usage.tokens_in, Some(120 + 30 + 500));
         assert_eq!(usage.tokens_out, Some(80));
-        assert_eq!(usage.cost_usd, Some(0.0512));
         assert_eq!(usage.model.as_deref(), Some("claude-sonnet-4-5-20250929"));
         assert_eq!(stream.error, None);
     }
@@ -338,7 +321,6 @@ mod tests {
         let usage = stream.usage.unwrap();
         assert_eq!(usage.tokens_in, Some((100 + 5 + 2) + 200));
         assert_eq!(usage.tokens_out, Some(30));
-        assert_eq!(usage.cost_usd, Some(0.03));
         assert_eq!(stream.error, None);
     }
     #[test]
@@ -460,7 +442,6 @@ mod tests {
         let usage = Usage {
             tokens_in: Some(650),
             tokens_out: Some(80),
-            cost_usd: Some(0.0512),
             model: Some("opencode-go/deepseek-v4.1-flash".into()),
         };
         let read_back: Usage = serde_json::from_str(&usage.to_json()).unwrap();

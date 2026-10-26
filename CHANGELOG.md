@@ -6,6 +6,11 @@ lists what changed between them.
 
 ## Unreleased
 
+- Cost is no longer recorded or limited: `cost_usd` and `[runner]
+  daily_budget_usd` are gone (an agent's printed cost is an API-equivalent
+  estimate, not what a subscription charges). Remove `daily_budget_usd` from
+  config.toml, which now rejects it. Tokens stay, and `furmi status` totals
+  the day's.
 - A dashboard served with `--allowed-host '*'` now prints a warning at start-up:
   the bearer token is then the only gate.
 - The remote-access documentation moved to [docs/REMOTE.md](docs/REMOTE.md).

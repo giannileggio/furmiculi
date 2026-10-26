@@ -202,8 +202,7 @@ What `furmi` does so that a bad day doesn't lose work:
 - **Timeouts really stop the agent**: SIGTERM to its process group, then
   SIGKILL.
 - **Guard rails.** A schedule won't enqueue a new run while its last one is
-  still queued (unless `allow_overlap: true`); `daily_budget_usd` stops new
-  tasks once the day's reported cost reaches it.
+  still queued (unless `allow_overlap: true`).
 - **Safe git handling.** A reused worktree must belong to the repo, `furmi`
   won't switch your checkout's branch over uncommitted changes, and
   `on_finish: pr` won't open a second PR for a branch that has one.
@@ -262,7 +261,7 @@ kept still gets an answer when you open it: the view reads it out of the
 attempt's log, saying where it found it.
 
 Clicking a row opens the task behind it: the whole prompt, the workspace it
-runs in, the agent, model and when-done step, what it cost, and the same
+runs in, the agent, model and when-done step, the tokens it used, and the same
 buttons the row carries. The id has a copy button in the row and in that view.
 **Search** above the tables narrows them to what matches — id, ask, project,
 branch, agent, model, and every word counts — and `Esc` clears it.
@@ -288,7 +287,7 @@ presets print) as the text it said and the tools it ran, with the raw bytes
 one click away. While a task is still working, an open log follows it: it
 re-reads the end of the agent's output (the last 100 KB, saying so) rather
 than the whole thing, and hands back the scroll position if you scrolled up
-to read something. Token/cost usage isn't a column here: it only exists for
+to read something. Token usage isn't a column here: it only exists for
 completed headless runs of agents that report it, which would be a column of
 dashes pretending to be accounting. `furmi ls` shows what was reported, and so
 does the task view.

@@ -138,7 +138,7 @@ task from the same schedule is still queued or running; add
   says why a task failed; `furmi logs <id>` prints its output.
 - Never edit fields furmi writes (`status`, `attempts`, `started_at`,
   `finished_at`, `exit_code`, `tmux_window`, `error`, `interruptions`,
-  `tokens_in`, `tokens_out`, `cost_usd`, `model_used`, and a schedule's
+  `tokens_in`, `tokens_out`, `model_used`, and a schedule's
   `last_enqueued_at`), and never delete task files.
 - Don't edit `running` tasks, or anything in `~/.furmiculi/archive/`, `logs/` or
   `worktrees/`.
@@ -147,9 +147,8 @@ task from the same schedule is still queued or running; add
 
 Tell the user the task id, when it will start, and what happens when it
 finishes (e.g. "opens a PR on `furmi/fix-login-redirect`"). Tasks only run
-while the runner is up, and it starts nothing more once the day's reported
-cost reaches `[runner] daily_budget_usd` in config.toml; `furmi status`
-says both, so check it before promising a start time. If the runner is down,
+while the runner is up; `furmi status` says whether it is, so check it
+before promising a start time. If the runner is down,
 say that `furmi start` starts it and serves the dashboard (`furmi start -d`
 leaves both running after the shell closes), and that `furmi doctor` says
 what's missing when it won't run.

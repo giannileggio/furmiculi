@@ -9,7 +9,7 @@ All state lives under one folder: `$FURMI_HOME`, default `~/.furmiculi`.
   schedules/     recurring task templates: one <id>.md per schedule
   archive/       finished tasks, moved out of tasks/
   logs/          <id>.<attempt>.log (the agent's output), .exit (exit status)
-                 and .usage (token/cost usage, if the agent reports it) per run
+                 and .usage (token usage, if the agent reports it) per run
   worktrees/     <id>/: the git worktree a task runs in (kept until `furmi clean`)
   runner.log     what `furmi run` did, appended (moved to runner.log.1 past 5 MB)
   runner.json    `furmi run`'s heartbeat: pid, start and last pass (see `furmi status`)
@@ -85,7 +85,6 @@ Don't edit these by hand. Use `furmi` commands to change the status.
 | `tmux_window` | Where the task is or was running. |
 | `error`       | Last failure reason. |
 | `tokens_in`, `tokens_out` | Token usage summed over attempts, if the agent's headless mode reports it (built in for `claude`). |
-| `cost_usd`    | Cost in USD, same condition. |
 | `model_used`  | The model the agent said it ran with (out of the same output as the usage above), `provider/model` when it names both. Only when the task pins no `model` does it differ from a name you chose: it is how a finished task records what it actually cost. A task that ran before this was kept has none — the dashboard reads the model out of the attempt's log when you open the task instead. |
 
 `needs_review` means an interactive session ended without signalling
@@ -209,18 +208,6 @@ placeholders. No shell is involved, so prompts need no quoting. A task's
 `model` (else the agent's `model`) fills `{model}` in `model_args`; with
 neither, nothing is added and the agent picks its own model.
 
-### Runner limits
-
-```toml
-[runner]
-daily_budget_usd = 20.0   # optional
-```
-
-Once the cost agents reported for tasks run today (local time) reaches
-`daily_budget_usd`, `furmi run` starts no more tasks until tomorrow; running
-ones finish. Only agents that report a cost count (see below). `furmi status`
-shows the day's spend.
-
 ### The dashboard
 
 ```toml
@@ -250,12 +237,14 @@ when `furmi start` began one), and `furmi status` says whether one is serving
 and where. For a dashboard that also survives reboots, `furmi service
 systemd|launchd` prints units that do that.
 
-### Token/cost usage and the model that ran
+### Token usage and the model that ran
 
 `furmi` records what a headless run's stdout reports as `tokens_in`,
-`tokens_out`, `cost_usd` and `model_used` on the task (`furmi ls` and the
-dashboard show the model; neither shows the tokens, since a column that is
-mostly dashes reads like accounting). Two shapes are understood:
+`tokens_out` and `model_used` on the task (`furmi ls` shows both; the
+dashboard shows the model in the list and the tokens in the task view;
+`furmi status` totals the day's tokens). Cost is deliberately not recorded:
+on a subscription plan the figure an agent prints is an API-equivalent
+estimate, not what you pay. Two shapes are understood:
 
 - one JSON object with a `usage` field — what `claude --output-format json`
   prints at the end of a run;

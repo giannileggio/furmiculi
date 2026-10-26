@@ -12,12 +12,12 @@ use crate::frontmatter;
 use crate::home::Home;
 use crate::run::{self, RunnerState};
 use crate::schedule::Schedule;
-use crate::task::{Status, Task, fmt_cost, now};
+use crate::task::{Status, Task, fmt_tokens, now};
 
 /// A pass this many poll intervals late means the runner is wedged.
 const STALE_AFTER_POLLS: u32 = 4;
 
-/// What's going on right now: runner liveness, queue counts, budget, and
+/// What's going on right now: runner liveness, queue counts, tokens used today, and
 /// schedules that keep failing.
 pub fn status(home: &Home) -> Result<()> {
     home.ensure_initialized()?;
@@ -83,28 +83,25 @@ pub fn status(home: &Home) -> Result<()> {
         count(&archived, Status::NeedsReview)
     );
 
-    if let Some(budget) = config.runner.daily_budget_usd {
-        let cost = |tasks: &[Task]| {
-            let midnight = now()
-                .with_timezone(&Local)
-                .date_naive()
-                .and_hms_opt(0, 0, 0)
-                .and_then(|t| t.and_local_timezone(Local).earliest());
-            tasks
-                .iter()
-                .filter(|t| {
-                    midnight
-                        .zip(t.finished_at.or(t.started_at))
-                        .is_some_and(|(m, at)| at >= m)
-                })
-                .filter_map(|t| t.cost_usd)
-                .sum::<f64>()
-        };
-        let spent = cost(&queued) + cost(&archived);
+    let midnight = now()
+        .with_timezone(&Local)
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|t| t.and_local_timezone(Local).earliest());
+    let (mut tokens_in, mut tokens_out, mut reported) = (0, 0, false);
+    for t in queued.iter().chain(&archived).filter(|t| {
+        midnight
+            .zip(t.finished_at.or(t.started_at))
+            .is_some_and(|(m, at)| at >= m)
+    }) {
+        reported |= t.tokens_in.is_some() || t.tokens_out.is_some();
+        tokens_in += t.tokens_in.unwrap_or(0);
+        tokens_out += t.tokens_out.unwrap_or(0);
+    }
+    if reported {
         println!(
-            "budget     {} of {} spent today",
-            fmt_cost(Some(spent)),
-            fmt_cost(Some(budget))
+            "tokens     {} today",
+            fmt_tokens(Some(tokens_in), Some(tokens_out))
         );
     }
 

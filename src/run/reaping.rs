@@ -87,7 +87,7 @@ pub(super) fn poll_running(
         if exit.is_some()
             && let Some(usage) = read_usage(&usage_file(home, &task.id, task.attempts))
         {
-            task.add_usage(usage.tokens_in, usage.tokens_out, usage.cost_usd);
+            task.add_usage(usage.tokens_in, usage.tokens_out);
             task.set_model_used(usage.model.as_deref());
         }
         let mut stop_agent = false;

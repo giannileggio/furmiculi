@@ -14,7 +14,6 @@ use crate::spec::{Effective, Mode};
 use crate::task::{Status, Task};
 use crate::tmux;
 
-use super::budget::over_budget;
 use super::finishing::{archive, fail_attempt};
 use super::log::log;
 use super::{load_tasks, log_file, status_file};
@@ -24,9 +23,6 @@ pub(super) fn start_pending(
     config: &Config,
     now: DateTime<FixedOffset>,
 ) -> Result<()> {
-    if over_budget(home, config, now) {
-        return Ok(());
-    }
     let mut per_repo: HashMap<PathBuf, usize> = HashMap::new();
     // Repos where a `worktree: false` task is running: a second one there
     // would have its branch switched and its work committed under the first.
