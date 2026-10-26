@@ -1045,6 +1045,12 @@ fn print_remote(serving: &Serving, token: &str, tty: bool) {
         hosts_summary(&serving.allowed_hosts),
         serving.token_from.as_deref().unwrap_or("--token")
     );
+    if serving.allowed_hosts.iter().any(|h| is_any_host(h)) {
+        println!(
+            "  Warning: any Host is accepted, so the token is the only gate, over plain HTTP.\n  \
+             Keep this behind tailscale/an SSH tunnel, or pin a name with --allowed-host."
+        );
+    }
 }
 
 /// A background `furmi run`, stopped when dropped. It's asked to stop

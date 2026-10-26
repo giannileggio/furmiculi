@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # New advisories land without any change here; re-run the dependency check.
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,7 +22,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install stable toolchain
         run: rustup update stable && rustup default stable
@@ -29,7 +35,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install tmux
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -55,7 +61,7 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install stable toolchain
         run: rustup update stable && rustup default stable
@@ -63,7 +69,7 @@ jobs:
       - name: Install tmux
         run: sudo apt-get update && sudo apt-get install -y tmux
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -88,7 +94,7 @@ jobs:
 
       - name: Keep the report when tests fail
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: playwright-report
           path: |
@@ -100,7 +106,7 @@ jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Read the declared minimum Rust version
         id: msrv
@@ -116,7 +122,14 @@ jobs:
   deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
           command: check advisories bans licenses sources
+
+  # The scripts under scripts/ drive the e2e and agent checks; keep them lint-clean.
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: shellcheck --severity=error scripts/*.sh

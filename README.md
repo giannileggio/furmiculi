@@ -7,6 +7,10 @@
 
 # furmiculi
 
+[![CI](https://github.com/giannileggio/furmiculi/actions/workflows/ci.yml/badge.svg)](https://github.com/giannileggio/furmiculi/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/giannileggio/furmiculi)](https://github.com/giannileggio/furmiculi/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 Queue and run coding-agent tasks defined as Markdown files.
 
 - **Tasks** are `.md` files: YAML frontmatter says where and how to run
@@ -59,20 +63,16 @@ terminal. No agent installed yet? `furmi agents` lists them with install
 commands. Run `furmi` on its own any time to see where things stand and what
 to try next, and `furmi doctor` if something isn't running.
 
-## Status
+## Platform
 
-Working now: `init`, `add`, `ls`, `validate`, `start`, `stop`, `agents`, `update`,
-`furmi run` (the runner and scheduler: tmux windows, git worktrees, retries,
-timeouts, `on_finish`), `done|fail|cancel|retry|attach`, `logs`, `clean`,
-`web` (a dashboard you can also act from, reachable from your other
-machines), `status`/`doctor`/`service` (keeping the runner and the dashboard
-running), and the agent skill for writing tasks.
+Linux and macOS (x86_64 and arm64). There is no Windows build: furmi shells out
+to tmux and uses Unix signals.
 
 ## Install
 
+Use the installer from the [Quick start](#quick-start), then:
+
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/giannileggio/furmiculi/releases/latest/download/furmiculi-installer.sh | sh
 furmi init         # optional: the first `furmi add`/`furmi start` sets up
                    # ~/.furmiculi by itself (override with $FURMI_HOME or --home).
                    # `furmi init` also asks whether to install the skill globally,
@@ -226,83 +226,12 @@ something needs attention. furmi doesn't run the installs for you: they're globa
 
 ### Serving your other machines (a tailnet)
 
-By default `furmi web` and `furmi start` bind to 127.0.0.1 only: the dashboard
-exists in your machine's loopback, checked with a loopback `Host` requirement
-(which defeats DNS rebinding), a per-run token POSTs must carry, and a loopback
-`Origin`. On a box without a screen there's nothing to open 127.0.0.1, so the
-dashboard can serve your other machines instead.
-
-The **first** `furmi web` asks about that, once:
-
-```sh
-$ furmi web
-Setting up the dashboard; this is saved, so it only asks once.
-Serve other machines (your tailnet), not just this one? (y/n) [y]: y
-Host name(s) browsers use to reach this box, comma-separated [box.tailnet.ts.net, 100.64.0.10]:
-```
-
-It saves the answers as a `[web]` table in `config.toml` and creates
-`~/.furmiculi/web-token` (0600, 128 random bits), then serves — as a wide,
-token-gated bind. Where tailscale can't be asked what this box is called (in a
-container whose `tailscaled` runs on the host, say) there's no name to fill in
-and the default is `*`: enter accepts any Host, or type the name your browsers
-use, and `furmi web --setup` takes it later. Answering "no" (or pressing enter) is saved the same way, as
-`configured = true` with nothing else, and keeps the loopback-only default. It
-only ever asks on a terminal: started from a unit or a script, it serves
-loopback silently rather than waiting for an answer. `furmi web --setup` asks
-again whenever you change your mind, and prefills what it knows.
-
-After that, a plain `furmi web` — no flags, no questions — does the same thing
-every time, and `furmi start`/`furmi service` follow the same table.
-`furmi doctor` prints the URL to open.
-
-Open the URL it prints once, with the token in the query string:
-
-```
-http://box.tailnet.ts.net:7433/?token=<the token in ~/.furmiculi/web-token>
-```
-
-The server answers with an `HttpOnly`, `SameSite=Strict` cookie holding the
-token, and the page keeps it in memory only (never localStorage) and strips it
-from the URL, then sends it with every request. The cookie is what makes a
-reload — or a bookmark — work after the token is gone from the address bar;
-without it every refresh would be a 401. The per-run token and Origin checks
-POSTs already had stay in place on top of that, so the cookie alone can't
-change anything. It lasts 30 days, re-set on each page load. (The URL with the
-token in it is printed only on a terminal; a unit's journal gets
-`?token=<the token>` instead, so the secret doesn't sit in logs.)
-
-Everything stays overridable by hand, and a flag always beats the saved value:
-
-```sh
-furmi web --listen 0.0.0.0:7433 --token-file ~/.furmiculi/web-token \
-  --allowed-host box.tailnet.ts.net --no-open
-```
-
-- `--listen <addr>`: the address to bind (`0.0.0.0:7433` for every
-  interface).
-- `--token-file <path>` (or `--token <value>`, but the file keeps the secret
-  out of argv, shell history and `ps`): a shared secret every request must
-  carry — `Authorization: Bearer <t>`. It must be 0600; a group- or
-  world-readable one is refused.
-- `--allowed-host <name>` (repeatable): the exact `Host` the browser sends
-  when it reaches the dashboard; requests with any other Host are rejected.
-  An entry alone allows any port on that host; `host:port` pins the port. `*`
-  instead accepts any Host — for when the name isn't knowable up front (the
-  setup prompt takes it too) — and then the bearer token is the only gate,
-  so keep it 0600.
-
-Starting a second dashboard on an address that's already served doesn't just
-fail with "address already in use": the serving one is recorded (pid and
-address, in `~/.furmiculi/.web.lock`), so the new one offers to stop it and
-take over — or does it without asking, with `--replace`, for scripts and unit
-files. Anything that isn't this home's own dashboard is left alone, with the
-old error.
-
-The dashboard speaks plain HTTP: put `tailscale serve` in front of it if you
-want HTTPS. And the quietest pattern is still SSH:
-`ssh -L 7433:127.0.0.1:7433 your-box`, with `furmi web` keeping every original
-protection untouched.
+By default `furmi web` and `furmi start` bind to 127.0.0.1 only. On a box
+without a screen, the first `furmi web` asks whether to serve your other
+machines instead, behind a bearer token and a `Host` allowlist (`--listen`,
+`--token-file`, `--allowed-host`). It speaks plain HTTP: put `tailscale serve`
+or an SSH tunnel (`ssh -L 7433:127.0.0.1:7433 your-box`) in front of it. See
+[docs/REMOTE.md](docs/REMOTE.md) for the setup, the flags and the cookie.
 
 A task that is still *Waiting* has an **Edit** button: change what it does, the
 project, when it starts, or what happens when it's done (not once it has
@@ -375,36 +304,12 @@ breaking the page.
 
 See [docs/FORMAT.md](docs/FORMAT.md) for the file formats.
 
-See [TODO.md](TODO.md) for the work in progress.
-
 ## Contributing
 
-Issues and pull requests are welcome. `cargo fmt --all`, `cargo clippy
---all-targets -- -D warnings` and `cargo test` are what CI runs, plus the
-browser tests in `e2e/` (see [Testing](#testing)).
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Security problems are not issues: see [SECURITY.md](SECURITY.md).
 
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
-
-## Testing
-
-```sh
-cargo test                  # unit tests, plus the CLI and runner tests in tests/
-                            # (they run the built `furmi` against real git and tmux)
-
-cargo build                 # browser tests for the dashboard, in e2e/
-cd e2e && npm ci && npx playwright install chromium
-npm test                    # FURMI_BIN=path/to/furmi to test another build
-```
-
-See [e2e/README.md](e2e/README.md) for what those cover, how to add one, and
-what to do where there is no root to install the browser's system libraries
-(`scripts/e2e-deps.sh`).
-
-The browser tests start `furmi start`/`furmi web` for each test against a throwaway
-home, git repo and tmux server, with a stub agent that runs the prompt as a
-shell command, so they need `tmux` and `git` but no real coding agent and touch
-none of your files. CI runs both on every push and pull request.
