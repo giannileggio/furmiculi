@@ -3,7 +3,7 @@
 // view of an agent's JSON output.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { expect, openDashboard, row, tab, test, type Forge } from "./fixtures";
+import { expect, openDashboard, row, tab, test, type Forge, count, view } from "./fixtures";
 
 /** Move a waiting task into the archive as a finished one, at a given time. */
 function finish(forge: Forge, id: string, finishedAt: string) {
@@ -34,24 +34,25 @@ test.describe("with the runner off", () => {
     forge.add("custom-agent", "true", "--agent", "stub2");
     await openDashboard(page, forge);
 
-    // Each on its own column: the agent name, then the model.
+    // One column holds both: the agent name, with the model under it.
     const branded = row(page, "branded");
-    await expect(branded.locator("td").nth(5)).toHaveText("claude");
-    await expect(branded.locator("td").nth(6)).toHaveText("claude-sonnet-4");
+    const agent = (id: string) => row(page, id).locator("td").nth(3).locator(".mark-text").first();
+    const model = (id: string) => row(page, id).locator("td").nth(3).locator(".sub");
+    await expect(agent("branded")).toHaveText("claude");
+    await expect(model("branded")).toHaveText("claude-sonnet-4");
     // A known name gets its brand mark, named in the tooltip.
-    await expect(branded.locator("td").nth(5).locator(".mark-text")).toHaveAttribute("title", "Claude");
-    await expect(branded.locator("td").nth(6).locator("svg.mark")).toHaveCount(1);
-    await expect(row(page, "local-model").locator("td").nth(6)).toHaveText(
-      "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
-    );
-    await expect(row(page, "local-model").locator("td").nth(6).locator(".mark-text")).toHaveAttribute("title", "QWen");
+    await expect(agent("branded")).toHaveAttribute("title", "Claude");
+    await expect(model("branded").locator("svg.mark")).toHaveCount(1);
+    await expect(model("local-model")).toHaveText("hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL");
+    await expect(model("local-model").locator(".mark-text")).toHaveAttribute("title", "QWen");
     // An agent with no mark of its own gets a letter chip, and no model says so.
-    await expect(row(page, "custom-agent").locator("td").nth(5).locator(".chip")).toHaveText("S");
-    await expect(row(page, "custom-agent").locator("td").nth(6)).toHaveText("-");
+    await expect(row(page, "custom-agent").locator("td").nth(3).locator(".chip")).toHaveText("S");
+    await expect(model("custom-agent")).toHaveText("-");
 
-    // Both columns sort like any other.
-    await page.locator('#panel-queue th button[data-sort="model"]').click();
-    await expect(page.locator("#panel-queue tbody tr").first()).toContainText("custom-agent");
+    // The column sorts like any other.
+    await page.locator('#panel-queue th button[data-sort="agent"]').click();
+    await expect(page.locator("#panel-queue tbody tr").first()).toContainText("branded");
+    await expect(branded).toHaveCount(1);
   });
 
   test("the column headers sort the waiting list", async ({ page, forge }) => {
@@ -72,6 +73,34 @@ test.describe("with the runner off", () => {
     await expect(page.locator('#panel-queue th[aria-sort="descending"]')).toHaveCount(1);
   });
 
+  test("ticking several tasks offers what they all allow, and acts on each", async ({ page, forge }) => {
+    forge.add("one", "true");
+    forge.add("two", "true");
+    forge.add("three", "true");
+    await openDashboard(page, forge);
+
+    await page.locator("#select-toggle").click();
+    await expect(page.locator("#bulk")).toContainText("0 selected");
+    await row(page, "one").locator("input[data-pick]").check();
+    await row(page, "two").locator("input[data-pick]").check();
+    await expect(page.locator("#bulk")).toContainText("2 selected");
+
+    // Clicking a row ticks it while selecting, rather than opening the task.
+    await row(page, "three").locator("td").nth(1).click();
+    await expect(page.locator("#bulk")).toContainText("3 selected");
+    await expect(page.locator("#task-overlay")).toBeHidden();
+    await row(page, "three").locator("input[data-pick]").uncheck();
+
+    page.once("dialog", (d) => void d.accept());
+    await page.locator('#bulk button[data-bulk="cancel"]').click();
+    await expect(count(page, "queue")).toHaveText("1");
+    await expect(row(page, "three")).toBeVisible();
+    await expect(page.locator("#bulk")).toContainText("0 selected");
+
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#bulk")).toBeHidden();
+  });
+
   test("the time window hides rows older than it, and the totals stay put", async ({ page, forge }) => {
     forge.add("fresh", "true");
     forge.add("stale", "true");
@@ -85,8 +114,7 @@ test.describe("with the runner off", () => {
     await page.locator("#age").selectOption("24h");
     await expect(page.locator("#panel-archive tbody tr")).toHaveCount(1);
     await expect(page.locator("#panel-archive tbody tr")).toContainText("fresh");
-    await expect(page.locator("#c-archive")).toHaveText("2"); // counted, just not shown
-    await expect(page.locator("#toolbar-note")).toHaveText("");
+    await expect(count(page, "archive")).toHaveText("2"); // counted, just not shown
 
     await page.locator("#toolbar-clear").click();
     await expect(page.locator("#panel-archive tbody tr")).toHaveCount(2);
@@ -107,18 +135,18 @@ test.describe("with the runner on", () => {
     await expect(row(page, "went-well").locator(".badge")).toHaveText("Done");
     await expect(row(page, "went-bad").locator(".badge")).toHaveText("Failed");
 
-    // "1 Failed" opens that tab with just those rows...
-    await page.locator(".stat.failed").click();
-    await expect(page.locator("#toolbar-note")).toContainText("Failed");
+    // "Failed" opens that tab with just those rows...
+    await view(page, "failed").click();
+    await expect(page.locator("#view-title")).toHaveText("Failed");
     await expect(page.locator("#panel-archive tbody tr")).toHaveCount(1);
     await expect(page.locator("#panel-archive tbody tr")).toContainText("went-bad");
 
-    // ...and "Show everything" puts the rest back.
-    await page.locator("#toolbar-clear").click();
+    // ...and "Finished" puts the rest back.
+    await view(page, "finished").click();
     await expect(page.locator("#panel-archive tbody tr")).toHaveCount(2);
 
     // Working: how long it has been going, kept current between refreshes.
-    await page.locator(".stat.running").click();
+    await view(page, "working").click();
     await expect(page.locator("#panel-running tbody tr")).toContainText("long-run");
     const elapsed = row(page, "long-run").locator(".elapsed");
     await expect(elapsed).toHaveText(/^running \d+s$/);
@@ -128,7 +156,7 @@ test.describe("with the runner on", () => {
     expect(later).toBeGreaterThan(first);
 
     // An empty list says so rather than showing the last thing it had.
-    await page.locator(".stat.pending").click();
+    await view(page, "waiting").click();
     await expect(page.locator("#panel-queue")).toContainText("Nothing is waiting.");
   });
 

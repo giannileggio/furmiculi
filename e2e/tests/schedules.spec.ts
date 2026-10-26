@@ -1,7 +1,7 @@
 // Repeating tasks: create, read back in plain words, edit, pause, delete.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createdId, expect, openDashboard, row, tab, test } from "./fixtures";
+import { createdId, expect, openDashboard, row, tab, test, count } from "./fixtures";
 
 test("a schedule can be created, edited, paused, resumed and deleted", async ({ page, forge }) => {
   await openDashboard(page, forge);
@@ -23,8 +23,8 @@ test("a schedule can be created, edited, paused, resumed and deleted", async ({ 
   const r = row(page, id);
   await expect(r).toContainText("Every weekday at 08:30");
   await expect(r.locator(".badge")).toHaveText("Active");
-  await expect(page.locator("#c-schedules")).toHaveText("1");
-  await expect(page.locator("#c-queue")).toHaveText("0"); // nothing is enqueued until it's due
+  await expect(count(page, "schedules")).toHaveText("1");
+  await expect(count(page, "queue")).toHaveText("0"); // nothing is enqueued until it's due
 
   const file = path.join(forge.home, "schedules", `${id}.md`);
   expect(fs.readFileSync(file, "utf8")).toContain("30 8 * * 1-5");

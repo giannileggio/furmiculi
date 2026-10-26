@@ -81,7 +81,7 @@ test.describe("with the runner off", () => {
     await openDashboard(page, forge);
 
     // Set on the task: it reads like any other cell.
-    const pinned = row(page, "pinned").locator("td").nth(6);
+    const pinned = row(page, "pinned").locator("td").nth(3).locator(".sub");
     await expect(pinned).toHaveText("claude-sonnet-4");
     await expect(pinned.locator(".model-inferred")).toHaveCount(0);
     // Set on the task: no footnote needed, the brand mark says the rest.
@@ -89,7 +89,7 @@ test.describe("with the runner off", () => {
 
     // Reported by the agent: dimmed, with the provenance on hover.
     await tab(page, "archive").click();
-    const reported = row(page, "reported").locator("td").nth(6);
+    const reported = row(page, "reported").locator("td").nth(3).locator(".sub");
     await expect(reported).toHaveText("opencode-go/deepseek-v4.1-flash");
     await expect(reported.locator(".mark-text")).toHaveClass(/model-inferred/);
     await expect(reported.locator(".mark-text")).toHaveAttribute(
@@ -113,7 +113,7 @@ test.describe("with the runner off", () => {
 
     await openDashboard(page, forge);
     await tab(page, "archive").click();
-    await expect(row(page, "old-run").locator("td").nth(6)).toHaveText("-");
+    await expect(row(page, "old-run").locator("td").nth(3).locator(".sub")).toHaveText("-");
     await row(page, "old-run").click();
     const model = page.locator("#task-body dd").nth(5);
     await expect(model).toContainText("opencode-go/deepseek-v4.1-flash");
@@ -191,12 +191,12 @@ test.describe("with the runner off", () => {
     await page.locator("#theme-toggle").click();
     await expect(page.locator("#theme-toggle")).toHaveText("Light");
     expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
-      "rgb(245, 246, 248)",
+      "rgb(242, 242, 243)",
     );
     await page.locator("#theme-toggle").click();
     await expect(page.locator("#theme-toggle")).toHaveText("Dark");
     expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
-      "rgb(15, 17, 21)",
+      "rgb(20, 22, 23)",
     );
     await expect(page.locator("#logo")).toHaveAttribute("src", "/logo-dark.png");
 
@@ -228,7 +228,7 @@ test.describe("with the runner off", () => {
 
     await expect(page.locator("#panel-queue thead")).toBeHidden();
     const cells = row(page, "narrow").locator("td");
-    await expect(cells.nth(3)).toHaveAttribute("data-label", "Project");
+    await expect(cells.nth(2)).toHaveAttribute("data-label", "Project");
     // The buttons are still there, with nothing to label them.
     await expect(row(page, "narrow").getByRole("button", { name: "Drop it" })).toBeVisible();
     // The stats and the toolbar still fit.
