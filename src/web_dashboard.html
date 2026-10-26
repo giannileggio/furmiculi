@@ -99,7 +99,7 @@
   @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
   header input[type="search"] {
     font: inherit; font-size: 14px; padding: 0 10px; height: 34px;
-    flex: 1 1 140px; max-width: 280px; min-width: 0;
+    flex: 1 1 140px; max-width: 280px; min-width: 110px;
     border: 1px solid var(--border); background: var(--surface); color: var(--text);
   }
   header input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
@@ -149,11 +149,22 @@
   .panel { display: none; }
   .panel.active { display: block; }
 
-  table { width: 100%; border-collapse: collapse; border-top: 1px solid var(--border); }
+  /* Fixed, so a long ask or model name is cut to its column instead of
+     stretching the table past the screen. The widths are on the headers. */
+  table { width: 100%; table-layout: fixed; border-collapse: collapse; border-top: 1px solid var(--border); }
+  td { overflow: hidden; overflow-wrap: anywhere; }
+  .col-status { width: 120px; }
+  .col-repo { width: 15%; }
+  .col-agent { width: 17%; }
+  .col-when { width: 11%; }
+  .col-actions { width: 220px; }
+  .col-enabled { width: 90px; }
+  .col-cron { width: 17%; }
+  .col-next { width: 15%; }
   th, td { text-align: left; padding: 11px 8px; border-bottom: 1px solid rgba(127,127,127,.18); font-size: 13px; vertical-align: middle; }
   th { color: var(--muted); font-weight: 400; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; padding-top: 9px; padding-bottom: 9px; border-bottom-color: var(--border); }
   tr:hover td { background: rgba(127,127,127,.07); }
-  td .sub { color: var(--muted); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+  td .sub { color: var(--muted); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* A status is a square outlined tag: the colour is a hint, the word is the news. */
   .badge {
@@ -169,7 +180,7 @@
 
   .empty { padding: 30px; text-align: center; color: var(--muted); }
 
-  .actions { display: flex; gap: 6px; white-space: nowrap; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .actions button {
     font-size: 12.5px; padding: 3px 9px;
     border: 1px solid var(--border); background: none; color: var(--text);
@@ -209,6 +220,7 @@
   }
   .toast.active { display: block; }
   header .primary {
+    white-space: nowrap;
     background: var(--accent); color: var(--bg); border: 1px solid var(--accent);
     padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
   }
@@ -241,7 +253,7 @@
   .why { color: var(--muted); font-size: 11px; max-width: 280px; white-space: normal; margin-top: 2px; }
   .summary {
     font-size: 14px; font-weight: 500;
-    max-width: 440px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .mark-text { display: inline-flex; align-items: center; gap: 6px; }
   .mark { width: 14px; height: 14px; flex: none; opacity: .8; }
@@ -397,6 +409,10 @@
 
   /* Narrow screens: a table is a card per task, each cell labelled where the
      header would have been. A dashboard gets read on a phone, in bed. */
+  @media (max-width: 1100px) {
+    .runner-pill .detail { display: none; }
+  }
+
   @media (max-width: 760px) {
     header { padding: 10px 14px; gap: 8px; flex-wrap: wrap; }
     .view-head { flex-wrap: wrap; }
@@ -419,7 +435,7 @@
     .view-head { padding: 14px 14px 0; }
     .view-head h1 { font-size: 28px; }
     .toolbar { margin: 10px 14px 0; gap: 8px; }
-    table { border: none; background: none; display: block; }
+    table { table-layout: auto; border: none; background: none; display: block; }
     thead { display: none; }
     tbody { display: block; }
     tbody tr {
@@ -885,10 +901,10 @@ function taskTable(rows, cols, empty, sortable, kind = "task") {
   const allOn = pick && rows.every(r => picked.has(r.id));
   const head = (pick ? `<th class="pickcell"><input type="checkbox" class="pick" data-pick-all ${allOn ? "checked" : ""}
       aria-label="Select all tasks in this list" title="Select all"></th>` : "") + cols.map(c => {
-    if (!sortable || !SORT_VALUES[c.key]) return `<th>${escapeHtml(c.label)}</th>`;
+    if (!sortable || !SORT_VALUES[c.key]) return `<th class="col-${c.key}">${escapeHtml(c.label)}</th>`;
     const on = sort.key === c.key;
     const order = !on ? "none" : sort.dir > 0 ? "ascending" : "descending";
-    return `<th aria-sort="${order}"><button class="sort${on ? " on" : ""}" data-sort="${c.key}"
+    return `<th class="col-${c.key}" aria-sort="${order}"><button class="sort${on ? " on" : ""}" data-sort="${c.key}"
       title="Sort by ${escapeHtml(c.label.toLowerCase())}">${escapeHtml(c.label)}<span class="arrow">${on ? (sort.dir > 0 ? "▲" : "▼") : ""}</span></button></th>`;
   }).join("");
   // Each cell carries its column name, so a narrow screen can label it where
