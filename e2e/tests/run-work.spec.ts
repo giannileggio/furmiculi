@@ -3,13 +3,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { createdId, expect, openDashboard, row, tab, test } from "./fixtures";
+import { createdId, expect, openDashboard, row, tab, test, count } from "./fixtures";
 
 test.use({ runner: true });
 
 test("a task queued from the form runs to Finished with its output and commit", async ({ page, forge }) => {
   await openDashboard(page, forge);
-  await expect(page.locator("#runner")).toContainText("runner: on");
+  await expect(page.locator("#runner")).toContainText("Runner on");
   await expect(page.locator("#runner-notice")).toBeHidden();
   await expect(page.getByText("No tasks yet")).toBeVisible();
 
@@ -27,8 +27,8 @@ test("a task queued from the form runs to Finished with its output and commit", 
   // The runner (not the test) moves it along: Waiting -> Working -> Finished.
   await tab(page, "archive").click();
   await expect(row(page, id).locator(".badge")).toHaveText("Done");
-  await expect(page.locator("#c-archive")).toHaveText("1");
-  await expect(page.locator("#c-queue")).toHaveText("0");
+  await expect(count(page, "archive")).toHaveText("1");
+  await expect(count(page, "queue")).toHaveText("0");
 
   await row(page, id).getByRole("button", { name: "Output" }).click();
   await expect(page.locator("#logs-title")).toHaveText(id);
@@ -68,7 +68,7 @@ test("a running task can be marked done or failed from its row, and dropped befo
   await openDashboard(page, forge);
 
   await tab(page, "running").click();
-  await expect(page.locator("#c-running")).toHaveText("3");
+  await expect(count(page, "running")).toHaveText("3");
   for (const id of ["finish-me", "quit-me", "drop-me"]) {
     await expect(row(page, id).locator(".badge")).toHaveText("Working");
   }
@@ -97,7 +97,7 @@ test("a running task can be marked done or failed from its row, and dropped befo
   });
   await row(page, "drop-me").getByRole("button", { name: "Mark failed" }).click();
 
-  await expect(page.locator("#c-running")).toHaveText("0");
+  await expect(count(page, "running")).toHaveText("0");
   await tab(page, "archive").click();
   await expect(row(page, "finish-me").locator(".badge")).toHaveText("Done");
   await expect(row(page, "quit-me").locator(".badge")).toHaveText("Failed");

@@ -1,7 +1,7 @@
 // What the page does with hostile or broken input.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { expect, openDashboard, test } from "./fixtures";
+import { expect, openDashboard, test, count } from "./fixtures";
 
 test("an unreadable task file is reported without breaking the page", async ({ page, forge }) => {
   forge.add("fine", "echo ok");
@@ -13,7 +13,7 @@ test("an unreadable task file is reported without breaking the page", async ({ p
   await expect(warn).toContainText("1 file(s) can't be read");
   await expect(warn).toContainText("broken.md");
   // The good task still shows, and the page keeps refreshing.
-  await expect(page.locator("#c-queue")).toHaveText("1");
+  await expect(count(page, "queue")).toHaveText("1");
   await expect(page.locator("tbody tr", { hasText: "fine" })).toBeVisible();
 
   fs.rmSync(path.join(forge.home, "tasks", "broken.md"));

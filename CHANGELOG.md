@@ -6,6 +6,9 @@ lists what changed between them.
 
 ## Unreleased
 
+- The install script now ends by asking whether to make the `furmi-tasks` skill
+  available in every project, so agents can queue tasks from any repo. Set
+  `FURMI_NO_SKILL=1` to skip the question.
 - Cost is no longer recorded or limited: `cost_usd` and `[runner]
   daily_budget_usd` are gone (an agent's printed cost is an API-equivalent
   estimate, not what a subscription charges). Remove `daily_budget_usd` from

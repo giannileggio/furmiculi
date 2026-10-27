@@ -9,38 +9,57 @@
 <link rel="icon" type="image/png" href="/logo-dark.png" media="(prefers-color-scheme: dark)">
 <style>
   :root {
-    --bg: #f5f6f8;
-    --panel: #ffffff;
-    --border: #e2e5ea;
-    --text: #1c2128;
-    --muted: #6b7280;
-    --accent: #4f46e5;
-    --pending: #6b7280;
-    --running: #2563eb;
-    --done: #16a34a;
-    --failed: #dc2626;
-    --cancelled: #9ca3af;
-    --review: #d97706;
+    --bg: #f2f2f3;
+    --panel: #f2f2f3;
+    --surface: #e9e9ea;
+    --border: rgba(29,31,32,.16);
+    --text: #1d1f20;
+    --muted: #5d5d60;
+    --accent: #5980a6;
+    --accent-ink: #416180;
+    --accent-wash: #d6ebff;
+    --pending: #5d5d60;
+    --running: #416180;
+    --done: #3f7a55;
+    --failed: #b3261e;
+    --cancelled: #7a7a7d;
+    --review: #9a5b00;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #0f1115;
-      --panel: #171a21;
-      --border: #2a2e37;
-      --text: #e6e8eb;
-      --muted: #8b93a1;
-      --accent: #818cf8;
+      --bg: #141617;
+      --panel: #141617;
+      --surface: #1c1f21;
+      --border: rgba(230,231,233,.16);
+      --text: #e6e7e9;
+      --muted: #a9a9ac;
+      --accent: #7fa6cc;
+      --accent-ink: #b5d9fd;
+      --accent-wash: #2c455d;
+      --running: #94bce3;
+      --done: #6fbf8a;
+      --failed: #f2877f;
+      --cancelled: #98989b;
+      --review: #e0a85a;
     }
   }
   /* A choice made on the page overrules the system. Same palette as the media
      query above, which is what "auto" means; keep the two in step. */
   :root[data-theme="dark"] {
-    --bg: #0f1115;
-    --panel: #171a21;
-    --border: #2a2e37;
-    --text: #e6e8eb;
-    --muted: #8b93a1;
-    --accent: #818cf8;
+    --bg: #141617;
+    --panel: #141617;
+    --surface: #1c1f21;
+    --border: rgba(230,231,233,.16);
+    --text: #e6e7e9;
+    --muted: #a9a9ac;
+    --accent: #7fa6cc;
+    --accent-ink: #b5d9fd;
+    --accent-wash: #2c455d;
+    --running: #94bce3;
+    --done: #6fbf8a;
+    --failed: #f2877f;
+    --cancelled: #98989b;
+    --review: #e0a85a;
   }
   * { box-sizing: border-box; }
   body {
@@ -51,96 +70,120 @@
   }
   code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   header {
+    position: sticky; top: 0; z-index: 5;
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 12px;
-    padding: 16px 20px;
+    padding: 10px 20px;
     border-bottom: 1px solid var(--border);
-    background: var(--panel);
-    flex-wrap: wrap;
+    background: var(--bg);
   }
-  header h1 { font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px; }
+  header h1 { font-size: 20px; font-weight: 600; letter-spacing: -.01em; margin: 0; display: flex; align-items: center; gap: 9px; }
   /* The README's ant, cropped to the mark: it is the whole of the branding, so
      the name stays text and the picture stays decorative. */
+  header .brand { display: flex; align-items: center; gap: 9px; color: inherit; text-decoration: none; }
+  header .brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   header .logo { height: 24px; width: auto; display: block; }
-  header .home { color: var(--muted); font-size: 12px; }
-  header .updated { margin-left: auto; color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  .runner-pill {
+    display: flex; align-items: center; gap: 8px; padding: 5px 10px;
+    border: 1px solid var(--border); font-size: 13px; white-space: nowrap;
+  }
   .dot {
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
     background: var(--done); margin-right: 6px; animation: pulse 2s infinite;
   }
+  .runner-pill .dot { margin: 0; }
+  .runner-pill .dot.off { background: var(--cancelled); animation: none; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+  header input[type="search"] {
+    font: inherit; font-size: 14px; padding: 0 10px; height: 34px;
+    flex: 1 1 140px; max-width: 280px; min-width: 110px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  }
+  header input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-    gap: 1px;
-    background: var(--border);
-    border-bottom: 1px solid var(--border);
+  .layout { display: flex; align-items: flex-start; }
+  .content { flex: 1; min-width: 0; }
+  aside#side {
+    width: 240px; flex: none; position: sticky; top: 55px;
+    padding: 20px 14px 24px 16px; display: flex; flex-direction: column; gap: 24px;
+    border-right: 1px solid var(--border); min-height: calc(100vh - 55px);
   }
-  .stat {
-    background: var(--panel);
-    padding: 14px 16px;
-    border: none; font: inherit; color: inherit; text-align: left;
-    cursor: pointer;
+  aside#side h2 {
+    margin: 0; padding: 0 10px 6px; font-size: 12px; font-weight: 600;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
   }
-  .stat:hover { background: rgba(127,127,127,.08); }
-  .stat:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .stat.active { box-shadow: inset 0 -3px 0 var(--accent); }
-  .stat.active .l { color: var(--text); }
-  .stat .n { font-size: 22px; font-weight: 600; }
-  .stat .l { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
-  .stat.pending .n { color: var(--pending); }
-  .stat.running .n { color: var(--running); }
-  .stat.done .n { color: var(--done); }
-  .stat.failed .n { color: var(--failed); }
-  .stat.cancelled .n { color: var(--cancelled); }
-  .stat.needs_review .n { color: var(--review); }
-
-  nav {
-    display: flex; gap: 4px;
-    padding: 10px 20px 0;
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
+  aside#side nav { display: flex; flex-direction: column; gap: 2px; }
+  aside#side nav button {
+    display: flex; align-items: center; gap: 10px; padding: 7px 10px;
+    border: none; border-left: 2px solid transparent; background: none;
+    color: var(--text); font: inherit; font-size: 14px; text-align: left; cursor: pointer;
   }
-  nav button {
-    background: none; border: none; cursor: pointer;
-    padding: 8px 14px; font-size: 13px; color: var(--muted);
-    border-bottom: 2px solid transparent;
-  }
-  nav button.active { color: var(--text); border-color: var(--accent); font-weight: 600; }
-  nav button .count {
-    display: inline-block; margin-left: 6px; padding: 1px 6px;
-    background: var(--border); border-radius: 999px; font-size: 11px;
+  aside#side nav button:hover { background: rgba(127,127,127,.12); }
+  aside#side nav button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  aside#side nav button.active { border-left-color: var(--accent); background: rgba(127,127,127,.12); font-weight: 600; }
+  aside#side nav button .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  aside#side nav button .count { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 400; }
+  aside#side nav button.alert .count { color: var(--text); font-weight: 700; }
+  .side-note {
+    border: 1px solid var(--border); padding: 12px 14px; margin: 0 4px;
+    font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; gap: 4px;
+    overflow-wrap: anywhere;
   }
 
-  main { padding: 16px 20px 40px; }
+  .view-head { padding: 22px 22px 0; display: flex; align-items: flex-end; gap: 12px; }
+  .view-head > div { flex: 1; min-width: 0; }
+  .view-head .ghost {
+    background: none; color: var(--text); border: 1px solid var(--border);
+    padding: 5px 12px; min-height: 34px; cursor: pointer; font: inherit; font-size: 13px;
+  }
+  .view-head .ghost:hover { background: rgba(127,127,127,.12); }
+  .view-head .ghost[hidden] { display: none; }
+  .view-head .ghost.on { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .view-head h1 { margin: 0; font-size: 34px; line-height: 1.05; font-weight: 600; letter-spacing: -.015em; }
+  .view-head p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+
+  main { padding: 16px 22px 40px; }
   .panel { display: none; }
   .panel.active { display: block; }
 
-  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
-  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
-  tr:last-child td { border-bottom: none; }
-  tr:hover td { background: rgba(127,127,127,.06); }
+  /* Fixed, so a long ask or model name is cut to its column instead of
+     stretching the table past the screen. The widths are on the headers. */
+  table { width: 100%; table-layout: fixed; border-collapse: collapse; border-top: 1px solid var(--border); }
+  td { overflow: hidden; overflow-wrap: anywhere; }
+  .col-status { width: 120px; }
+  .col-repo { width: 15%; }
+  .col-agent { width: 17%; }
+  .col-when { width: 11%; }
+  .col-actions { width: 220px; }
+  .col-enabled { width: 90px; }
+  .col-cron { width: 17%; }
+  .col-next { width: 15%; }
+  th, td { text-align: left; padding: 11px 8px; border-bottom: 1px solid rgba(127,127,127,.18); font-size: 13px; vertical-align: middle; }
+  th { color: var(--muted); font-weight: 400; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; padding-top: 9px; padding-bottom: 9px; border-bottom-color: var(--border); }
+  tr:hover td { background: rgba(127,127,127,.07); }
+  td .sub { color: var(--muted); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+  /* A status is a square outlined tag: the colour is a hint, the word is the news. */
   .badge {
-    display: inline-block; padding: 2px 8px; border-radius: 999px;
-    font-size: 11px; font-weight: 600; color: #fff;
+    display: inline-block; padding: 2px 8px; border: 1px solid currentColor;
+    font-size: 12px; font-weight: 500; white-space: nowrap;
   }
-  .badge.pending { background: var(--pending); }
-  .badge.running { background: var(--running); }
-  .badge.done { background: var(--done); }
-  .badge.failed { background: var(--failed); }
-  .badge.cancelled { background: var(--cancelled); }
-  .badge.needs_review { background: var(--review); }
+  .badge.pending { color: var(--pending); }
+  .badge.running { color: var(--running); background: var(--accent-wash); }
+  .badge.done { color: var(--done); }
+  .badge.failed { color: var(--bg); background: var(--failed); border-color: var(--failed); }
+  .badge.cancelled { color: var(--cancelled); }
+  .badge.needs_review { color: var(--review); }
 
   .empty { padding: 30px; text-align: center; color: var(--muted); }
 
-  .actions { display: flex; gap: 6px; white-space: nowrap; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .actions button {
-    font-size: 11px; padding: 4px 8px; border-radius: 4px;
-    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    font-size: 12.5px; padding: 3px 9px;
+    border: 1px solid var(--border); background: none; color: var(--text);
     cursor: pointer;
   }
   .actions button:hover { background: rgba(127,127,127,.12); }
@@ -155,7 +198,7 @@
   /* Opened from a task view, the log sits on top of it and hands back to it. */
   #logs-overlay { z-index: 12; }
   .modal {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg); border: 1px solid var(--border);
     width: min(800px, 100%); max-height: 80vh; display: flex; flex-direction: column;
   }
   .modal header {
@@ -172,25 +215,26 @@
   .modal pre .call { color: var(--muted); }
   .modal pre .entry:last-child { margin-bottom: 0; }
   .toast {
-    position: fixed; bottom: 20px; right: 20px; padding: 10px 16px; border-radius: 6px;
-    background: var(--failed); color: #fff; font-size: 13px; display: none; z-index: 20;
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 16px;
+    background: var(--failed); color: var(--bg); font-size: 13px; display: none; z-index: 20;
   }
   .toast.active { display: block; }
   header .primary {
-    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    white-space: nowrap;
+    background: var(--accent); color: var(--bg); border: 1px solid var(--accent);
     padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
   }
   header .primary:hover { filter: brightness(1.1); }
-  .toast.ok { background: var(--done); }
+  .toast.ok { background: var(--text); }
   .notice {
-    margin: 12px 20px 0; padding: 10px 14px; border-radius: 6px; font-size: 13px;
-    border: 1px solid var(--review); background: rgba(217,119,6,.1);
+    padding: 10px 20px; font-size: 14px;
+    border-bottom: 1px solid var(--accent); background: var(--accent-wash);
   }
   .notice[hidden] { display: none; }
   .empty .big { font-size: 16px; color: var(--text); margin-bottom: 6px; }
   .empty button { margin-top: 12px; }
   .btn {
-    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    background: var(--accent); color: var(--bg); border: 1px solid var(--accent);
     padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
   }
   .btn.secondary { background: none; color: var(--text); border: 1px solid var(--border); }
@@ -199,8 +243,8 @@
   form.new-task label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; }
   form.new-task label small { font-weight: 400; color: var(--muted); }
   form.new-task textarea, form.new-task input, form.new-task select {
-    font: inherit; font-weight: 400; padding: 8px 10px; border-radius: 6px;
-    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    font: inherit; font-weight: 400; padding: 8px 10px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text);
   }
   form.new-task textarea { min-height: 110px; resize: vertical; }
   form.new-task .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
@@ -208,8 +252,8 @@
   form.new-task .error { color: var(--failed); font-size: 12px; margin-right: auto; white-space: pre-line; }
   .why { color: var(--muted); font-size: 11px; max-width: 280px; white-space: normal; margin-top: 2px; }
   .summary {
-    color: var(--muted); font-size: 11px; margin-top: 2px;
-    max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 14px; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .mark-text { display: inline-flex; align-items: center; gap: 6px; }
   .mark { width: 14px; height: 14px; flex: none; opacity: .8; }
@@ -222,10 +266,10 @@
   header .ghost, .notice .btn { font-size: 12px; }
   header .ghost {
     background: none; color: var(--text); border: 1px solid var(--border);
-    border-radius: 6px; padding: 5px 10px; cursor: pointer;
+    padding: 5px 10px; min-height: 34px; cursor: pointer;
   }
   header .ghost:hover { background: rgba(127,127,127,.12); }
-  .linkish { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0 0 0 6px; font-size: inherit; text-decoration: underline; }
+  .linkish { background: none; border: none; color: var(--accent-ink); cursor: pointer; padding: 0 0 0 6px; font-size: inherit; text-decoration: underline; }
   .notice .btn { margin-left: 8px; padding: 4px 10px; }
   .notice.bad { border-color: var(--failed); background: rgba(220,38,38,.08); }
   ul.checks { list-style: none; margin: 0; padding: 12px 16px; overflow: auto; }
@@ -253,14 +297,13 @@
   form.new-task [hidden] { display: none; }
   .toolbar {
     display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-    margin: 12px 20px 0; padding: 8px 14px; border-radius: 6px; font-size: 13px;
-    border: 1px solid var(--border); background: var(--panel);
+    margin: 14px 22px 0; padding: 0; font-size: 13px;
   }
   .toolbar[hidden] { display: none; }
   .toolbar label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
   .toolbar select {
-    font: inherit; padding: 4px 8px; border-radius: 6px;
-    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    font: inherit; padding: 4px 8px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text);
   }
   .toolbar .note { display: flex; align-items: center; gap: 6px; }
   .toolbar .clear { margin-left: auto; }
@@ -269,17 +312,17 @@
     font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
   }
   th button.sort:hover { color: var(--text); }
-  th button.sort.on { color: var(--accent); }
+  th button.sort.on { color: var(--accent-ink); }
   th button.sort .arrow { font-size: 9px; }
-  .warn { margin: 8px 16px; padding: 8px 12px; border: 1px solid var(--failed); border-radius: 6px; font-size: 13px; }
+  .warn { margin: 14px 22px 0; padding: 8px 12px; border: 1px solid var(--failed); font-size: 13px; }
   .warn[hidden] { display: none; }
 
   /* A row is a link to the task: clicking anywhere in it opens the view. */
   tbody tr[data-id] { cursor: pointer; }
-  tbody tr.selected td { background: rgba(79,70,229,.12); }
+  tbody tr.selected td { background: rgba(127,127,127,.14); }
   tbody tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
   tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .idcell { display: flex; align-items: center; gap: 6px; }
+  .idcell { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
   .copy {
     display: inline-flex; align-items: center; justify-content: center; flex: none;
     width: 20px; height: 20px; padding: 0; border-radius: 4px; cursor: pointer;
@@ -295,13 +338,10 @@
   .model-inferred { color: var(--muted); }
   .model-inferred .mono { color: inherit; }
 
-  .toolbar input[type="search"] {
-    font: inherit; padding: 4px 8px; border-radius: 6px; min-width: 190px;
-    border: 1px solid var(--border); background: var(--bg); color: var(--text);
-  }
-  .toolbar input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
-
   /* ---- The task view ---- */
+  /* A drawer from the right: the list stays in sight behind it. */
+  #task-overlay { justify-content: flex-end; padding: 0; }
+  #task-overlay .modal { width: min(1060px, 100%); height: 100%; max-height: none; border-width: 0 0 0 1px; }
   .modal.wide { width: min(900px, 100%); }
   .task-view { overflow: auto; padding: 0 16px 16px; }
   .task-view h3 {
@@ -310,7 +350,7 @@
   }
   .task-view .prompt {
     white-space: pre-wrap; word-break: break-word; margin: 0;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface); border: 1px solid var(--border);
     padding: 12px; font-size: 13px;
     /* A prompt can be pages long; the run's facts shouldn't be pushed out of
        sight by it. The block scrolls on its own instead. */
@@ -322,8 +362,8 @@
   .task-view .why { max-width: none; }
   .task-view .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 18px; }
   .task-view .acts button {
-    font-size: 12px; padding: 5px 10px; border-radius: 4px; cursor: pointer;
-    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    font-size: 12.5px; padding: 5px 10px; cursor: pointer;
+    border: 1px solid var(--border); background: none; color: var(--text);
   }
   .task-view .acts button:hover { background: rgba(127,127,127,.12); }
   .task-view .acts button.danger { color: var(--failed); border-color: var(--failed); }
@@ -338,6 +378,27 @@
   .modal header .live .dot { margin: 0; }
   #logs-foot .cut { color: var(--review); }
 
+  /* The bar that appears while tasks are ticked. */
+  .bulk {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 8;
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center;
+    padding: 8px; background: var(--bg); border: 1px solid var(--text);
+    box-shadow: 0 12px 32px rgba(0,0,0,.25); width: max-content; max-width: calc(100% - 24px);
+  }
+  .bulk[hidden] { display: none; }
+  .bulk .n { font-weight: 600; padding: 0 8px; font-variant-numeric: tabular-nums; }
+  .bulk button {
+    font: inherit; font-size: 13px; padding: 6px 12px; min-height: 34px; cursor: pointer;
+    border: 1px solid var(--border); background: none; color: var(--text);
+  }
+  .bulk button:hover { background: rgba(127,127,127,.12); }
+  .bulk button.danger { color: var(--failed); border-color: var(--failed); }
+  .bulk button:disabled { opacity: .4; cursor: default; }
+  .pick { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; margin: 0; }
+  th.pickcell, td.pickcell { width: 28px; padding-right: 0; }
+  tbody tr.picked td { background: rgba(127,127,127,.14); }
+  .copy, .chip, kbd, .modal, .notice, .toolbar select, .btn { border-radius: 0; }
+
   kbd {
     font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
     border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px;
@@ -348,26 +409,38 @@
 
   /* Narrow screens: a table is a card per task, each cell labelled where the
      header would have been. A dashboard gets read on a phone, in bed. */
+  @media (max-width: 1100px) {
+    .runner-pill .detail { display: none; }
+  }
+
   @media (max-width: 760px) {
-    header { padding: 12px 14px; gap: 8px; }
+    header { padding: 10px 14px; gap: 8px; flex-wrap: wrap; }
+    .view-head { flex-wrap: wrap; }
+    header h1 .name, .runner-pill .detail, #setup-open, #keys-open { display: none; }
+    header input[type="search"] { order: 9; flex: 1 1 100%; max-width: none; height: 40px; }
     main { padding: 12px 14px 32px; }
-    /* Numbers as chips: a grid with a filler background would leave a grey
-       hole where the last row doesn't fill. */
-    .stats {
-      grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
-      background: none; gap: 6px; padding: 10px 14px 0;
+    .layout { display: block; }
+    /* The sidebar becomes a row of chips to swipe through. */
+    aside#side {
+      position: static; width: auto; min-height: 0; padding: 12px 14px 0; gap: 8px;
+      border-right: none;
     }
-    .stat { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
-    .stat .n { font-size: 18px; }
-    .stat .l { font-size: 10px; }
+    aside#side h2, .side-note { display: none; }
+    aside#side nav { flex-direction: row; overflow-x: auto; gap: 6px; padding-bottom: 2px; }
+    aside#side nav button {
+      flex: none; min-height: 42px; border: 1px solid var(--border); border-left-width: 1px; white-space: nowrap;
+    }
+    aside#side nav button.active { border-color: var(--accent); background: var(--accent); color: var(--bg); }
+    aside#side nav button.active .count { color: inherit; }
+    .view-head { padding: 14px 14px 0; }
+    .view-head h1 { font-size: 28px; }
     .toolbar { margin: 10px 14px 0; gap: 8px; }
-    .toolbar input[type="search"] { min-width: 0; flex: 1 1 auto; }
-    table { border: none; background: none; display: block; }
+    table { table-layout: auto; border: none; background: none; display: block; }
     thead { display: none; }
     tbody { display: block; }
     tbody tr {
-      display: block; background: var(--panel); border: 1px solid var(--border);
-      border-radius: 8px; margin-bottom: 10px; padding: 4px 12px;
+      display: block; border: 1px solid var(--border);
+      margin-bottom: 10px; padding: 4px 12px;
     }
     tbody tr:hover td { background: none; }
     tbody tr.selected td { background: none; }
@@ -394,6 +467,7 @@
     .why { max-width: none; }
     .copy { opacity: 1; }
     .modal pre { font-size: 11px; }
+    td .sub { max-width: 100%; }
     ul.keys { grid-template-columns: 1fr; }
     ul.keys .k { justify-content: flex-start; }
   }
@@ -401,10 +475,11 @@
 </head>
 <body>
 <header>
-  <h1><img class="logo" id="logo" src="/logo.png" alt="" width="30" height="24"> Furmiculi</h1>
-  <span class="home mono" id="home"></span>
-  <span class="updated" id="runner"></span>
-  <span class="updated"><span class="dot"></span>as of <span id="updated">-</span></span>
+  <h1><a class="brand" href="/" title="Back to the start"><img class="logo" id="logo" src="/logo.png" alt="" width="30" height="24"><span class="name">furmiculi</span></a></h1>
+  <div class="runner-pill" id="runner"></div>
+  <span class="spacer"></span>
+  <input type="search" id="search" placeholder="Search tasks" aria-label="Search tasks"
+    autocomplete="off" spellcheck="false" title="Narrow the list to what matches. Press / to jump here.">
   <button class="ghost" id="setup-open" title="Pick and install your coding agent, and check that tmux and git are set up">Setup</button>
   <button class="ghost" id="theme-toggle" title="Light, dark, or whatever this computer is set to">Auto</button>
   <button class="ghost" id="keys-open" title="Keyboard shortcuts (?)">?</button>
@@ -418,24 +493,27 @@
 </div>
 <div class="notice bad" id="setup-notice" hidden></div>
 
-<div class="stats" id="stats"></div>
+<div class="layout">
+<aside id="side">
+  <div><h2>Queue</h2><nav id="views"></nav></div>
+  <div id="projects-wrap" hidden><h2>Projects</h2><nav id="projects"></nav></div>
+  <div class="side-note">
+    <span class="mono" id="home"></span>
+    <span><span class="dot"></span>as of <span id="updated">-</span></span>
+  </div>
+</aside>
+
+<div class="content">
+<div class="view-head">
+  <div><h1 id="view-title">Waiting</h1><p id="view-desc"></p></div>
+  <button class="ghost" id="select-toggle" data-action="select" hidden title="Tick several tasks and act on them together (x)">Select</button>
+</div>
 <div class="warn" id="invalid" hidden></div>
 <div class="toolbar" id="toolbar" hidden>
-  <label id="search-wrap">Search
-    <input type="search" id="search" placeholder="id, project, agent, model&hellip;"
-      autocomplete="off" spellcheck="false" title="Narrow the tables to what matches. Press / to jump here.">
-  </label>
   <label id="age-wrap">Time <select id="age"></select></label>
   <span class="note" id="toolbar-note"></span>
   <button class="linkish clear" id="toolbar-clear" data-action="clear-filters" hidden>Show everything</button>
 </div>
-
-<nav id="tabs">
-  <button data-tab="queue" class="active" title="Tasks waiting for their turn">Waiting <span class="count" id="c-queue">0</span></button>
-  <button data-tab="running" title="Tasks an agent is working on right now">Working <span class="count" id="c-running">0</span></button>
-  <button data-tab="archive" title="Tasks that are done, failed or cancelled">Finished <span class="count" id="c-archive">0</span></button>
-  <button data-tab="schedules" title="Tasks that are queued again on a schedule">Repeating <span class="count" id="c-schedules">0</span></button>
-</nav>
 
 <main>
   <section class="panel active" id="panel-queue"></section>
@@ -443,6 +521,8 @@
   <section class="panel" id="panel-archive"></section>
   <section class="panel" id="panel-schedules"></section>
 </main>
+</div>
+</div>
 
 <div class="overlay" id="logs-overlay">
   <div class="modal">
@@ -564,6 +644,7 @@
       <li class="k"><kbd>Enter</kbd></li><li>Open the highlighted task</li>
       <li class="k"><kbd>o</kbd></li><li>Show what the agent printed</li>
       <li class="k"><kbd>n</kbd></li><li>New task</li>
+      <li class="k"><kbd>x</kbd></li><li>Select several tasks</li>
       <li class="k"><kbd>Esc</kbd></li><li>Close what's open, or clear the search</li>
       <li class="k"><kbd>?</kbd></li><li>This list</li>
     </ul>
@@ -571,6 +652,7 @@
   </div>
 </div>
 
+<div class="bulk" id="bulk" hidden></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -633,38 +715,34 @@ function applyTheme(choice, remember) {
     try { localStorage.setItem(THEME_KEY, choice); } catch (e) { /* private mode: the choice just forgets itself */ }
   }
 }
-const STAT_LABELS = [
-  ["pending", "Waiting"], ["running", "Working"], ["done", "Done"],
-  ["failed", "Failed"], ["cancelled", "Cancelled"], ["needs_review", "Needs review"],
-  ["schedules", "Repeating"],
-];
-
 // The words the page uses for the statuses in the task files and `furmi ls`.
 const STATUS_LABELS = {
   pending: "Waiting", running: "Working", done: "Done", failed: "Failed",
   cancelled: "Cancelled", needs_review: "Needs review",
 };
-// What each number on top does when you click it.
-const STAT_TITLES = {
-  pending: "Show the tasks waiting for their turn",
-  running: "Show what an agent is working on right now",
-  done: "Show the tasks that finished",
-  failed: "Show just the tasks that failed",
-  cancelled: "Show just the tasks that were cancelled",
-  needs_review: "Show just the tasks that need a look",
-  schedules: "Show the tasks that repeat",
-};
-// Where each number lives: its own tab (Finished holds four statuses, the
-// schedules stat is a list of its own) plus, for the finished ones, the
-// status the table is narrowed to.
-const STAT_TAB = {
-  pending: "queue", running: "running", schedules: "schedules",
-  done: "archive", failed: "archive", cancelled: "archive", needs_review: "archive",
-};
-const FILTERABLE_STATS = new Set(["done", "failed", "cancelled", "needs_review"]);
-// The status the tables are narrowed to (a clicked number), or null for
+// The sidebar's lists. Each is a tab, optionally narrowed to one status (the
+// finished tab holds four of them), so a view is just a tab plus a filter.
+const VIEWS = [
+  { id: "waiting", tab: "queue", label: "Waiting", count: s => s.queue.length,
+    desc: "Queued or scheduled to start. Each one says why it hasn't started yet." },
+  { id: "working", tab: "running", label: "Working", count: s => s.running.length,
+    desc: "An agent is working on these right now." },
+  { id: "review", tab: "archive", filter: "needs_review", label: "Needs review", alert: true,
+    count: s => s.archive.filter(r => r.status === "needs_review").length,
+    desc: "The session ended without being marked done or failed. Look at the result, then decide." },
+  { id: "failed", tab: "archive", filter: "failed", label: "Failed", alert: true,
+    count: s => s.archive.filter(r => r.status === "failed").length,
+    desc: "These didn't work out. The reason is shown; you can try again." },
+  { id: "finished", tab: "archive", label: "Finished", count: s => s.archive.length,
+    desc: "Done, failed and cancelled tasks." },
+  { id: "repeating", tab: "schedules", label: "Repeating", count: s => s.schedules.length,
+    desc: "Schedules that queue a task again each time they come round." },
+];
+// The status the tables are narrowed to (a clicked view), or null for
 // "everything".
 let filter = null;
+// The project the sidebar narrows the tables to (its repo path), or null.
+let project = null;
 // The "Time" presets in the toolbar: how far back a list looks, and how to
 // say that in a sentence.
 const AGE_OPTIONS = [
@@ -681,6 +759,10 @@ let query = "";
 // The row the keyboard is on (its task id), highlighted so j/k has somewhere to
 // go. Clicking a row opens it; j/k only moves.
 let selected = null;
+// Bulk select: whether the tables show a tick box per task, and which ids are
+// ticked. Only tasks can be ticked; a schedule is acted on one at a time.
+let selecting = false;
+const picked = new Set();
 // The column being sorted, and which way. Nothing is sorted until asked.
 let sort = { key: null, dir: 1 };
 const STATUS_HELP = {
@@ -815,20 +897,25 @@ function inWindow(r) {
 
 function taskTable(rows, cols, empty, sortable, kind = "task") {
   if (rows.length === 0) return empty || `<div class="empty">Nothing here.</div>`;
-  const head = cols.map(c => {
-    if (!sortable || !SORT_VALUES[c.key]) return `<th>${escapeHtml(c.label)}</th>`;
+  const pick = selecting && kind === "task";
+  const allOn = pick && rows.every(r => picked.has(r.id));
+  const head = (pick ? `<th class="pickcell"><input type="checkbox" class="pick" data-pick-all ${allOn ? "checked" : ""}
+      aria-label="Select all tasks in this list" title="Select all"></th>` : "") + cols.map(c => {
+    if (!sortable || !SORT_VALUES[c.key]) return `<th class="col-${c.key}">${escapeHtml(c.label)}</th>`;
     const on = sort.key === c.key;
     const order = !on ? "none" : sort.dir > 0 ? "ascending" : "descending";
-    return `<th aria-sort="${order}"><button class="sort${on ? " on" : ""}" data-sort="${c.key}"
+    return `<th class="col-${c.key}" aria-sort="${order}"><button class="sort${on ? " on" : ""}" data-sort="${c.key}"
       title="Sort by ${escapeHtml(c.label.toLowerCase())}">${escapeHtml(c.label)}<span class="arrow">${on ? (sort.dir > 0 ? "▲" : "▼") : ""}</span></button></th>`;
   }).join("");
   // Each cell carries its column name, so a narrow screen can label it where
   // the header used to be.
   const body = rows.map(r => {
-    const cells = cols.map(c =>
+    const tick = pick ? `<td class="pickcell" data-label=""><input type="checkbox" class="pick" data-pick="${escapeHtml(r.id)}"
+      ${picked.has(r.id) ? "checked" : ""} aria-label="Select ${escapeHtml(r.id)}"></td>` : "";
+    const cells = tick + cols.map(c =>
       `<td data-label="${escapeHtml(c.label || "")}" class="${c.mono ? "mono" : ""}">` +
       `${c.render ? c.render(r) : escapeHtml(r[c.key])}</td>`).join("");
-    const on = r.id === selected ? ` class="selected"` : "";
+    const on = picked.has(r.id) ? ` class="picked"` : r.id === selected ? ` class="selected"` : "";
     return `<tr data-id="${escapeHtml(r.id)}" data-kind="${kind}"${on}>${cells}</tr>`;
   }).join("");
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
@@ -867,26 +954,24 @@ function actionButtons(r) {
 }
 
 const TASK_COLS = [
-  { key: "id", label: "ID", mono: true, render: idCell },
-  { key: "status", label: "Status", render: r => badge(r.status) +
-      (r.error && r.status !== "done" ? `<div class="why">${escapeHtml(r.error)}</div>` : "") },
+  { key: "status", label: "Status", render: r => badge(r.status) },
+  { key: "id", label: "Task", render: idCell },
+  { key: "repo", label: "Project", render: r =>
+      `<div title="${escapeHtml(r.repo)}">${escapeHtml(baseName(r.repo))}</div><div class="sub mono" title="${escapeHtml(r.branch)}">${escapeHtml(r.branch)}</div>` },
+  { key: "agent", label: "Agent · model", render: r => marked(r.agent) + `<div class="sub">${modelCell(r)}</div>` },
   { key: "when", label: "When", render: whenCell },
-  { key: "repo", label: "Project", mono: true },
-  { key: "branch", label: "Branch", mono: true },
-  { key: "agent", label: "Agent", render: r => marked(r.agent) },
-  {
-    key: "model", label: "Model",
-    // A model the task pinned reads plain; one that came from the agent's own
-    // report or its config is dimmed, with the source on hover. `-` says why.
-    render: r => (r.model === "-"
-      ? `<span title="${escapeHtml(MODEL_SOURCE_HELP.none)}">-</span>`
-      : marked(r.model, {
-          className: inferred(r.model_source) ? "model-inferred" : "",
-          note: inferred(r.model_source) ? MODEL_SOURCE_HELP[r.model_source] : "",
-        })),
-  },
   { key: "actions", label: "", render: r => `<div class="actions">${actionButtons(r)}</div>` },
 ];
+
+// A model the task pinned reads plain; one that came from the agent's own
+// report or its config is dimmed, with the source on hover. `-` says why.
+function modelCell(r) {
+  if (r.model === "-") return `<span title="${escapeHtml(MODEL_SOURCE_HELP.none)}">-</span>`;
+  return marked(r.model, {
+    className: inferred(r.model_source) ? "model-inferred" : "",
+    note: inferred(r.model_source) ? MODEL_SOURCE_HELP[r.model_source] : "",
+  });
+}
 
 // The copy button's icon, drawn rather than typed: no font is guaranteed to
 // have a clipboard glyph, and a box where the button should be is worse than
@@ -900,9 +985,10 @@ const COPY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true">' +
 function idCell(r) {
   const summary = r.summary
     ? `<div class="summary" title="${escapeHtml(r.summary)}">${escapeHtml(r.summary)}</div>` : "";
-  return `<div class="idcell"><span class="mono">${escapeHtml(r.id)}</span>` +
+  const why = r.error && r.status !== "done" ? `<div class="why">${escapeHtml(r.error)}</div>` : "";
+  return `${summary}${why}<div class="idcell"><span class="mono">${escapeHtml(r.id)}</span>` +
     `<button class="copy" data-action="copy" data-text="${escapeHtml(r.id)}" ` +
-    `title="Copy the id: ${escapeHtml(r.id)}" aria-label="Copy the id ${escapeHtml(r.id)}">${COPY_ICON}</button></div>${summary}`;
+    `title="Copy the id: ${escapeHtml(r.id)}" aria-label="Copy the id ${escapeHtml(r.id)}">${COPY_ICON}</button></div>`;
 }
 
 // When it runs (or ran): for a working task that's when it started, plus how
@@ -1002,9 +1088,11 @@ function draw(state) {
 
   const runner = document.getElementById("runner");
   runner.innerHTML = state.runner.alive
-    ? `runner: on${state.runner.last_tick ? ` (last pass ${escapeHtml(state.runner.last_tick)})` : ""}` +
-      `<button class="linkish" data-action="runner-stop" title="Stop picking up new tasks. Work already underway keeps going.">stop</button>`
-    : "runner: off";
+    ? `<span class="dot" title="The runner is on"></span><span>Runner on</span>` +
+      `${state.runner.last_tick ? `<span class="detail" style="color:var(--muted)">last pass ${escapeHtml(state.runner.last_tick)}</span>` : ""}` +
+      `<button class="linkish" data-action="runner-stop" title="Stop picking up new tasks. Work already underway keeps going.">Stop</button>`
+    : `<span class="dot off"></span><span>Runner off</span>` +
+      `<button class="linkish" data-action="runner-start" title="Start picking up waiting tasks.">Start</button>`;
   document.getElementById("runner-notice").hidden = state.runner.alive;
   formInfo = state.form;
 
@@ -1014,16 +1102,8 @@ function draw(state) {
     `<strong>${state.invalid.length} file(s) can't be read:</strong><ul>` +
     state.invalid.map(i => `<li class="mono">${escapeHtml(i.file)}: ${escapeHtml(i.error)}</li>`).join("") + "</ul>";
 
-  document.getElementById("stats").innerHTML = STAT_LABELS.map(([key, label]) => {
-    const on = filter === key;
-    return `<button class="stat ${key}${on ? " active" : ""}" data-filter="${key}"
-      title="${escapeHtml(STAT_TITLES[key] || "")}" aria-pressed="${on}">
-      <div class="n">${state.counts[key]}</div><div class="l">${label}</div></button>`;
-  }).join("");
-
-  for (const tab of ["queue", "running", "archive", "schedules"]) {
-    document.getElementById(`c-${tab}`).textContent = state[tab].length;
-  }
+  drawSide(state);
+  drawBulk(state);
 
   const firstRun = state.queue.length + state.running.length + state.archive.length === 0;
 
@@ -1033,8 +1113,8 @@ function draw(state) {
   // The window is about when a task ran; a schedule is a rule, not a run.
   document.getElementById("age-wrap").hidden = activeTab() === "schedules";
   if (ageEl.value !== age) ageEl.value = age;
-  const narrowed = !!filter || age !== "any" || !!query; // the tables show less than everything
-  document.getElementById("toolbar-note").innerHTML = filter ? `Showing only ${badge(filter)}` : "";
+  const narrowed = !!project || age !== "any" || !!query; // the tables show less than everything
+  document.getElementById("toolbar-note").textContent = project ? `Showing ${baseName(project)}` : "";
   document.getElementById("toolbar-clear").hidden = !narrowed;
   if (searchEl.value !== query) searchEl.value = query;
 
@@ -1043,6 +1123,7 @@ function draw(state) {
   const taskRows = (list) => sorted(list
     .filter(inWindow)
     .filter(r => !filter || r.status === filter)
+    .filter(r => !project || r.repo === project)
     .filter(r => matches(r, TASK_SEARCH_FIELDS)));
   const emptyFor = (base) => (firstRun || !narrowed ? base : windowMessage());
 
@@ -1054,9 +1135,9 @@ function draw(state) {
   document.getElementById("panel-running").innerHTML = taskTable(taskRows(state.running), TASK_COLS,
     emptyFor(`<div class="empty">Nothing is being worked on right now.</div>`), true);
   document.getElementById("panel-archive").innerHTML = taskTable(taskRows(state.archive), TASK_COLS,
-    emptyFor(`<div class="empty">Nothing has finished yet.</div>`), true);
+    emptyFor(`<div class="empty">${filter ? `No ${STATUS_LABELS[filter].toLowerCase()} tasks.` : "Nothing has finished yet."}</div>`), true);
   document.getElementById("panel-schedules").innerHTML = taskTable(
-    state.schedules.filter(r => matches(r, SCHEDULE_SEARCH_FIELDS)), SCHEDULE_COLS,
+    state.schedules.filter(r => !project || r.repo === project).filter(r => matches(r, SCHEDULE_SEARCH_FIELDS)), SCHEDULE_COLS,
     `<div class="empty">${query ? `Nothing matches “${escapeHtml(query)}”.` : "No repeating tasks yet."}` +
       `${query ? "" : ` A schedule is a Markdown file in <code>${escapeHtml(state.home)}/schedules</code>; see the README.`}` +
       `</div>`, false, "schedule");
@@ -1085,13 +1166,49 @@ function windowMessage() {
     <button class="linkish" data-action="clear-filters">Show everything</button></div>`;
 }
 
-// The numbers on top are also the fastest way around: clicking one opens the
-// tab that holds those tasks and, for the finished ones, narrows the table to
-// just that status. Clicking the same number again shows everything.
-function showStat(key) {
-  filter = FILTERABLE_STATS.has(key) && filter !== key ? key : null;
-  showTab(STAT_TAB[key]);
-  refresh();
+// The view the sidebar has lit: the open tab, narrowed to the status clicked.
+function activeView() {
+  const tab = activeTab();
+  return VIEWS.find(v => v.tab === tab && (v.filter || null) === filter) || VIEWS.find(v => v.tab === tab);
+}
+
+function baseName(path) {
+  return path.replace(/\/+$/, "").split("/").pop() || path;
+}
+
+// The sidebar: the lists, each with how many it holds, and the projects the
+// tasks belong to. The page title says which list is open.
+function drawSide(state) {
+  const view = activeView();
+  // The numbers count what the list would show: with a project picked, that
+  // project's tasks only, so a "0" never sits over a list with something in it.
+  const inProject = rows => project ? rows.filter(r => r.repo === project) : rows;
+  const scoped = {
+    queue: inProject(state.queue), running: inProject(state.running),
+    archive: inProject(state.archive), schedules: inProject(state.schedules),
+  };
+  document.getElementById("views").innerHTML = VIEWS.map(v => {
+    const n = v.count(scoped);
+    return `<button data-view="${v.id}" class="${v === view ? "active" : ""}${v.alert && n ? " alert" : ""}"
+      aria-pressed="${v === view}"><span class="label">${escapeHtml(v.label)}</span>` +
+      `<span class="count">${n}</span></button>`;
+  }).join("");
+  document.getElementById("view-title").textContent = view.label;
+  document.getElementById("view-desc").textContent = view.desc + (project ? ` Showing ${baseName(project)}.` : "");
+
+  // Only projects that have a task: a schedule's repo with nothing run yet would be an empty entry.
+  const repos = [...new Set(allTasks(state).map(r => r.repo))].sort();
+  if (project && !repos.includes(project)) project = null; // nothing left in it
+  document.getElementById("projects-wrap").hidden = repos.length === 0;
+  const tasks = allTasks(state);
+  const all = tasks.length;
+  const count = repo => tasks.filter(r => r.repo === repo).length;
+  document.getElementById("projects").innerHTML = [null, ...repos].map(repo => {
+    const on = project === repo;
+    return `<button data-project="${repo === null ? "" : escapeHtml(repo)}" class="${on ? "active" : ""}" aria-pressed="${on}"` +
+      `${repo === null ? "" : ` title="${escapeHtml(repo)}"`}><span class="label">${repo === null ? "All projects" : escapeHtml(baseName(repo))}</span>` +
+      `<span class="count">${repo === null ? all : count(repo)}</span></button>`;
+  }).join("");
 }
 
 function sortBy(key) {
@@ -1100,20 +1217,29 @@ function sortBy(key) {
 }
 
 function showTab(name) {
-  for (const b of document.querySelectorAll("nav button")) b.classList.toggle("active", b.dataset.tab === name);
+  if (name !== activeTab()) picked.clear(); // ticks belong to the list they were made in
   for (const p of document.querySelectorAll(".panel")) p.classList.toggle("active", p.id === `panel-${name}`);
+  if (lastState) drawSide(lastState);
 }
 
 function activeTab() {
   return (document.querySelector(".panel.active") || {}).id?.replace("panel-", "") || "queue";
 }
 
-document.getElementById("tabs").addEventListener("click", (e) => {
-  const btn = e.target.closest("button[data-tab]");
-  if (!btn) return;
-  filter = null; // picking a tab by hand shows everything in it
-  showTab(btn.dataset.tab);
-  refresh();
+document.getElementById("side").addEventListener("click", (e) => {
+  const view = e.target.closest("button[data-view]");
+  if (view) {
+    const v = VIEWS.find(x => x.id === view.dataset.view);
+    filter = v.filter || null;
+    showTab(v.tab);
+    refresh();
+    return;
+  }
+  const proj = e.target.closest("button[data-project]");
+  if (proj) {
+    project = proj.dataset.project || null;
+    refresh();
+  }
 });
 
 // The "Time" presets; the options are built once so the open dropdown isn't
@@ -1326,6 +1452,34 @@ document.getElementById("logs-close").addEventListener("click", closeLogs);
 logsToggle.addEventListener("click", () => { logsShowRaw = !logsShowRaw; drawLogs(); });
 logsOverlay.addEventListener("click", (e) => { if (e.target === logsOverlay) closeLogs(); });
 
+function togglePick(id, on = !picked.has(id)) {
+  if (on) picked.add(id); else picked.delete(id);
+  if (lastState) draw(lastState);
+}
+
+// Every task in the open list: what the header's tick box means.
+function pickAll(on) {
+  for (const row of document.querySelectorAll(`#panel-${activeTab()} tbody tr[data-kind="task"]`)) {
+    if (on) picked.add(row.dataset.id); else picked.delete(row.dataset.id);
+  }
+  if (lastState) draw(lastState);
+}
+
+// POSTs one action on one task; the error to show, or null when it worked.
+async function postAction(id, action, body) {
+  try {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+      headers: { "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+      body,
+    });
+    const data = await res.json();
+    return res.ok ? null : `${id}: ${data.error || "action failed"}`;
+  } catch (e) {
+    return `${id}: ${e}`;
+  }
+}
+
 async function runAction(id, action) {
   let body;
   if (action === "fail") {
@@ -1336,22 +1490,75 @@ async function runAction(id, action) {
   const confirmText = { cancel: `Drop ${id}? It hasn't started, and the when-done step won't run.` };
   if (CONFIRM_ACTIONS.has(action) && action !== "fail" && !confirm(confirmText[action])) return;
 
-  try {
-    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/${action}`, {
-      method: "POST",
-      headers: { "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, ...(body ? { "Content-Type": "application/json" } : {}) },
-      body,
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      toast(`${id}: ${data.error || "action failed"}`);
-    }
-  } catch (e) {
-    toast(`${id}: ${e}`);
-  }
+  const error = await postAction(id, action, body);
+  if (error) toast(error);
   await refresh();
   // Done, failed, retried: the view stays open, showing what it became.
   if (taskShown === id) showTask(id);
+}
+
+// ---- Bulk select
+//
+// Tick tasks, then act on all of them at once. The bar only offers what every
+// ticked task allows: "Mark done" for a mix of waiting and working would fail
+// for half of them.
+const BULK_ACTIONS = ["done", "fail", "cancel", "retry"];
+
+function allTasks(state) {
+  return [...state.queue, ...state.running, ...state.archive];
+}
+
+function drawBulk(state) {
+  const toggle = document.getElementById("select-toggle");
+  const tasks = allTasks(state);
+  toggle.hidden = activeTab() === "schedules" || tasks.length === 0;
+  toggle.classList.toggle("on", selecting);
+  toggle.textContent = selecting ? "Done selecting" : "Select";
+  toggle.setAttribute("aria-pressed", selecting);
+
+  const ids = new Set(tasks.map(r => r.id));
+  for (const id of picked) if (!ids.has(id)) picked.delete(id); // it moved on, or is gone
+
+  const bar = document.getElementById("bulk");
+  bar.hidden = !selecting || activeTab() === "schedules";
+  if (bar.hidden) return;
+  const rows = tasks.filter(r => picked.has(r.id));
+  const common = BULK_ACTIONS.filter(a => rows.length > 0
+    && rows.every(r => (ACTIONS_FOR_STATUS[r.status] || []).includes(a)));
+  bar.innerHTML = `<span class="n">${rows.length} selected</span>` +
+    (rows.length === 0 ? `<span style="color:var(--muted);padding:0 8px">Tick the tasks to act on</span>` : "") +
+    (rows.length > 0 && common.length === 0
+      ? `<span style="color:var(--muted);padding:0 8px">No action fits all of them</span>` : "") +
+    common.map(a => `<button data-bulk="${a}" title="${escapeHtml(ACTION_HELP[a])}" class="${DANGER_ACTIONS.has(a) ? "danger" : ""}">${ACTION_LABELS[a]}</button>`).join("") +
+    `<button data-action="select">Done</button>`;
+}
+
+function setSelecting(on) {
+  selecting = on;
+  if (!on) picked.clear();
+  if (lastState) draw(lastState);
+}
+
+async function bulkAction(action) {
+  const ids = [...picked];
+  if (ids.length === 0) return;
+  let body;
+  if (action === "fail") {
+    const reason = prompt(`Why didn't these ${ids.length} work out? (optional)`, "");
+    if (reason === null) return;
+    body = JSON.stringify({ reason });
+  } else if (action === "cancel" && !confirm(`Drop ${ids.length} tasks? They haven't started, and the when-done step won't run.`)) {
+    return;
+  }
+  const errors = [];
+  for (const id of ids) {
+    const error = await postAction(id, action, body);
+    if (error) errors.push(error);
+  }
+  picked.clear();
+  if (errors.length) toast(`${errors.length} of ${ids.length} failed. ${errors[0]}`);
+  else toast(`${ACTION_LABELS[action]}: ${ids.length} tasks`, true);
+  await refresh();
 }
 
 document.addEventListener("click", (e) => {
@@ -1360,17 +1567,23 @@ document.addEventListener("click", (e) => {
   const row = e.target.closest("tr[data-kind='task']");
   if (row && !e.target.closest("button, a, input, select")) {
     selected = row.dataset.id;
+    if (selecting) { togglePick(row.dataset.id); return; }
     showTask(row.dataset.id);
     return;
   }
-  const stat = e.target.closest("button[data-filter]");
-  if (stat) { showStat(stat.dataset.filter); return; }
+  const box = e.target.closest("input[data-pick]");
+  if (box) { togglePick(box.dataset.pick, box.checked); return; }
+  if (e.target.closest("input[data-pick-all]")) { pickAll(e.target.closest("input").checked); return; }
+  const bulk = e.target.closest("button[data-bulk]");
+  if (bulk) { bulkAction(bulk.dataset.bulk); return; }
   const head = e.target.closest("button[data-sort]");
   if (head) { sortBy(head.dataset.sort); return; }
   const btn = e.target.closest("button[data-action]");
   if (!btn) return;
   const { id, action } = btn.dataset;
-  if (action === "setup") {
+  if (action === "select") {
+    setSelecting(!selecting);
+  } else if (action === "setup") {
     openSetup();
   } else if (action === "new") {
     openForm("new");
@@ -1387,7 +1600,7 @@ document.addEventListener("click", (e) => {
   } else if (action === "logs") {
     showLogs(id);
   } else if (action === "clear-filters") {
-    filter = null;
+    project = null;
     age = "any";
     query = "";
     refresh();
@@ -1739,6 +1952,7 @@ function typing() {
 // Back out of whatever is open, innermost first. On a plain page, Esc mean
 // "never mind the search".
 function escape() {
+  if (selecting && !document.querySelector(".overlay.active")) return setSelecting(false);
   if (taskOverlay.classList.contains("active")) return closeTask();
   if (logsOverlay.classList.contains("active")) return closeLogs();
   if (keysOverlay.classList.contains("active")) return keysOverlay.classList.remove("active");
@@ -1787,6 +2001,8 @@ document.addEventListener("keydown", (e) => {
     keysOverlay.classList.toggle("active");
   } else if (e.key === "n") {
     openForm("new");
+  } else if (e.key === "x" && activeTab() !== "schedules") {
+    setSelecting(!selecting);
   } else if (tab) {
     filter = null;
     showTab(tab);

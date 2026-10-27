@@ -220,8 +220,28 @@ export function row(page: Page, id: string) {
   return page.locator("tbody tr", { hasText: id });
 }
 
-export function tab(page: Page, name: "queue" | "running" | "archive" | "schedules") {
-  return page.locator(`#tabs button[data-tab="${name}"]`);
+type Tab = "queue" | "running" | "archive" | "schedules";
+// Each list's name in the sidebar: the tab it is, and the word the page uses.
+const VIEW_OF: Record<Tab, string> = {
+  queue: "waiting",
+  running: "working",
+  archive: "finished",
+  schedules: "repeating",
+};
+
+/** A list's entry in the sidebar: click it to open the list. */
+export function tab(page: Page, name: Tab) {
+  return page.locator(`#views button[data-view="${VIEW_OF[name]}"]`);
+}
+
+/** A sidebar entry by its own name, for the ones that narrow a tab to a status. */
+export function view(page: Page, name: "waiting" | "working" | "review" | "failed" | "finished" | "repeating") {
+  return page.locator(`#views button[data-view="${name}"]`);
+}
+
+/** The number beside a list in the sidebar. */
+export function count(page: Page, name: Tab) {
+  return tab(page, name).locator(".count");
 }
 
 /**
