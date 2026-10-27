@@ -6,6 +6,14 @@ lists what changed between them.
 
 ## Unreleased
 
+## 0.3.0
+
+- The dashboard has a new layout: a sticky header with a runner pill and search,
+  and a sidebar of lists (Waiting, Working, Needs review, Failed, Finished,
+  Repeating) and projects, whose numbers follow the project you pick. A task
+  opens in a drawer from the right, the tables fit the screen at any width, and
+  the logo links home. Tick several tasks (the Select button or `x`) to mark
+  them done or failed, drop them or try them again together (#32).
 - The install script now ends by asking whether to make the `furmi-tasks` skill
   available in every project, so agents can queue tasks from any repo. Set
   `FURMI_NO_SKILL=1` to skip the question.
