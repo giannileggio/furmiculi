@@ -44,8 +44,10 @@ from any repo.
 Install (Linux or macOS; needs git and tmux):
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/giannileggio/furmiculi/releases/latest/download/furmiculi-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/giannileggio/furmiculi/main/install.sh | sh
 ```
+
+It ends by asking whether to let your coding agents queue tasks from any repo.
 
 Then queue some work, from inside your project, and run it:
 
@@ -72,24 +74,23 @@ to tmux and uses Unix signals.
 ## Install
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/giannileggio/furmiculi/releases/latest/download/furmiculi-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/giannileggio/furmiculi/main/install.sh | sh
 ```
 
-Then, optionally, set up the home folder up front and link the agent skill:
+That script runs the release installer for this platform, then asks whether to
+also make the `furmi-tasks` skill available in every project, so agents can
+queue work from any repo. Say no and `furmi init --global-skill` does it later;
+`FURMI_NO_SKILL=1` skips the question for scripted installs.
 
-```sh
-furmi init         # optional: the first `furmi add`/`furmi start` sets up
-                   # ~/.furmiculi by itself (override with $FURMI_HOME or --home).
-                   # `furmi init` also asks whether to install the skill globally,
-                   # so agents can queue tasks
-```
+`furmi init` is optional after that: the first `furmi add`/`furmi start` sets up
+`~/.furmiculi` by itself (override with `$FURMI_HOME` or `--home`).
 
 ### Install for your agent
 
-The curl installer above is the recommended path: it installs `furmi`, and
-`furmi init` then links the `furmi-tasks` skill into your agents' global
-skill folders (Claude Code, Codex, opencode, Pi and others), so you can queue
-work from any repo.
+The curl installer above is the recommended path: it installs `furmi` and
+offers to link the `furmi-tasks` skill into your agents' global skill folders
+(Claude Code, Codex, opencode, Pi and others), so you can queue work from any
+repo.
 
 If you'd rather get just the skill, for any agent supported by
 [`skills`](https://github.com/vercel-labs/skills):

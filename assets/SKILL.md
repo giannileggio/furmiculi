@@ -10,7 +10,7 @@ and tmux), then run `furmi init` to set up `{home}`:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/giannileggio/furmiculi/releases/latest/download/furmiculi-installer.sh | sh
+  https://raw.githubusercontent.com/giannileggio/furmiculi/main/install.sh | sh
 ```
 
 The queue lives in `{home}`. The full format is in `{home}/FORMAT.md`; read
