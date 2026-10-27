@@ -728,10 +728,10 @@ const VIEWS = [
   { id: "working", tab: "running", label: "Working", count: s => s.running.length,
     desc: "An agent is working on these right now." },
   { id: "review", tab: "archive", filter: "needs_review", label: "Needs review", alert: true,
-    count: s => s.counts.needs_review,
+    count: s => s.archive.filter(r => r.status === "needs_review").length,
     desc: "The session ended without being marked done or failed. Look at the result, then decide." },
   { id: "failed", tab: "archive", filter: "failed", label: "Failed", alert: true,
-    count: s => s.counts.failed,
+    count: s => s.archive.filter(r => r.status === "failed").length,
     desc: "These didn't work out. The reason is shown; you can try again." },
   { id: "finished", tab: "archive", label: "Finished", count: s => s.archive.length,
     desc: "Done, failed and cancelled tasks." },
@@ -1180,8 +1180,15 @@ function baseName(path) {
 // tasks belong to. The page title says which list is open.
 function drawSide(state) {
   const view = activeView();
+  // The numbers count what the list would show: with a project picked, that
+  // project's tasks only, so a "0" never sits over a list with something in it.
+  const inProject = rows => project ? rows.filter(r => r.repo === project) : rows;
+  const scoped = {
+    queue: inProject(state.queue), running: inProject(state.running),
+    archive: inProject(state.archive), schedules: inProject(state.schedules),
+  };
   document.getElementById("views").innerHTML = VIEWS.map(v => {
-    const n = v.count(state);
+    const n = v.count(scoped);
     return `<button data-view="${v.id}" class="${v === view ? "active" : ""}${v.alert && n ? " alert" : ""}"
       aria-pressed="${v === view}"><span class="label">${escapeHtml(v.label)}</span>` +
       `<span class="count">${n}</span></button>`;
@@ -1189,11 +1196,13 @@ function drawSide(state) {
   document.getElementById("view-title").textContent = view.label;
   document.getElementById("view-desc").textContent = view.desc + (project ? ` Showing ${baseName(project)}.` : "");
 
-  const repos = [...new Set([...state.queue, ...state.running, ...state.archive, ...state.schedules].map(r => r.repo))].sort();
+  // Only projects that have a task: a schedule's repo with nothing run yet would be an empty entry.
+  const repos = [...new Set(allTasks(state).map(r => r.repo))].sort();
   if (project && !repos.includes(project)) project = null; // nothing left in it
   document.getElementById("projects-wrap").hidden = repos.length === 0;
-  const all = [state.queue, state.running, state.archive].reduce((n, l) => n + l.length, 0);
-  const count = repo => [state.queue, state.running, state.archive].reduce((n, l) => n + l.filter(r => r.repo === repo).length, 0);
+  const tasks = allTasks(state);
+  const all = tasks.length;
+  const count = repo => tasks.filter(r => r.repo === repo).length;
   document.getElementById("projects").innerHTML = [null, ...repos].map(repo => {
     const on = project === repo;
     return `<button data-project="${repo === null ? "" : escapeHtml(repo)}" class="${on ? "active" : ""}" aria-pressed="${on}"` +
