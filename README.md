@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
-    <img src="assets/logo.png" alt="furmiculi" width="280">
-  </picture>
+  <img src="assets/logo.png" alt="furmiculi" width="360">
 </p>
 
 # furmiculi
