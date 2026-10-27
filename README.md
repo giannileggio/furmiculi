@@ -41,17 +41,18 @@ from any repo.
 
 ## Quick start
 
-```sh
-# 1. install (Linux or macOS; needs git and tmux)
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/giannileggio/furmiculi/releases/latest/download/furmiculi-installer.sh | sh
+Install (Linux or macOS; needs git and tmux):
 
-# 2. queue some work, from inside your project
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/giannileggio/furmiculi/releases/latest/download/furmiculi-installer.sh | sh
+```
+
+Then queue some work, from inside your project, and run it:
+
+```sh
 cd ~/Projects/myapp
 furmi add "Fix the redirect loop after login"
-
-# 3. run it (starts the runner and opens the dashboard)
-furmi start                 # add -d to leave it in the background
+furmi start                 # starts the runner and opens the dashboard; add -d to leave it in the background
 ```
 
 That's all: the first command you run sets up `~/.furmiculi` and picks the
@@ -70,7 +71,11 @@ to tmux and uses Unix signals.
 
 ## Install
 
-Use the installer from the [Quick start](#quick-start), then:
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/giannileggio/furmiculi/releases/latest/download/furmiculi-installer.sh | sh
+```
+
+Then, optionally, set up the home folder up front and link the agent skill:
 
 ```sh
 furmi init         # optional: the first `furmi add`/`furmi start` sets up
