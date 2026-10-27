@@ -1217,6 +1217,7 @@ function sortBy(key) {
 }
 
 function showTab(name) {
+  if (name !== activeTab()) picked.clear(); // ticks belong to the list they were made in
   for (const p of document.querySelectorAll(".panel")) p.classList.toggle("active", p.id === `panel-${name}`);
   if (lastState) drawSide(lastState);
 }
@@ -1230,7 +1231,6 @@ document.getElementById("side").addEventListener("click", (e) => {
   if (view) {
     const v = VIEWS.find(x => x.id === view.dataset.view);
     filter = v.filter || null;
-    picked.clear(); // ticks belong to the list they were made in
     showTab(v.tab);
     refresh();
     return;

@@ -91,6 +91,13 @@ test.describe("with the runner off", () => {
     await expect(page.locator("#task-overlay")).toBeHidden();
     await row(page, "three").locator("input[data-pick]").uncheck();
 
+    // Ticks stay with the list they were made in, whichever way you leave it.
+    await page.keyboard.press("2");
+    await page.keyboard.press("1");
+    await expect(page.locator("#bulk")).toContainText("0 selected");
+    await row(page, "one").locator("input[data-pick]").check();
+    await row(page, "two").locator("input[data-pick]").check();
+
     page.once("dialog", (d) => void d.accept());
     await page.locator('#bulk button[data-bulk="cancel"]').click();
     await expect(count(page, "queue")).toHaveText("1");
