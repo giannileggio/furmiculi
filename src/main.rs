@@ -9,6 +9,7 @@ mod frontmatter;
 mod fsutil;
 mod git;
 mod home;
+mod nodes;
 mod run;
 mod schedule;
 mod skill;
@@ -94,6 +95,9 @@ enum Command {
         #[arg(long)]
         attempt: Option<u32>,
     },
+    /// Other machines whose queues this dashboard shows alongside its own.
+    #[command(subcommand)]
+    Node(nodes::NodeCmd),
     /// Remove the worktrees of finished tasks (done only, unless --all).
     ///
     /// Worktrees with uncommitted changes are kept. Branches are never
@@ -214,6 +218,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Retry { id } => control::retry(&home, &id)?,
         Command::Attach { id } => control::attach(&home, id)?,
         Command::Logs { id, attempt } => print!("{}", control::logs(&home, &id, attempt)?),
+        Command::Node(cmd) => nodes::run(&home, cmd)?,
         Command::Clean(args) => clean::clean(&home, args)?,
         Command::Web(args) => web::serve(&home, args)?,
         Command::Start(args) => web::start(&home, args)?,

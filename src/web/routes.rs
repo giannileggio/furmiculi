@@ -40,7 +40,10 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 ..reply(200, "image/png", "")
             },
             ["api", "state"] => match state_json(home, ctx.cwd_repo.as_deref()) {
-                Ok(json) => json_reply(200, json),
+                // `?local=1` is how a hub asks: this machine's own queue,
+                // never a merge, so two hubs can't end up asking each other.
+                Ok(json) if query_param(url, "local") == Some("1") => json_reply(200, json),
+                Ok(json) => json_reply(200, crate::nodes::merge_state(home, json)),
                 Err(e) => json_reply(500, json_err(&e)),
             },
             ["api", "repos"] => match repos_json(home, ctx.cwd_repo.as_deref()) {

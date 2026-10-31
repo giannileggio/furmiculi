@@ -44,7 +44,7 @@ pub(super) fn random_token() -> Result<String> {
 
 /// Reads the token file: one line, trimmed. It should be 0600; a group- or
 /// world-readable one is refused, the way a shared secret shouldn't sit.
-pub(super) fn read_token_file(path: &std::path::Path) -> Result<String> {
+pub(crate) fn read_token_file(path: &std::path::Path) -> Result<String> {
     use std::os::unix::fs::PermissionsExt;
     let path = &expand_tilde(path);
     let raw = std::fs::read_to_string(path)

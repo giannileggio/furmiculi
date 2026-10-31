@@ -319,6 +319,7 @@
 
   /* A row is a link to the task: clicking anywhere in it opens the view. */
   tbody tr[data-id] { cursor: pointer; }
+  tbody tr[data-kind="remote"] { cursor: default; }
   tbody tr.selected td { background: rgba(127,127,127,.14); }
   tbody tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
   tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -509,6 +510,7 @@
   <button class="ghost" id="select-toggle" data-action="select" hidden title="Tick several tasks and act on them together (x)">Select</button>
 </div>
 <div class="warn" id="invalid" hidden></div>
+<div class="warn" id="nodes-down" hidden></div>
 <div class="toolbar" id="toolbar" hidden>
   <label id="age-wrap">Time <select id="age"></select></label>
   <span class="note" id="toolbar-note"></span>
@@ -875,6 +877,7 @@ const SORT_VALUES = {
   branch: r => r.branch,
   agent: r => r.agent,
   model: r => r.model,
+  node: r => r.node || "",
 };
 
 function sorted(rows) {
@@ -895,10 +898,13 @@ function inWindow(r) {
   return Number.isNaN(at) || at >= Date.now() - agePreset(age).ms;
 }
 
+// A row from another node: shown, but this page can only act on its own.
+const isRemote = r => !!r.node && r.node !== "local";
+
 function taskTable(rows, cols, empty, sortable, kind = "task") {
   if (rows.length === 0) return empty || `<div class="empty">Nothing here.</div>`;
   const pick = selecting && kind === "task";
-  const allOn = pick && rows.every(r => picked.has(r.id));
+  const allOn = pick && rows.filter(r => !isRemote(r)).every(r => picked.has(r.id));
   const head = (pick ? `<th class="pickcell"><input type="checkbox" class="pick" data-pick-all ${allOn ? "checked" : ""}
       aria-label="Select all tasks in this list" title="Select all"></th>` : "") + cols.map(c => {
     if (!sortable || !SORT_VALUES[c.key]) return `<th class="col-${c.key}">${escapeHtml(c.label)}</th>`;
@@ -910,13 +916,14 @@ function taskTable(rows, cols, empty, sortable, kind = "task") {
   // Each cell carries its column name, so a narrow screen can label it where
   // the header used to be.
   const body = rows.map(r => {
-    const tick = pick ? `<td class="pickcell" data-label=""><input type="checkbox" class="pick" data-pick="${escapeHtml(r.id)}"
+    const remote = isRemote(r);
+    const tick = pick && remote ? `<td class="pickcell" data-label=""></td>` : pick ? `<td class="pickcell" data-label=""><input type="checkbox" class="pick" data-pick="${escapeHtml(r.id)}"
       ${picked.has(r.id) ? "checked" : ""} aria-label="Select ${escapeHtml(r.id)}"></td>` : "";
     const cells = tick + cols.map(c =>
       `<td data-label="${escapeHtml(c.label || "")}" class="${c.mono ? "mono" : ""}">` +
       `${c.render ? c.render(r) : escapeHtml(r[c.key])}</td>`).join("");
-    const on = picked.has(r.id) ? ` class="picked"` : r.id === selected ? ` class="selected"` : "";
-    return `<tr data-id="${escapeHtml(r.id)}" data-kind="${kind}"${on}>${cells}</tr>`;
+    const on = remote ? "" : picked.has(r.id) ? ` class="picked"` : r.id === selected ? ` class="selected"` : "";
+    return `<tr data-id="${escapeHtml(r.id)}" data-kind="${remote ? "remote" : kind}"${on}>${cells}</tr>`;
   }).join("");
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
@@ -946,6 +953,7 @@ const DANGER_ACTIONS = new Set(["fail", "cancel"]);
 const CONFIRM_ACTIONS = new Set(["fail", "cancel"]);
 
 function actionButtons(r) {
+  if (isRemote(r)) return "";
   const acts = [...(ACTIONS_FOR_STATUS[r.status] || [])];
   acts.push("logs"); // always offered; the endpoint reports if there's nothing yet
   return acts.map(a =>
@@ -1059,13 +1067,21 @@ const SCHEDULE_COLS = [
   { key: "cron", label: "Repeats", render: r => `<span title="${escapeHtml(r.cron)}">${escapeHtml(describeCron(r.cron))}</span>` },
   { key: "next", label: "Next run" },
   { key: "repo", label: "Project", mono: true },
-  { key: "actions", label: "", render: r => `<div class="actions">
+  { key: "actions", label: "", render: r => isRemote(r) ? "" : `<div class="actions">
       <button data-id="${escapeHtml(r.id)}" data-action="sched-edit" title="Change what it does or when">Edit</button>
       <button data-id="${escapeHtml(r.id)}" data-action="${r.enabled ? "sched-pause" : "sched-resume"}"
         title="${r.enabled ? "Stop adding tasks until you resume it" : "Start adding tasks again"}">${r.enabled ? "Pause" : "Resume"}</button>
       <button class="danger" data-id="${escapeHtml(r.id)}" data-action="sched-delete" title="Remove the schedule. Tasks it already added stay.">Delete</button>
     </div>` },
 ];
+
+// With other nodes merged in, say which machine each row is on.
+const NODE_COL = { key: "node", label: "Node", render: r => `<span class="mono">${escapeHtml(r.node || "")}</span>` };
+function withNode(cols, state) {
+  if (!state.nodes || state.nodes.length < 2) return cols;
+  const at = cols.findIndex(c => c.key === "actions");
+  return [...cols.slice(0, at), NODE_COL, ...cols.slice(at)];
+}
 
 // The last state the server sent, kept so the page can redraw itself (a
 // keystroke in the search box, say) without asking again.
@@ -1102,6 +1118,13 @@ function draw(state) {
     `<strong>${state.invalid.length} file(s) can't be read:</strong><ul>` +
     state.invalid.map(i => `<li class="mono">${escapeHtml(i.file)}: ${escapeHtml(i.error)}</li>`).join("") + "</ul>";
 
+  const down = (state.nodes || []).filter(n => !n.online);
+  const downEl = document.getElementById("nodes-down");
+  downEl.hidden = down.length === 0;
+  downEl.innerHTML = down.length === 0 ? "" :
+    `<strong>${down.length === 1 ? "A node isn't" : down.length + " nodes aren't"} answering, so its tasks are missing:</strong><ul>` +
+    down.map(n => `<li><span class="mono">${escapeHtml(n.name)}</span> (${escapeHtml(n.url || "")}): ${escapeHtml(n.error || "")}</li>`).join("") + "</ul>";
+
   drawSide(state);
   drawBulk(state);
 
@@ -1127,17 +1150,17 @@ function draw(state) {
     .filter(r => matches(r, TASK_SEARCH_FIELDS)));
   const emptyFor = (base) => (firstRun || !narrowed ? base : windowMessage());
 
-  document.getElementById("panel-queue").innerHTML = taskTable(taskRows(state.queue), TASK_COLS, emptyFor(firstRun
+  document.getElementById("panel-queue").innerHTML = taskTable(taskRows(state.queue), withNode(TASK_COLS, state), emptyFor(firstRun
     ? `<div class="empty"><div class="big">No tasks yet</div>
          Describe some work and an agent will do it while you're away.<br>
          <button class="btn" data-action="new">+ New task</button></div>`
     : `<div class="empty">Nothing is waiting.</div>`), true);
-  document.getElementById("panel-running").innerHTML = taskTable(taskRows(state.running), TASK_COLS,
+  document.getElementById("panel-running").innerHTML = taskTable(taskRows(state.running), withNode(TASK_COLS, state),
     emptyFor(`<div class="empty">Nothing is being worked on right now.</div>`), true);
-  document.getElementById("panel-archive").innerHTML = taskTable(taskRows(state.archive), TASK_COLS,
+  document.getElementById("panel-archive").innerHTML = taskTable(taskRows(state.archive), withNode(TASK_COLS, state),
     emptyFor(`<div class="empty">${filter ? `No ${STATUS_LABELS[filter].toLowerCase()} tasks.` : "Nothing has finished yet."}</div>`), true);
   document.getElementById("panel-schedules").innerHTML = taskTable(
-    state.schedules.filter(r => !project || r.repo === project).filter(r => matches(r, SCHEDULE_SEARCH_FIELDS)), SCHEDULE_COLS,
+    state.schedules.filter(r => !project || r.repo === project).filter(r => matches(r, SCHEDULE_SEARCH_FIELDS)), withNode(SCHEDULE_COLS, state),
     `<div class="empty">${query ? `Nothing matches “${escapeHtml(query)}”.` : "No repeating tasks yet."}` +
       `${query ? "" : ` A schedule is a Markdown file in <code>${escapeHtml(state.home)}/schedules</code>; see the README.`}` +
       `</div>`, false, "schedule");
@@ -1145,8 +1168,8 @@ function draw(state) {
 }
 
 // What a search looks through, per kind of row.
-const TASK_SEARCH_FIELDS = ["id", "summary", "repo", "branch", "agent", "model", "status"];
-const SCHEDULE_SEARCH_FIELDS = ["id", "summary", "repo", "cron"];
+const TASK_SEARCH_FIELDS = ["id", "summary", "repo", "branch", "agent", "model", "status", "node"];
+const SCHEDULE_SEARCH_FIELDS = ["id", "summary", "repo", "cron", "node"];
 
 // What the search box holds, and whether a row answers to it: every word has to
 // turn up somewhere, so "pi failed" finds the failed task that ran on pi.
