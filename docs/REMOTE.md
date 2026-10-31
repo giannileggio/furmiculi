@@ -111,6 +111,16 @@ repos it was started in and has run tasks in, so run a task there, or start
 project and agent come from that machine. Ids are only unique per machine, so a
 row from another machine has `@<node>` behind its id.
 
+Choose **Any machine (least busy)** to let the dashboard place the task. At
+creation it asks each machine that can be written to what it has, and takes
+those with a clone of the project and, if you picked one, the agent. Among them
+it prefers one with a free slot (`runner.max_parallel`), then the fewest running
+tasks, then this machine. If every slot is taken it still picks the least loaded:
+the task waits its turn there. The choice is made once, when the task is
+created; it doesn't move later. An unreachable machine is skipped, and a machine
+on an older furmi isn't a candidate. Agents aren't picked in the form for this
+choice: each machine uses its own default.
+
 Changing things on a node needs its token: a node added without one (a loopback
 address, say) can be read but not changed, and its rows show no buttons. A node
 running an older furmi can be read, but can't take tasks by remote; upgrade it. Repeating tasks can't be placed on

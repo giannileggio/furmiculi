@@ -12,6 +12,9 @@ lists what changed between them.
   can send a task to another machine, which finds its own clone of the repo by
   git remote. Upgrade the other machines too: older ones can be read but not
   given tasks.
+- **+ New task** can pick **Any machine (least busy)**: the dashboard sends the
+  task to an online machine that has a clone of the repo, preferring a free
+  slot, then the fewest running tasks.
 - New tasks record `remote:`, the repo's `origin` as `host/owner/name`, and the
   dashboard serves `GET /api/repos` (the repos and agents a machine can host,
   by remote). First step towards running tasks across machines. Restart a

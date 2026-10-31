@@ -222,10 +222,14 @@ pub(super) fn repos_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> 
         .iter()
         .map(|(remote, path)| serde_json::json!({ "remote": remote, "path": path }))
         .collect();
-    Ok(
-        serde_json::json!({ "repos": repos, "agents": hosts.agents, "agent": hosts.agent })
-            .to_string(),
-    )
+    Ok(serde_json::json!({
+        "repos": repos,
+        "agents": hosts.agents,
+        "agent": hosts.agent,
+        "running": hosts.running,
+        "max_parallel": hosts.max_parallel,
+    })
+    .to_string())
 }
 
 /// What a node can run: its repos by remote identity, and its usable agents.
@@ -234,6 +238,9 @@ pub(super) struct Hostable {
     pub repos: Vec<(String, String)>,
     pub agents: Vec<String>,
     pub agent: Option<String>,
+    /// Tasks running now, and how many may at once: what `auto` placement weighs.
+    pub running: usize,
+    pub max_parallel: usize,
 }
 
 pub(super) fn hostable(home: &Home, cwd_repo: Option<&str>) -> Result<Hostable> {
@@ -258,6 +265,11 @@ pub(super) fn hostable(home: &Home, cwd_repo: Option<&str>) -> Result<Hostable> 
         repos,
         agents: form.agents,
         agent: form.agent,
+        running: running_and_queue
+            .iter()
+            .filter(|t| t.status == Status::Running)
+            .count(),
+        max_parallel: config.runner.max_parallel,
     })
 }
 
@@ -348,6 +360,17 @@ pub(super) fn fmt_time(t: chrono::DateTime<chrono::FixedOffset>) -> String {
     t.with_timezone(&chrono::Local)
         .format("%Y-%m-%d %H:%M")
         .to_string()
+}
+
+/// What `auto` placement weighs for this machine.
+pub(super) fn capacity(home: &Home, cwd_repo: Option<&str>) -> Option<crate::nodes::Capacity> {
+    let h = hostable(home, cwd_repo).ok()?;
+    Some(crate::nodes::Capacity {
+        remotes: h.repos.into_iter().map(|(remote, _)| remote).collect(),
+        agents: h.agents,
+        running: h.running,
+        max_parallel: Some(h.max_parallel),
+    })
 }
 
 #[cfg(test)]

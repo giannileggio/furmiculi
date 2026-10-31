@@ -9,7 +9,7 @@ use super::handlers::{
     perform_action, perform_create, perform_create_schedule, perform_edit_schedule,
     perform_edit_task, perform_set_default_agent, tail_of, task_view_json,
 };
-use super::state::{repos_json, state_json};
+use super::state::{capacity, repos_json, state_json};
 use super::{Ctx, Reply, json_reply, reply};
 
 use crate::control;
@@ -28,6 +28,20 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
     let home = ctx.home;
     let path = url.split('?').next().unwrap_or("");
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    // `node: auto` is settled here, into a named machine, before anything is sent.
+    let settled;
+    let body = if matches!(method, Method::Post) && segments == ["api", "tasks"] {
+        match crate::nodes::resolve_auto(home, capacity(home, ctx.cwd_repo.as_deref()), body) {
+            Ok(Some((form, _))) => {
+                settled = form;
+                settled.as_str()
+            }
+            Ok(None) => body,
+            Err(e) => return json_reply(409, json_err(&e)),
+        }
+    } else {
+        body
+    };
     // A row, or a form, that belongs to another node goes there.
     if let Some((status, answer)) =
         crate::nodes::proxy(home, matches!(method, Method::Post), url, body)

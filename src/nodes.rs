@@ -482,6 +482,139 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
     Some((status, answer.to_string()))
 }
 
+/// The node name that asks the hub to choose a machine.
+pub const AUTO: &str = "auto";
+
+/// What a machine can take on: the remotes it has a clone of, its usable
+/// agents, and how loaded it is.
+#[derive(Debug, Clone, Default)]
+pub struct Capacity {
+    pub remotes: Vec<String>,
+    pub agents: Vec<String>,
+    pub running: usize,
+    /// `None` from an older furmi that doesn't say.
+    pub max_parallel: Option<usize>,
+}
+
+impl Capacity {
+    fn from_json(v: &Value) -> Capacity {
+        let strings = |key: &str, field: Option<&str>| -> Vec<String> {
+            v[key]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|x| match field {
+                    Some(f) => x[f].as_str(),
+                    None => x.as_str(),
+                })
+                .map(str::to_string)
+                .collect()
+        };
+        Capacity {
+            remotes: strings("repos", Some("remote")),
+            agents: strings("agents", None),
+            running: v["running"].as_u64().unwrap_or(0) as usize,
+            max_parallel: v["max_parallel"].as_u64().map(|n| n as usize),
+        }
+    }
+
+    fn full(&self) -> bool {
+        self.max_parallel.is_some_and(|max| self.running >= max)
+    }
+}
+
+/// The machine to run a task for `remote` (and `agent`, if one is asked for) on:
+/// among those that have a clone and the agent, one with a free slot over a full
+/// one, then the fewest running, then the first listed (this machine). A queue
+/// that's full everywhere still gets a pick, since a task can wait its turn.
+fn choose<'a>(
+    candidates: &'a [(String, Capacity)],
+    remote: &str,
+    agent: Option<&str>,
+) -> Result<&'a str> {
+    let with_clone: Vec<_> = candidates
+        .iter()
+        .filter(|(_, c)| c.remotes.iter().any(|r| r == remote))
+        .collect();
+    if with_clone.is_empty() {
+        bail!("no machine that is online and can take tasks has a clone of {remote}");
+    }
+    with_clone
+        .into_iter()
+        .filter(|(_, c)| agent.is_none_or(|a| c.agents.iter().any(|x| x == a)))
+        .min_by_key(|(_, c)| (c.full(), c.running))
+        .map(|(name, _)| name.as_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no machine with a clone of {remote} has the agent `{}`",
+                agent.unwrap_or_default()
+            )
+        })
+}
+
+/// Settles a new-task form whose `node` is `auto`: asks every machine that can
+/// take tasks what it has, picks one, and returns the form addressed to it
+/// (`node` a name, or removed for this machine, whose own form names the
+/// project by `remote`) with the chosen machine's name. `None` for any other form.
+pub fn resolve_auto(
+    home: &Home,
+    local: Option<Capacity>,
+    body: &str,
+) -> Result<Option<(String, String)>> {
+    let Ok(Value::Object(mut form)) = serde_json::from_str::<Value>(body) else {
+        return Ok(None);
+    };
+    if form.get("node").and_then(Value::as_str) != Some(AUTO) {
+        return Ok(None);
+    }
+    let remote = form
+        .get("repo")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(str::to_string)
+        .context("choose the project the agent should work in")?;
+    let agent = form
+        .get("agent")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_string);
+    let mut candidates: Vec<(String, Capacity)> =
+        local.into_iter().map(|c| (LOCAL.to_string(), c)).collect();
+    // Only nodes that can be written to; asked at once, since each may be slow.
+    let peers: Vec<Node> = load(home)?
+        .into_iter()
+        .filter(|n| !n.token.is_empty())
+        .collect();
+    let answers: Vec<Option<Capacity>> = std::thread::scope(|scope| {
+        let asked: Vec<_> = peers
+            .iter()
+            .map(|n| {
+                scope.spawn(move || {
+                    let text = fetch(n, "/api/repos").ok()?;
+                    Some(Capacity::from_json(&serde_json::from_str(&text).ok()?))
+                })
+            })
+            .collect();
+        asked.into_iter().map(|t| t.join().ok().flatten()).collect()
+    });
+    for (node, capacity) in peers.iter().zip(answers) {
+        if let Some(capacity) = capacity {
+            candidates.push((node.name.clone(), capacity));
+        }
+    }
+    let name = choose(&candidates, &remote, agent.as_deref())?.to_string();
+    if name == LOCAL {
+        form.remove("node");
+        form.remove("repo");
+        form.insert("remote".into(), json!(remote));
+    } else {
+        form.insert("node".into(), json!(name));
+    }
+    Ok(Some((Value::Object(form).to_string(), name)))
+}
+
 type Answer = std::result::Result<Value, String>;
 
 /// What the hub last heard from a node, and whether it is asking right now.
@@ -732,6 +865,119 @@ mod tests {
     }
 
     /// A node that answers `body` to every request, once per connection.
+    fn cap(remotes: &[&str], agents: &[&str], running: usize, max: Option<usize>) -> Capacity {
+        Capacity {
+            remotes: remotes.iter().map(|s| s.to_string()).collect(),
+            agents: agents.iter().map(|s| s.to_string()).collect(),
+            running,
+            max_parallel: max,
+        }
+    }
+
+    #[test]
+    fn auto_picks_the_least_busy_machine_with_the_repo_and_agent() {
+        let app = "github.com/me/app";
+        let all = vec![
+            ("local".to_string(), cap(&[app], &["claude"], 2, Some(3))),
+            (
+                "box".to_string(),
+                cap(&[app], &["claude", "codex"], 1, Some(3)),
+            ),
+            (
+                "nas".to_string(),
+                cap(&["github.com/me/other"], &["claude"], 0, Some(3)),
+            ),
+        ];
+        assert_eq!(choose(&all, app, None).unwrap(), "box");
+        // Only box has codex.
+        assert_eq!(choose(&all, app, Some("codex")).unwrap(), "box");
+        let err = choose(&all, app, Some("pi")).unwrap_err().to_string();
+        assert!(err.contains("`pi`"), "{err}");
+        let err = choose(&all, "github.com/me/none", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no machine"), "{err}");
+    }
+
+    #[test]
+    fn auto_prefers_a_free_slot_then_this_machine_on_a_tie() {
+        let app = "github.com/me/app";
+        // box is idle but full; local has a slot despite running more.
+        let all = vec![
+            ("local".to_string(), cap(&[app], &[], 1, Some(2))),
+            ("box".to_string(), cap(&[app], &[], 0, Some(0))),
+        ];
+        assert_eq!(choose(&all, app, None).unwrap(), "local");
+        // Full everywhere: still placed, on the least loaded.
+        let full = vec![
+            ("local".to_string(), cap(&[app], &[], 3, Some(3))),
+            ("box".to_string(), cap(&[app], &[], 2, Some(2))),
+        ];
+        assert_eq!(choose(&full, app, None).unwrap(), "box");
+        // A tie goes to the first listed.
+        let tie = vec![
+            ("local".to_string(), cap(&[app], &[], 1, None)),
+            ("box".to_string(), cap(&[app], &[], 1, None)),
+        ];
+        assert_eq!(choose(&tie, app, None).unwrap(), "local");
+    }
+
+    #[test]
+    fn auto_forms_are_rewritten_for_the_chosen_machine() {
+        let (_dir, home) = home();
+        let app = "github.com/me/app";
+        let form = format!(r#"{{"prompt":"p","repo":"{app}","node":"auto"}}"#);
+        // Not auto: left alone.
+        assert!(
+            resolve_auto(&home, None, r#"{"node":"box"}"#)
+                .unwrap()
+                .is_none()
+        );
+        // Only this machine has it: the form becomes a local one, by remote.
+        let local = cap(&[app], &[], 0, Some(3));
+        let (body, name) = resolve_auto(&home, Some(local), &form).unwrap().unwrap();
+        assert_eq!(name, "local");
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["remote"], app);
+        assert!(body.get("node").is_none() && body.get("repo").is_none());
+        // Nobody has it.
+        let err = resolve_auto(&home, None, &form).unwrap_err().to_string();
+        assert!(err.contains("no machine"), "{err}");
+    }
+
+    #[test]
+    fn auto_asks_the_other_machines_what_they_have() {
+        let (_dir, home) = home();
+        let url = serve(
+            r#"{"repos":[{"remote":"github.com/me/app","path":"~/app"}],"agents":["claude"],"agent":"claude","running":0,"max_parallel":3}"#,
+            "200 OK",
+        );
+        save(
+            &home,
+            vec![
+                Node {
+                    name: "box".into(),
+                    url: url.clone(),
+                    token: "t".into(),
+                },
+                // Read-only: never picked.
+                Node {
+                    name: "ro".into(),
+                    url,
+                    token: String::new(),
+                },
+            ],
+        )
+        .unwrap();
+        let busy = cap(&["github.com/me/app"], &["claude"], 3, Some(3));
+        let form = r#"{"prompt":"p","repo":"github.com/me/app","node":"auto"}"#;
+        let (body, name) = resolve_auto(&home, Some(busy), form).unwrap().unwrap();
+        assert_eq!(name, "box");
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["node"], "box");
+        assert_eq!(body["repo"], "github.com/me/app");
+    }
+
     fn serve(body: &'static str, status: &'static str) -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
