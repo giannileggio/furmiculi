@@ -6,6 +6,11 @@ lists what changed between them.
 
 ## Unreleased
 
+- The dashboard no longer polls. It opens a Server-Sent Events stream
+  (`GET /api/events`) and redraws when the queue changes, and the log view
+  follows a running task over `GET /api/tasks/<id>/logs/stream`. Restart a
+  running `furmi start`/`furmi web` after upgrading: an older one doesn't have
+  the streams, so the page would never update.
 - `furmi node add/ls/rm` adds other machines running `furmi web`; the dashboard
   then shows their tasks and schedules next to yours with a Node column, and
   names any that don't answer. Their buttons work from here, and **+ New task**
