@@ -112,7 +112,9 @@ pub(super) fn serve(ctx: &Ctx, request: Request, slot: Slot, kind: Kind) {
 
 /// The dashboard's state, until the dashboard stops.
 fn state_stream(ctx: &Ctx, request: Request, slot: Slot) {
-    stream(request, slot, || {
+    // Resent every KEEPALIVE even when nothing changed: the page shows when
+    // it was generated and filters by age against the clock.
+    stream(request, slot, true, || {
         match state_json(ctx.home, ctx.cwd_repo.as_deref()) {
             Ok(json) => Step::Snapshot {
                 key: fingerprint(&json),
@@ -135,9 +137,14 @@ fn log_stream(
     attempt: Option<u32>,
     tail: Option<usize>,
 ) {
-    stream(request, slot, || {
+    stream(request, slot, false, || {
+        let running = control::find(ctx.home, id).is_ok_and(|(_, t)| t.status == Status::Running);
         let log = match control::logs(ctx.home, id, attempt) {
             Ok(log) => log,
+            // A running task's log can be briefly unreadable (its window is
+            // gone but the task isn't finished yet, or it is just starting):
+            // try again rather than end the stream.
+            Err(_) if running => return Step::Skip,
             Err(e) => return Step::Last(format!("event: failed\ndata: {}\n\n", json_err(&e))),
         };
         let (log, cut) = match tail {
@@ -145,7 +152,6 @@ fn log_stream(
             None => (log, false),
         };
         let json = json_log_with(&log, cut);
-        let running = control::find(ctx.home, id).is_ok_and(|(_, t)| t.status == Status::Running);
         if running {
             Step::Snapshot {
                 key: json.clone(),
@@ -158,12 +164,13 @@ fn log_stream(
 }
 
 /// Serves a stream on this thread until the client goes away, `look` says it
-/// is over, or the dashboard is stopped.
-fn stream(request: Request, _slot: Slot, mut look: impl FnMut() -> Step) {
+/// is over, or the dashboard is stopped. With `heartbeat`, the snapshot is
+/// resent when it has been quiet for [`KEEPALIVE`]; otherwise a comment is.
+fn stream(request: Request, _slot: Slot, heartbeat: bool, mut look: impl FnMut() -> Step) {
     let mut out = request.into_writer();
     let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
                 Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\
-                Connection: close\r\n\r\n";
+                X-Accel-Buffering: no\r\nConnection: close\r\n\r\n";
     if out
         .write_all(head.as_bytes())
         .and_then(|_| out.flush())
@@ -177,7 +184,8 @@ fn stream(request: Request, _slot: Slot, mut look: impl FnMut() -> Step) {
         let message = match look() {
             Step::Snapshot { key, json } => {
                 if key == last {
-                    None
+                    (heartbeat && last_write.elapsed() >= KEEPALIVE)
+                        .then(|| format!("data: {json}\n\n"))
                 } else {
                     last = key;
                     Some(format!("data: {json}\n\n"))

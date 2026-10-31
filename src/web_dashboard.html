@@ -1337,7 +1337,17 @@ function openLogsStream(id) {
     try { data = JSON.parse(e.data); } catch { return; }
     applyLogs(data.log || "", !!data.truncated);
   };
-  logsEvents.addEventListener("end", () => { logsLive.hidden = true; stopLogsStream(); });
+  logsEvents.onerror = () => {
+    if (logsEvents && logsEvents.readyState !== EventSource.CLOSED) return;
+    logsEvents = null;
+    logsRaw = "error: can't follow this log (too many open streams, or the server is older)";
+    logsReadable = null;
+    logsCutOff = false;
+    logsLoaded = true;
+    logsLive.hidden = true;
+    drawLogs();
+  };
+  logsEvents.addEventListener("end",() => { logsLive.hidden = true; stopLogsStream(); });
   logsEvents.addEventListener("failed", (e) => {
     let msg = "no log";
     try { msg = JSON.parse(e.data).error || msg; } catch {}
@@ -2082,11 +2092,41 @@ checkSetupQuietly();
 // The server pushes the state when it changes; the browser reconnects by
 // itself if the stream drops. refresh() stays for the moment right after an
 // action, so the page doesn't wait for the next push.
-const events = new EventSource("/api/events");
-events.onmessage = (e) => {
-  try { lastState = JSON.parse(e.data); } catch { return; }
-  draw(lastState);
-};
+let events = null;
+let eventsRetry = null;
+let eventsDelay = 1000;
+function openEvents() {
+  closeEvents();
+  events = new EventSource("/api/events");
+  events.onopen = () => { eventsDelay = 1000; };
+  events.onmessage = (e) => {
+    try { lastState = JSON.parse(e.data); } catch { return; }
+    draw(lastState);
+  };
+  events.onerror = () => {
+    // While it is CONNECTING the browser retries by itself. A CLOSED one got
+    // an error answer (too many streams, an older server, a 401) and never
+    // will: ask again ourselves, slower each time, and keep the page current
+    // with a plain read meanwhile.
+    if (events && events.readyState !== EventSource.CLOSED) return;
+    events = null;
+    eventsRetry = setTimeout(() => { refresh(); openEvents(); }, eventsDelay);
+    eventsDelay = Math.min(eventsDelay * 2, 30000);
+  };
+}
+function closeEvents() {
+  clearTimeout(eventsRetry);
+  if (events) events.close();
+  events = null;
+}
+// A hidden tab doesn't need the stream: drop it (browsers allow only a few
+// connections per host, and the server looks once a second for each) and catch
+// up when the tab is back.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) closeEvents();
+  else { refresh(); openEvents(); }
+});
+openEvents();
 // The "running for" clock ticks on its own, so it stays right between refreshes.
 setInterval(tickElapsed, 1000);
 </script>
