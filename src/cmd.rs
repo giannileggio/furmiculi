@@ -417,6 +417,7 @@ pub fn create_task(home: &Home, config: &Config, new: NewTask) -> Result<(Task, 
     if !problems.is_empty() {
         bail!("invalid task:\n  - {}", problems.join("\n  - "));
     }
+    task.fill_remote();
     let path = home.tasks().join(format!("{}.md", task.id));
     task.create(&path)?;
     Ok((task, path))

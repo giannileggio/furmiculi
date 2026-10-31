@@ -51,6 +51,11 @@ pub struct Task {
     /// Free text, e.g. `cli`, `agent`, `schedule:<id>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
+    /// The repo's identity across machines (`github.com/me/app`, from its
+    /// `origin`), so another node can find its own clone. Written when the
+    /// task is created; absent for a repo with no remote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 
     // Written by furmiculi only.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -92,6 +97,7 @@ const TASK_KEYS: &[&str] = &[
     "scheduled_at",
     "created_at",
     "created_by",
+    "remote",
     "attempts",
     "interruptions",
     "started_at",
@@ -138,6 +144,12 @@ fn fmt_count(n: u64) -> String {
 }
 
 impl Task {
+    /// Records the identity of the repo this task runs in.
+    pub fn fill_remote(&mut self) {
+        let repo = crate::home::expand_tilde(&self.spec.repo);
+        self.remote = crate::git::remote_id(&repo);
+    }
+
     pub fn new(id: String, spec: TaskSpec, prompt: String) -> Self {
         Self {
             id,
@@ -146,6 +158,7 @@ impl Task {
             scheduled_at: None,
             created_at: Some(now()),
             created_by: None,
+            remote: None,
             attempts: 0,
             interruptions: 0,
             started_at: None,

@@ -129,6 +129,7 @@ pub fn edit_task(home: &Home, id: &str, edit: TaskEdit) -> Result<()> {
         bail!("this task has already run in its project, so it can't move to another one");
     }
     task.spec.repo = repo;
+    task.fill_remote();
     task.prompt = edit.prompt.trim().to_string();
     match edit.start {
         Start::Keep => {}
@@ -376,6 +377,34 @@ mod tests {
         assert!((118..=120).contains(&from_now), "{from_now}");
         let err = parse_start(Some("soonish")).unwrap_err().to_string();
         assert!(err.contains("can't start after"), "{err}");
+    }
+
+    fn repo_with_origin(url: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for args in [&["init", "-q"][..], &["remote", "add", "origin", url]] {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok);
+        }
+        dir
+    }
+
+    #[test]
+    fn moving_a_task_to_another_repo_moves_its_remote() {
+        let (_dir, _repo, home, config) = setup();
+        let a = repo_with_origin("git@github.com:me/a.git");
+        let b = repo_with_origin("https://github.com/me/b");
+        let task = queue(&home, &config, a.path(), "Prompt");
+        assert_eq!(task.remote.as_deref(), Some("github.com/me/a"));
+
+        edit_task(&home, &task.id, edit(b.path(), "Prompt")).unwrap();
+
+        let saved = Task::load(&home.tasks().join(format!("{}.md", task.id))).unwrap();
+        assert_eq!(saved.remote.as_deref(), Some("github.com/me/b"));
     }
 
     #[test]

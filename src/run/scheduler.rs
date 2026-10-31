@@ -76,6 +76,7 @@ fn enqueue_schedule(
     let base = format!("{}-{}", truncate_id(&s.id, 48), slot.format("%Y%m%d-%H%M"));
     let mut task = Task::new(unique_id(home, &base), s.spec.clone(), s.prompt.clone());
     task.created_by = Some(format!("schedule:{}", s.id));
+    task.fill_remote();
     task.create(&home.tasks().join(format!("{}.md", task.id)))?;
     log(&format!("enqueued {} from schedule {}", task.id, s.id));
     Ok(())

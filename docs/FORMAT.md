@@ -69,6 +69,7 @@ Add a regression test.
 | `timeout`      | no       | `2h`              | Per attempt. |
 | `scheduled_at` | no       | now               | Don't start before this RFC 3339 time. |
 | `created_by`   | no       | —                 | Free text: `cli`, `agent`, `schedule:<id>`... |
+| `remote`       | no       | —                 | Written by furmi: the repo's `origin` as `host/owner/name` (`github.com/me/app`), so another machine can find its own clone. Absent without an `origin`. |
 | `created_at`   | no       | —                 | RFC 3339; set by `furmi add`. |
 
 ### Fields furmiculi writes
