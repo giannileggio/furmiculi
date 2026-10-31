@@ -42,7 +42,13 @@ pub(super) fn perform_action(home: &Home, id: &str, action: &str, body: &str) ->
 #[derive(Deserialize)]
 struct NewTaskBody {
     prompt: String,
+    #[serde(default)]
     repo: String,
+    /// Instead of `repo`: the repo's remote identity (`github.com/me/app`),
+    /// for a task another machine placed here. Resolved to this machine's
+    /// clone of it.
+    #[serde(default)]
+    remote: Option<String>,
     /// `asap` (or empty), or a delay like `1h`.
     #[serde(default)]
     start: Option<String>,
@@ -53,12 +59,22 @@ struct NewTaskBody {
 }
 
 /// Queues the task described by the form, as `furmi add` would. Returns its id.
-pub(super) fn perform_create(home: &Home, body: &str) -> Result<String> {
+pub(super) fn perform_create(home: &Home, cwd_repo: Option<&str>, body: &str) -> Result<String> {
     let form: NewTaskBody = serde_json::from_str(body).context("couldn't read the form")?;
-    let repo = form.repo.trim();
-    if repo.is_empty() {
-        anyhow::bail!("choose the repository the agent should work in");
-    }
+    let remote = form
+        .remote
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty());
+    let resolved;
+    let repo = match (form.repo.trim(), remote) {
+        ("", None) => anyhow::bail!("choose the repository the agent should work in"),
+        ("", Some(remote)) => {
+            resolved = super::state::path_of_remote(home, cwd_repo, remote)?;
+            resolved.as_str()
+        }
+        (repo, _) => repo,
+    };
     // A new task has nothing to "keep": no start time means as soon as possible.
     let scheduled_at = match edit::parse_start(form.start.as_deref())? {
         Start::At(at) => Some(at),
@@ -332,5 +348,44 @@ mod tests {
         assert!(cut);
         assert!(!tail.contains('\u{fffd}'));
         assert!("éü".contains(tail.chars().next().unwrap()));
+    }
+
+    #[test]
+    fn a_task_placed_here_by_remote_runs_in_this_machines_clone() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        for d in home.dirs() {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(home.config_path(), "[defaults]\nagent = \"claude\"\n").unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["remote", "add", "origin", "git@github.com:me/app.git"],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(repo.path())
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let cwd = repo.path().canonicalize().unwrap();
+        let cwd = cwd.to_str().unwrap();
+
+        let form = |remote: &str| format!(r#"{{"prompt":"do it","remote":"{remote}"}}"#);
+        let id = perform_create(&home, Some(cwd), &form("github.com/me/app")).unwrap();
+
+        let task = crate::task::Task::load(&home.tasks().join(format!("{id}.md"))).unwrap();
+        assert_eq!(task.remote.as_deref(), Some("github.com/me/app"));
+        assert_eq!(
+            crate::home::expand_tilde(&task.spec.repo),
+            std::path::PathBuf::from(cwd)
+        );
+        let err = perform_create(&home, Some(cwd), &form("github.com/me/other")).unwrap_err();
+        assert!(format!("{err:#}").contains("no clone of github.com/me/other"));
+        assert!(perform_create(&home, Some(cwd), r#"{"prompt":"x"}"#).is_err());
     }
 }

@@ -8,7 +8,9 @@ lists what changed between them.
 
 - `furmi node add/ls/rm` adds other machines running `furmi web`; the dashboard
   then shows their tasks and schedules next to yours with a Node column, and
-  names any that don't answer. Their rows are read-only for now.
+  names any that don't answer. Their buttons work from here, and **+ New task**
+  can send a task to another machine, which finds its own clone of the repo by
+  git remote.
 - New tasks record `remote:`, the repo's `origin` as `host/owner/name`, and the
   dashboard serves `GET /api/repos` (the repos and agents a machine can host,
   by remote). First step towards running tasks across machines. Restart a

@@ -100,6 +100,15 @@ named in a notice and its rows drop out (a failure is remembered for 10 seconds,
 so a dead node isn't asked on every refresh); nothing else is affected. The same
 project path on two machines is one project in the sidebar. `furmi node add`
 warns when the URL isn't loopback or a tailnet address, since the token travels
-in the clear. For now the
-other machines' rows are read-only: to act on one, open that machine's own
-dashboard.
+in the clear. 
+You can act on other machines' rows from here: their buttons (done, fail, drop,
+try again, edit, output) and the bulk bar work on a task wherever it runs, and
+**+ New task** has a **Which machine?** choice. A task for another machine names
+its project by git remote (`github.com/me/app`, the repo's `origin`): that
+machine uses its own clone of it, and says so if it has none. Its choices of
+project and agent come from that machine. Ids are only unique per machine, so a
+row from another machine has `@<node>` behind its id.
+
+Changing things on a node needs its token: a node added without one (a loopback
+address, say) can be read but not changed. Repeating tasks can't be placed on
+another machine yet.
