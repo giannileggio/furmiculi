@@ -113,13 +113,16 @@ row from another machine has `@<node>` behind its id.
 
 Choose **Any machine (least busy)** to let the dashboard place the task. At
 creation it asks each machine that can be written to what it has, and takes
-those with a clone of the project and, if you picked one, the agent. Among them
-it prefers one with a free slot (`runner.max_parallel`), then the fewest running
-tasks, then this machine. If every slot is taken it still picks the least loaded:
-the task waits its turn there. The choice is made once, when the task is
-created; it doesn't move later. An unreachable machine is skipped, and a machine
-on an older furmi isn't a candidate. Agents aren't picked in the form for this
-choice: each machine uses its own default.
+those whose runner is started and that have a clone of the project and an
+agent (the one you picked, if any). Among them it prefers one with a free slot
+for that project (`runner.max_parallel` and `max_parallel_per_repo`), then the
+fewest running and waiting tasks, then this machine. If every slot is taken it
+still picks the least loaded: the task waits its turn there. The choice is made
+once, when the task is created, and the answer says where it went; it doesn't
+move later. A machine that doesn't answer (or just failed to) is skipped, and
+so is one on an older furmi, which doesn't report its load. Agents aren't
+picked in the form for this choice: each machine uses its own default. `auto`
+is a reserved node name.
 
 Changing things on a node needs its token: a node added without one (a loopback
 address, say) can be read but not changed, and its rows show no buttons. A node

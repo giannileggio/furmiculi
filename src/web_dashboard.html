@@ -1924,8 +1924,10 @@ async function onNodeChange() {
       const names = ((lastState && lastState.nodes) || [])
         .filter(n => n.online && n.writable !== false).map(n => n.name);
       const all = await Promise.all(names.map(async n => {
-        const res = await fetch(n === "local" ? "/api/repos" : `/api/repos?node=${encodeURIComponent(n)}`, { headers: AUTH() });
-        return res.ok ? res.json() : { repos: [] };
+        try {
+          const res = await fetch(n === "local" ? "/api/repos" : `/api/repos?node=${encodeURIComponent(n)}`, { headers: AUTH() });
+          return res.ok ? await res.json() : { repos: [] };
+        } catch { return { repos: [] }; } // a machine that doesn't answer is skipped
       }));
       const seen = new Map();
       for (const d of all) for (const r of d.repos) if (!seen.has(r.remote)) seen.set(r.remote, r);
@@ -2159,7 +2161,7 @@ newForm.addEventListener("submit", async (e) => {
       path = "/api/tasks";
       body = { ...common, start: $("f-start").value };
       if (!$("f-node-wrap").hidden) body.node = $("f-node").value;
-      done = (d) => `Queued ${d.id}`;
+      done = (d) => body.node === "auto" && d.node ? `Queued ${d.id} on ${d.node === "local" ? "this machine" : d.node}` : `Queued ${d.id}`;
     } else {
       path = "/api/schedules";
       body = { ...common, cron };

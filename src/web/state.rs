@@ -240,7 +240,12 @@ pub(super) struct Hostable {
     pub agent: Option<String>,
     /// Tasks running now, and how many may at once: what `auto` placement weighs.
     pub running: usize,
+    pub queued: usize,
+    /// Running tasks per remote.
+    pub running_in: std::collections::BTreeMap<String, usize>,
+    pub runner_alive: bool,
     pub max_parallel: usize,
+    pub max_parallel_per_repo: usize,
 }
 
 pub(super) fn hostable(home: &Home, cwd_repo: Option<&str>) -> Result<Hostable> {
@@ -261,6 +266,20 @@ pub(super) fn hostable(home: &Home, cwd_repo: Option<&str>) -> Result<Hostable> 
                 .then(|| (remote, contract_tilde(&root)))
         })
         .collect();
+    let mut running_in = std::collections::BTreeMap::new();
+    for t in running_and_queue
+        .iter()
+        .filter(|t| t.status == Status::Running)
+    {
+        // Tasks from before `remote` was recorded are known by their repo.
+        let remote = t.remote.clone().or_else(|| {
+            let path = crate::home::expand_tilde(&t.spec.resolve(&config.defaults).repo);
+            crate::git::remote_id(&crate::git::repo_key(&path))
+        });
+        if let Some(remote) = remote {
+            *running_in.entry(remote).or_insert(0) += 1;
+        }
+    }
     Ok(Hostable {
         repos,
         agents: form.agents,
@@ -269,7 +288,14 @@ pub(super) fn hostable(home: &Home, cwd_repo: Option<&str>) -> Result<Hostable> 
             .iter()
             .filter(|t| t.status == Status::Running)
             .count(),
+        queued: running_and_queue
+            .iter()
+            .filter(|t| t.status == Status::Pending)
+            .count(),
+        running_in,
+        runner_alive: home.runner_alive(),
         max_parallel: config.runner.max_parallel,
+        max_parallel_per_repo: config.runner.max_parallel_per_repo,
     })
 }
 
@@ -363,13 +389,17 @@ pub(super) fn fmt_time(t: chrono::DateTime<chrono::FixedOffset>) -> String {
 }
 
 /// What `auto` placement weighs for this machine.
-pub(super) fn capacity(home: &Home, cwd_repo: Option<&str>) -> Option<crate::nodes::Capacity> {
-    let h = hostable(home, cwd_repo).ok()?;
-    Some(crate::nodes::Capacity {
+pub(super) fn capacity(home: &Home, cwd_repo: Option<&str>) -> Result<crate::nodes::Capacity> {
+    let h = hostable(home, cwd_repo)?;
+    Ok(crate::nodes::Capacity {
         remotes: h.repos.into_iter().map(|(remote, _)| remote).collect(),
         agents: h.agents,
         running: h.running,
+        queued: h.queued,
+        running_in: h.running_in.into_iter().collect(),
+        runner_alive: h.runner_alive,
         max_parallel: Some(h.max_parallel),
+        max_parallel_per_repo: Some(h.max_parallel_per_repo),
     })
 }
 
