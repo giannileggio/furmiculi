@@ -9,7 +9,7 @@ use super::handlers::{
     perform_action, perform_create, perform_create_schedule, perform_edit_schedule,
     perform_edit_task, perform_set_default_agent, tail_of, task_view_json,
 };
-use super::state::{repos_json, state_json};
+use super::state::{capacity, repos_json, state_json};
 use super::{Ctx, Reply, json_reply, reply};
 
 use crate::control;
@@ -24,15 +24,49 @@ const ACTIONS: [&str; 4] = ["done", "fail", "cancel", "retry"];
 const LOGO: &[u8] = include_bytes!("../../assets/logo-mark.png");
 const LOGO_DARK: &[u8] = include_bytes!("../../assets/logo-mark-dark.png");
 
+/// A created task's answer, saying which machine `auto` put it on (and, for
+/// another machine, its id as the dashboard names it there).
+fn named(answer: String, placed: Option<&str>) -> String {
+    let Some(name) = placed else { return answer };
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&answer) else {
+        return answer;
+    };
+    if v["ok"] == true {
+        v["node"] = name.into();
+        if name != crate::nodes::LOCAL
+            && let Some(id) = v["id"].as_str()
+        {
+            v["id"] = format!("{id}@{name}").into();
+        }
+    }
+    v.to_string()
+}
+
 pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply {
     let home = ctx.home;
     let path = url.split('?').next().unwrap_or("");
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    // `node: auto` is settled here, into a named machine, before anything is sent.
+    let settled;
+    let mut placed = None;
+    let body = if matches!(method, Method::Post) && segments == ["api", "tasks"] {
+        match crate::nodes::resolve_auto(home, || capacity(home, ctx.cwd_repo.as_deref()), body) {
+            Ok(Some((form, name))) => {
+                settled = form;
+                placed = Some(name);
+                settled.as_str()
+            }
+            Ok(None) => body,
+            Err(e) => return json_reply(409, json_err(&e)),
+        }
+    } else {
+        body
+    };
     // A row, or a form, that belongs to another node goes there.
     if let Some((status, answer)) =
         crate::nodes::proxy(home, matches!(method, Method::Post), url, body)
     {
-        return json_reply(status, answer);
+        return json_reply(status, named(answer, placed.as_deref()));
     }
     match method {
         Method::Get => match segments.as_slice() {
@@ -117,7 +151,13 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
             ["api", "schedules", id, "delete"] => mutation_reply(edit::delete_schedule(home, id)),
             ["api", "agents", "default"] => mutation_reply(perform_set_default_agent(home, body)),
             ["api", "tasks"] => match perform_create(home, ctx.cwd_repo.as_deref(), body) {
-                Ok(id) => json_reply(200, serde_json::json!({ "ok": true, "id": id }).to_string()),
+                Ok(id) => json_reply(
+                    200,
+                    named(
+                        serde_json::json!({ "ok": true, "id": id }).to_string(),
+                        placed.as_deref(),
+                    ),
+                ),
                 Err(e) => json_reply(400, json_err(&e)),
             },
             ["api", "tasks", id, action] if ACTIONS.contains(action) => {

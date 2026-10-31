@@ -1921,15 +1921,33 @@ async function onNodeChange() {
   $("f-repo").value = "";
   fSubmit.disabled = true;
   try {
-    const res = await fetch(`/api/repos?node=${encodeURIComponent(node)}`, { headers: AUTH() });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    let data;
+    if (node === "auto") {
+      // Any project some machine has; each machine uses its own default agent.
+      const names = ((lastState && lastState.nodes) || [])
+        .filter(n => n.online && n.writable !== false).map(n => n.name);
+      const all = await Promise.all(names.map(async n => {
+        try {
+          const res = await fetch(n === "local" ? "/api/repos" : `/api/repos?node=${encodeURIComponent(n)}`, { headers: AUTH() });
+          return res.ok ? await res.json() : { repos: [] };
+        } catch { return { repos: [] }; } // a machine that doesn't answer is skipped
+      }));
+      const seen = new Map();
+      for (const d of all) for (const r of d.repos) if (!seen.has(r.remote)) seen.set(r.remote, r);
+      data = { repos: [...seen.values()], agents: [], agent: null };
+    } else {
+      const res = await fetch(`/api/repos?node=${encodeURIComponent(node)}`, { headers: AUTH() });
+      data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    }
     if ($("f-node").value !== node) return; // changed again while this was loading
     $("f-repo").value = data.repos[0] ? data.repos[0].remote : "";
     $("f-repos").innerHTML = data.repos.map(r =>
       `<option value="${escapeHtml(r.remote)}">${escapeHtml(r.path)}</option>`).join("");
     setAgents(data.agents, data.agent);
-    $("f-repo-hint").textContent = `A repository ${node} has a clone of, by its git remote (github.com/me/app).`;
+    $("f-repo-hint").textContent = node === "auto"
+      ? "A repository some machine has, by its git remote (github.com/me/app). The least busy one that has it runs the task."
+      : `A repository ${node} has a clone of, by its git remote (github.com/me/app).`;
     fSubmit.disabled = false;
   } catch (err) {
     fError.textContent = String(err.message || err);
@@ -1954,7 +1972,8 @@ function openForm(kind, v) {
   const online = ((lastState && lastState.nodes) || []).filter(n => n.online && n.writable !== false);
   $("f-node-wrap").hidden = kind !== "new" || online.length < 2;
   $("f-node").innerHTML = online.map(n =>
-    `<option value="${escapeHtml(n.name)}">${n.name === "local" ? "This machine" : escapeHtml(n.name)}</option>`).join("");
+    `<option value="${escapeHtml(n.name)}">${n.name === "local" ? "This machine" : escapeHtml(n.name)}</option>`).join("")
+    + `<option value="auto">Any machine (least busy)</option>`;
   $("f-node").value = "local";
   $("f-repo-hint").textContent = LOCAL_HINT;
 
@@ -2145,7 +2164,7 @@ newForm.addEventListener("submit", async (e) => {
       path = "/api/tasks";
       body = { ...common, start: $("f-start").value };
       if (!$("f-node-wrap").hidden) body.node = $("f-node").value;
-      done = (d) => `Queued ${d.id}`;
+      done = (d) => body.node === "auto" && d.node ? `Queued ${d.id} on ${d.node === "local" ? "this machine" : d.node}` : `Queued ${d.id}`;
     } else {
       path = "/api/schedules";
       body = { ...common, cron };

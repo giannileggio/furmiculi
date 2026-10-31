@@ -245,8 +245,8 @@ fn check(node: &Node) -> Result<()> {
     {
         bail!("the URL and token must be single words of printable characters");
     }
-    if node.name == LOCAL {
-        bail!("`{LOCAL}` is this machine's own name; pick another");
+    if node.name == LOCAL || node.name == AUTO {
+        bail!("`{}` is a reserved name; pick another", node.name);
     }
     parse_url(&node.url)?;
     Ok(())
@@ -480,6 +480,175 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
         answer["id"] = json!(full);
     }
     Some((status, answer.to_string()))
+}
+
+/// The node name that asks the hub to choose a machine.
+pub const AUTO: &str = "auto";
+
+/// What a machine can take on: the remotes it has a clone of, its usable
+/// agents, and how loaded it is.
+#[derive(Debug, Clone, Default)]
+pub struct Capacity {
+    pub remotes: Vec<String>,
+    pub agents: Vec<String>,
+    pub running: usize,
+    /// Waiting tasks: they will take slots too, so they count as load.
+    pub queued: usize,
+    /// Running tasks per remote.
+    pub running_in: HashMap<String, usize>,
+    pub runner_alive: bool,
+    /// `None` from a furmi that doesn't say (too old to weigh).
+    pub max_parallel: Option<usize>,
+    pub max_parallel_per_repo: Option<usize>,
+}
+
+impl Capacity {
+    fn from_json(v: &Value) -> Capacity {
+        let strings = |key: &str, field: Option<&str>| -> Vec<String> {
+            v[key]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|x| match field {
+                    Some(f) => x[f].as_str(),
+                    None => x.as_str(),
+                })
+                .map(str::to_string)
+                .collect()
+        };
+        let count = |key: &str| v[key].as_u64().map(|n| n as usize);
+        Capacity {
+            remotes: strings("repos", Some("remote")),
+            agents: strings("agents", None),
+            running: count("running").unwrap_or(0),
+            queued: count("queued").unwrap_or(0),
+            running_in: v["running_in"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(|(k, n)| Some((k.clone(), n.as_u64()? as usize)))
+                .collect(),
+            runner_alive: v["runner_alive"].as_bool().unwrap_or(false),
+            max_parallel: count("max_parallel"),
+            max_parallel_per_repo: count("max_parallel_per_repo"),
+        }
+    }
+
+    /// Can start work at all: its runner is up, and it said what its limits are.
+    fn usable(&self) -> bool {
+        self.runner_alive && self.max_parallel.is_some() && self.max_parallel_per_repo.is_some()
+    }
+
+    /// No slot to start a task for `remote` in right now.
+    fn full(&self, remote: &str) -> bool {
+        self.max_parallel.is_some_and(|max| self.running >= max)
+            || self
+                .max_parallel_per_repo
+                .is_some_and(|max| self.running_in.get(remote).copied().unwrap_or(0) >= max)
+    }
+}
+
+/// The machine to run a task for `remote` (and `agent`, if one is asked for) on:
+/// among those whose runner is up and that have a clone and a usable agent (the
+/// one asked for), one with a free slot for that repo over one without, then the
+/// least running and waiting, then the first listed (this machine). A queue
+/// that's full everywhere still gets a pick, since a task can wait its turn.
+fn choose<'a>(
+    candidates: &'a [(String, Capacity)],
+    remote: &str,
+    agent: Option<&str>,
+) -> Result<&'a str> {
+    let with_clone: Vec<_> = candidates
+        .iter()
+        .filter(|(_, c)| c.usable() && c.remotes.iter().any(|r| r == remote))
+        .collect();
+    if with_clone.is_empty() {
+        bail!(
+            "no machine that is online, can take tasks and has its runner started has a clone of {remote}"
+        );
+    }
+    with_clone
+        .into_iter()
+        .filter(|(_, c)| match agent {
+            Some(a) => c.agents.iter().any(|x| x == a),
+            None => !c.agents.is_empty(),
+        })
+        .min_by_key(|(_, c)| (c.full(remote), c.running + c.queued))
+        .map(|(name, _)| name.as_str())
+        .ok_or_else(|| match agent {
+            Some(a) => anyhow::anyhow!("no machine with a clone of {remote} has the agent `{a}`"),
+            None => anyhow::anyhow!("no machine with a clone of {remote} has an agent installed"),
+        })
+}
+
+/// Whether the last try at this node, a moment ago, found it not answering.
+fn known_down(name: &str) -> bool {
+    entries()
+        .get(name)
+        .is_some_and(|e| matches!(&e.last, Some((at, Err(_))) if at.elapsed() < FAILURE_TTL))
+}
+
+/// Settles a new-task form whose `node` is `auto`: asks every machine that can
+/// take tasks what it has, picks one, and returns the form addressed to it
+/// (`node` a name, or removed for this machine, whose own form names the
+/// project by `remote`) with the chosen machine's name. `None` for any other form.
+pub fn resolve_auto(
+    home: &Home,
+    local: impl FnOnce() -> Result<Capacity>,
+    body: &str,
+) -> Result<Option<(String, String)>> {
+    let Ok(Value::Object(mut form)) = serde_json::from_str::<Value>(body) else {
+        return Ok(None);
+    };
+    if form.get("node").and_then(Value::as_str) != Some(AUTO) {
+        return Ok(None);
+    }
+    let remote = form
+        .get("repo")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(str::to_string)
+        .context("choose the project the agent should work in")?;
+    let agent = form
+        .get("agent")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_string);
+    let mut candidates = vec![(LOCAL.to_string(), local()?)];
+    // Only nodes that can be written to and weren't just found down; asked at
+    // once, since each may be slow.
+    let peers: Vec<Node> = load(home)?
+        .into_iter()
+        .filter(|n| !n.token.is_empty() && !known_down(&n.name))
+        .collect();
+    let answers: Vec<Option<Capacity>> = std::thread::scope(|scope| {
+        let asked: Vec<_> = peers
+            .iter()
+            .map(|n| {
+                scope.spawn(move || {
+                    let text = fetch(n, "/api/repos").ok()?;
+                    Some(Capacity::from_json(&serde_json::from_str(&text).ok()?))
+                })
+            })
+            .collect();
+        asked.into_iter().map(|t| t.join().ok().flatten()).collect()
+    });
+    for (node, capacity) in peers.iter().zip(answers) {
+        if let Some(capacity) = capacity {
+            candidates.push((node.name.clone(), capacity));
+        }
+    }
+    let name = choose(&candidates, &remote, agent.as_deref())?.to_string();
+    if name == LOCAL {
+        form.remove("node");
+        form.remove("repo");
+        form.insert("remote".into(), json!(remote));
+    } else {
+        form.insert("node".into(), json!(name));
+    }
+    Ok(Some((Value::Object(form).to_string(), name)))
 }
 
 type Answer = std::result::Result<Value, String>;
@@ -729,6 +898,174 @@ mod tests {
         let (_dir, home) = home();
         let local = r#"{"queue":[]}"#.to_string();
         assert_eq!(merge_state(&home, local.clone()), local);
+    }
+
+    fn cap(remotes: &[&str], agents: &[&str], running: usize, max: Option<usize>) -> Capacity {
+        Capacity {
+            remotes: remotes.iter().map(|s| s.to_string()).collect(),
+            agents: agents.iter().map(|s| s.to_string()).collect(),
+            running,
+            runner_alive: true,
+            max_parallel: max,
+            max_parallel_per_repo: max.map(|_| 1),
+            ..Capacity::default()
+        }
+    }
+
+    #[test]
+    fn auto_picks_the_least_busy_machine_with_the_repo_and_agent() {
+        let app = "github.com/me/app";
+        let all = vec![
+            ("local".to_string(), cap(&[app], &["claude"], 2, Some(3))),
+            (
+                "box".to_string(),
+                cap(&[app], &["claude", "codex"], 1, Some(3)),
+            ),
+            (
+                "nas".to_string(),
+                cap(&["github.com/me/other"], &["claude"], 0, Some(3)),
+            ),
+        ];
+        assert_eq!(choose(&all, app, None).unwrap(), "box");
+        // Only box has codex.
+        assert_eq!(choose(&all, app, Some("codex")).unwrap(), "box");
+        let err = choose(&all, app, Some("pi")).unwrap_err().to_string();
+        assert!(err.contains("`pi`"), "{err}");
+        let err = choose(&all, "github.com/me/none", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no machine"), "{err}");
+    }
+
+    #[test]
+    fn auto_prefers_a_free_slot_then_this_machine_on_a_tie() {
+        let app = "github.com/me/app";
+        // box is idle but full; local has a slot despite running more.
+        let all = vec![
+            ("local".to_string(), cap(&[app], &["claude"], 1, Some(2))),
+            ("box".to_string(), cap(&[app], &["claude"], 0, Some(0))),
+        ];
+        assert_eq!(choose(&all, app, None).unwrap(), "local");
+        // Full everywhere: still placed, on the least loaded.
+        let full = vec![
+            ("local".to_string(), cap(&[app], &["claude"], 3, Some(3))),
+            ("box".to_string(), cap(&[app], &["claude"], 2, Some(2))),
+        ];
+        assert_eq!(choose(&full, app, None).unwrap(), "box");
+        // A tie goes to the first listed.
+        let tie = vec![
+            ("local".to_string(), cap(&[app], &["claude"], 1, Some(3))),
+            ("box".to_string(), cap(&[app], &["claude"], 1, Some(3))),
+        ];
+        assert_eq!(choose(&tie, app, None).unwrap(), "local");
+    }
+
+    #[test]
+    fn auto_counts_waiting_tasks_and_skips_machines_that_cannot_start_work() {
+        let app = "github.com/me/app";
+        let mut busy = cap(&[app], &["claude"], 0, Some(3));
+        busy.queued = 5;
+        let all = vec![
+            ("local".to_string(), busy),
+            ("box".to_string(), cap(&[app], &["claude"], 1, Some(3))),
+        ];
+        assert_eq!(choose(&all, app, None).unwrap(), "box");
+        // No runner, or no word of its limits (an older furmi): never picked.
+        let mut stopped = cap(&[app], &["claude"], 0, Some(3));
+        stopped.runner_alive = false;
+        let old = Capacity {
+            max_parallel: None,
+            ..cap(&[app], &["claude"], 0, None)
+        };
+        let all = vec![
+            ("stopped".to_string(), stopped),
+            ("old".to_string(), old),
+            ("box".to_string(), cap(&[app], &["claude"], 2, Some(3))),
+        ];
+        assert_eq!(choose(&all, app, None).unwrap(), "box");
+        // No agent installed there.
+        let all = vec![("box".to_string(), cap(&[app], &[], 0, Some(3)))];
+        let err = choose(&all, app, None).unwrap_err().to_string();
+        assert!(err.contains("agent"), "{err}");
+    }
+
+    #[test]
+    fn auto_respects_the_per_repo_limit() {
+        let app = "github.com/me/app";
+        let mut local = cap(&[app], &["claude"], 1, Some(3));
+        local.running_in.insert(app.into(), 1);
+        // Two running, but in other repos: app has room.
+        let box_ = cap(&[app], &["claude"], 2, Some(3));
+        let all = vec![("local".to_string(), local), ("box".to_string(), box_)];
+        assert_eq!(choose(&all, app, None).unwrap(), "box");
+    }
+
+    #[test]
+    fn a_node_cannot_be_called_auto() {
+        let node = Node {
+            name: "auto".into(),
+            url: "http://box:7433".into(),
+            token: "t".into(),
+        };
+        assert!(check(&node).is_err());
+    }
+
+    #[test]
+    fn auto_forms_are_rewritten_for_the_chosen_machine() {
+        let (_dir, home) = home();
+        let app = "github.com/me/app";
+        let form = format!(r#"{{"prompt":"p","repo":"{app}","node":"auto"}}"#);
+        // Not auto: left alone.
+        assert!(
+            resolve_auto(&home, || Ok(Capacity::default()), r#"{"node":"box"}"#)
+                .unwrap()
+                .is_none()
+        );
+        // Only this machine has it: the form becomes a local one, by remote.
+        let local = cap(&[app], &["claude"], 0, Some(3));
+        let (body, name) = resolve_auto(&home, || Ok(local), &form).unwrap().unwrap();
+        assert_eq!(name, "local");
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["remote"], app);
+        assert!(body.get("node").is_none() && body.get("repo").is_none());
+        // Nobody has it.
+        let err = resolve_auto(&home, || Ok(Capacity::default()), &form)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no machine"), "{err}");
+    }
+
+    #[test]
+    fn auto_asks_the_other_machines_what_they_have() {
+        let (_dir, home) = home();
+        let url = serve(
+            r#"{"repos":[{"remote":"github.com/me/app","path":"~/app"}],"agents":["claude"],"agent":"claude","running":0,"queued":0,"running_in":{},"runner_alive":true,"max_parallel":3,"max_parallel_per_repo":1}"#,
+            "200 OK",
+        );
+        save(
+            &home,
+            vec![
+                Node {
+                    name: "box".into(),
+                    url: url.clone(),
+                    token: "t".into(),
+                },
+                // Read-only: never picked.
+                Node {
+                    name: "ro".into(),
+                    url,
+                    token: String::new(),
+                },
+            ],
+        )
+        .unwrap();
+        let busy = cap(&["github.com/me/app"], &["claude"], 3, Some(3));
+        let form = r#"{"prompt":"p","repo":"github.com/me/app","node":"auto"}"#;
+        let (body, name) = resolve_auto(&home, || Ok(busy), form).unwrap().unwrap();
+        assert_eq!(name, "box");
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["node"], "box");
+        assert_eq!(body["repo"], "github.com/me/app");
     }
 
     /// A node that answers `body` to every request, once per connection.
