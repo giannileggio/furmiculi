@@ -6,6 +6,9 @@ lists what changed between them.
 
 ## Unreleased
 
+- `furmi node add/ls/rm` adds other machines running `furmi web`; the dashboard
+  then shows their tasks and schedules next to yours with a Node column, and
+  names any that don't answer. Their rows are read-only for now.
 - New tasks record `remote:`, the repo's `origin` as `host/owner/name`, and the
   dashboard serves `GET /api/repos` (the repos and agents a machine can host,
   by remote). First step towards running tasks across machines. Restart a

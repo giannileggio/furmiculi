@@ -77,3 +77,29 @@ The dashboard speaks plain HTTP: put `tailscale serve` in front of it if you
 want HTTPS. And the quietest pattern is still SSH:
 `ssh -L 7433:127.0.0.1:7433 your-box`, with `furmi web` keeping every original
 protection untouched.
+
+## Showing several machines in one dashboard
+
+Each machine runs its own furmi; one dashboard can show them all. On the
+machine you open, add the others as nodes:
+
+```sh
+furmi node add box http://box.tailnet.ts.net:7433 --token-file ~/box-web-token
+furmi node ls                    # each node, and whether it answers
+furmi node rm box
+```
+
+The URL is where that machine serves `furmi web` (above), and the token is its
+`~/.furmiculi/web-token`; `http://` only, since the dashboard speaks plain HTTP
+(a tailnet or an SSH tunnel such as `http://127.0.0.1:7434` already encrypts
+it). Nodes are kept in `~/.furmiculi/nodes.toml`, 0600 because of the tokens.
+
+The dashboard then lists every machine's tasks and schedules with a **Node**
+column, and the counts add up. A node that doesn't answer within 3 seconds is
+named in a notice and its rows drop out (a failure is remembered for 10 seconds,
+so a dead node isn't asked on every refresh); nothing else is affected. The same
+project path on two machines is one project in the sidebar. `furmi node add`
+warns when the URL isn't loopback or a tailnet address, since the token travels
+in the clear. For now the
+other machines' rows are read-only: to act on one, open that machine's own
+dashboard.
