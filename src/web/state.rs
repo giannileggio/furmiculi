@@ -216,13 +216,34 @@ pub(super) fn state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> 
 /// local path, and the agents that can run here. Repos without an `origin`
 /// have no identity another machine could ask for, so they're left out.
 pub(super) fn repos_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
+    let hosts = hostable(home, cwd_repo)?;
+    let repos: Vec<_> = hosts
+        .repos
+        .iter()
+        .map(|(remote, path)| serde_json::json!({ "remote": remote, "path": path }))
+        .collect();
+    Ok(
+        serde_json::json!({ "repos": repos, "agents": hosts.agents, "agent": hosts.agent })
+            .to_string(),
+    )
+}
+
+/// What a node can run: its repos by remote identity, and its usable agents.
+pub(super) struct Hostable {
+    /// `(remote, path)`, one per remote.
+    pub repos: Vec<(String, String)>,
+    pub agents: Vec<String>,
+    pub agent: Option<String>,
+}
+
+pub(super) fn hostable(home: &Home, cwd_repo: Option<&str>) -> Result<Hostable> {
     let config = Config::load(&home.config_path())?;
     let mut ignored = Vec::new();
     let running_and_queue = load_all(md_files(&home.tasks())?, Task::load, &mut ignored);
     let archive = load_all(md_files(&home.archive())?, Task::load, &mut ignored);
     let form = form_info(&config, cwd_repo, &[&running_and_queue, &archive]);
     let mut seen = std::collections::BTreeSet::new();
-    let repos: Vec<_> = form
+    let repos = form
         .repos
         .iter()
         .filter_map(|path| {
@@ -230,10 +251,24 @@ pub(super) fn repos_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> 
             let root = crate::git::repo_key(&crate::home::expand_tilde(path.as_ref()));
             let remote = crate::git::remote_id(&root)?;
             seen.insert(remote.clone())
-                .then(|| serde_json::json!({ "remote": remote, "path": contract_tilde(&root) }))
+                .then(|| (remote, contract_tilde(&root)))
         })
         .collect();
-    Ok(serde_json::json!({ "repos": repos, "agents": form.agents }).to_string())
+    Ok(Hostable {
+        repos,
+        agents: form.agents,
+        agent: form.agent,
+    })
+}
+
+/// This machine's clone of the repo whose remote identity is `remote`.
+pub(super) fn path_of_remote(home: &Home, cwd_repo: Option<&str>, remote: &str) -> Result<String> {
+    hostable(home, cwd_repo)?
+        .repos
+        .into_iter()
+        .find(|(r, _)| r == remote)
+        .map(|(_, path)| path)
+        .ok_or_else(|| anyhow::anyhow!("no clone of {remote} on this machine"))
 }
 
 /// Repos from the folder `furmi web` started in, then from recent tasks (newest

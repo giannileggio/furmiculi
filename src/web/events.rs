@@ -116,10 +116,15 @@ fn state_stream(ctx: &Ctx, request: Request, slot: Slot) {
     // it was generated and filters by age against the clock.
     stream(request, slot, true, || {
         match state_json(ctx.home, ctx.cwd_repo.as_deref()) {
-            Ok(json) => Step::Snapshot {
-                key: fingerprint(&json),
-                json,
-            },
+            Ok(json) => {
+                // The same merge `/api/state` does, so other machines' tasks
+                // arrive too (their answers are cached, not asked for each look).
+                let json = crate::nodes::merge_state(ctx.home, json);
+                Step::Snapshot {
+                    key: fingerprint(&json),
+                    json,
+                }
+            }
             Err(_) => Step::Skip,
         }
     });

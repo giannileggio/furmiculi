@@ -41,7 +41,7 @@
 //! what it answers, `state` the page's data, `tailnet` the host names to
 //! suggest, and `bind`/`detach` where and how it runs.
 
-mod auth;
+pub(crate) mod auth;
 mod bind;
 mod detach;
 mod events;

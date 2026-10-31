@@ -11,6 +11,12 @@ lists what changed between them.
   follows a running task over `GET /api/tasks/<id>/logs/stream`. Restart a
   running `furmi start`/`furmi web` after upgrading: an older one doesn't have
   the streams, so the page would never update.
+- `furmi node add/ls/rm` adds other machines running `furmi web`; the dashboard
+  then shows their tasks and schedules next to yours with a Node column, and
+  names any that don't answer. Their buttons work from here, and **+ New task**
+  can send a task to another machine, which finds its own clone of the repo by
+  git remote. Upgrade the other machines too: older ones can be read but not
+  given tasks.
 - New tasks record `remote:`, the repo's `origin` as `host/owner/name`, and the
   dashboard serves `GET /api/repos` (the repos and agents a machine can host,
   by remote). First step towards running tasks across machines. Restart a
