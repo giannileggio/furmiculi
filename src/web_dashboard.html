@@ -1872,7 +1872,7 @@ function syncFormFields() {
   $("f-repeat-wrap").hidden = kind === "task";
   $("f-start-wrap").hidden = repeat !== "once";
   // Placing a repeating task on another machine isn't supported yet.
-  if (kind === "new" && repeat !== "once" && $("f-node").value !== "local") {
+  if (kind === "new" && repeat !== "once" && !$("f-node-wrap").hidden && $("f-node").value !== "local") {
     $("f-node").value = "local";
     onNodeChange();
   }
@@ -1903,7 +1903,7 @@ const LOCAL_HINT = "The folder of a git repository on this machine.";
 async function onNodeChange() {
   const node = $("f-node").value;
   const info = formInfo || { repos: [], agents: [], agent: null };
-  if (node === "local") {
+  if (!node || node === "local") {
     // A typed path stays; what came from another machine (a remote) goes.
     if (!/^[\/~]/.test($("f-repo").value)) $("f-repo").value = info.repos[0] || "";
     $("f-repos").innerHTML = info.repos.map(r => `<option value="${escapeHtml(r)}"></option>`).join("");
