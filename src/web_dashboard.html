@@ -319,7 +319,6 @@
 
   /* A row is a link to the task: clicking anywhere in it opens the view. */
   tbody tr[data-id] { cursor: pointer; }
-  tbody tr[data-kind="remote"] { cursor: default; }
   tbody tr.selected td { background: rgba(127,127,127,.14); }
   tbody tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
   tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -554,10 +553,13 @@
           placeholder="e.g. Fix the redirect loop after login, and add a test for it"></textarea>
         <small>Write it like a message to a teammate. Include anything it can't guess.</small>
       </label>
+      <label id="f-node-wrap" hidden>Which machine?
+        <select id="f-node"></select>
+      </label>
       <label>Which project?
         <input id="f-repo" list="f-repos" required autocomplete="off" placeholder="~/Projects/myapp">
         <datalist id="f-repos"></datalist>
-        <small>The folder of a git repository on this machine.</small>
+        <small id="f-repo-hint">The folder of a git repository on this machine.</small>
       </label>
       <div class="row">
         <label id="f-repeat-wrap">How often?
@@ -898,14 +900,15 @@ function inWindow(r) {
   return Number.isNaN(at) || at >= Date.now() - agePreset(age).ms;
 }
 
-// A row from another node: shown, but this page can only act on its own.
-const isRemote = r => !!r.node && r.node !== "local";
+// A row from another node has `@<node>` on its id (ids repeat across
+// machines); the server sends what it asks for to that node. This is the id
+// the node itself knows.
+const shortId = id => id.includes("@") ? id.slice(0, id.lastIndexOf("@")) : id;
 
 function taskTable(rows, cols, empty, sortable, kind = "task") {
   if (rows.length === 0) return empty || `<div class="empty">Nothing here.</div>`;
   const pick = selecting && kind === "task";
-  const mine = rows.filter(r => !isRemote(r));
-  const allOn = pick && mine.length > 0 && mine.every(r => picked.has(r.id));
+  const allOn = pick && rows.every(r => picked.has(r.id));
   const head = (pick ? `<th class="pickcell"><input type="checkbox" class="pick" data-pick-all ${allOn ? "checked" : ""}
       aria-label="Select all tasks in this list" title="Select all"></th>` : "") + cols.map(c => {
     if (!sortable || !SORT_VALUES[c.key]) return `<th class="col-${c.key}">${escapeHtml(c.label)}</th>`;
@@ -917,14 +920,13 @@ function taskTable(rows, cols, empty, sortable, kind = "task") {
   // Each cell carries its column name, so a narrow screen can label it where
   // the header used to be.
   const body = rows.map(r => {
-    const remote = isRemote(r);
-    const tick = pick && remote ? `<td class="pickcell" data-label=""></td>` : pick ? `<td class="pickcell" data-label=""><input type="checkbox" class="pick" data-pick="${escapeHtml(r.id)}"
+    const tick = pick && !canAct(r) ? `<td class="pickcell" data-label=""></td>` : pick ? `<td class="pickcell" data-label=""><input type="checkbox" class="pick" data-pick="${escapeHtml(r.id)}"
       ${picked.has(r.id) ? "checked" : ""} aria-label="Select ${escapeHtml(r.id)}"></td>` : "";
     const cells = tick + cols.map(c =>
       `<td data-label="${escapeHtml(c.label || "")}" class="${c.mono ? "mono" : ""}">` +
       `${c.render ? c.render(r) : escapeHtml(r[c.key])}</td>`).join("");
-    const on = remote ? "" : picked.has(r.id) ? ` class="picked"` : r.id === selected ? ` class="selected"` : "";
-    return `<tr data-id="${escapeHtml(r.id)}" data-kind="${remote ? "remote" : kind}"${on}>${cells}</tr>`;
+    const on = picked.has(r.id) ? ` class="picked"` : r.id === selected ? ` class="selected"` : "";
+    return `<tr data-id="${escapeHtml(r.id)}" data-kind="${kind}"${on}>${cells}</tr>`;
   }).join("");
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
@@ -953,8 +955,11 @@ const ACTION_HELP = {
 const DANGER_ACTIONS = new Set(["fail", "cancel"]);
 const CONFIRM_ACTIONS = new Set(["fail", "cancel"]);
 
+// A row from a node added without a token can be read, not changed.
+const canAct = r => r.writable !== false;
+
 function actionButtons(r) {
-  if (isRemote(r)) return "";
+  if (!canAct(r)) return "";
   const acts = [...(ACTIONS_FOR_STATUS[r.status] || [])];
   acts.push("logs"); // always offered; the endpoint reports if there's nothing yet
   return acts.map(a =>
@@ -995,9 +1000,9 @@ function idCell(r) {
   const summary = r.summary
     ? `<div class="summary" title="${escapeHtml(r.summary)}">${escapeHtml(r.summary)}</div>` : "";
   const why = r.error && r.status !== "done" ? `<div class="why">${escapeHtml(r.error)}</div>` : "";
-  return `${summary}${why}<div class="idcell"><span class="mono">${escapeHtml(r.id)}</span>` +
-    `<button class="copy" data-action="copy" data-text="${escapeHtml(r.id)}" ` +
-    `title="Copy the id: ${escapeHtml(r.id)}" aria-label="Copy the id ${escapeHtml(r.id)}">${COPY_ICON}</button></div>`;
+  return `${summary}${why}<div class="idcell"><span class="mono">${escapeHtml(shortId(r.id))}</span>` +
+    `<button class="copy" data-action="copy" data-text="${escapeHtml(shortId(r.id))}" ` +
+    `title="Copy the id: ${escapeHtml(shortId(r.id))}" aria-label="Copy the id ${escapeHtml(shortId(r.id))}">${COPY_ICON}</button></div>`;
 }
 
 // When it runs (or ran): for a working task that's when it started, plus how
@@ -1061,14 +1066,14 @@ function describeCron(cron) {
 }
 
 const SCHEDULE_COLS = [
-  { key: "summary", label: "What", render: r => escapeHtml(r.summary) + `<div class="why mono">${escapeHtml(r.id)}</div>` },
+  { key: "summary", label: "What", render: r => escapeHtml(r.summary) + `<div class="why mono">${escapeHtml(shortId(r.id))}</div>` },
   { key: "enabled", label: "Status", render: r => r.enabled
       ? `<span class="badge active" title="It adds a task each time it comes round.">Active</span>`
       : `<span class="badge paused" title="Paused: it adds nothing until you resume it.">Paused</span>` },
   { key: "cron", label: "Repeats", render: r => `<span title="${escapeHtml(r.cron)}">${escapeHtml(describeCron(r.cron))}</span>` },
   { key: "next", label: "Next run" },
   { key: "repo", label: "Project", mono: true },
-  { key: "actions", label: "", render: r => isRemote(r) ? "" : `<div class="actions">
+  { key: "actions", label: "", render: r => !canAct(r) ? "" : `<div class="actions">
       <button data-id="${escapeHtml(r.id)}" data-action="sched-edit" title="Change what it does or when">Edit</button>
       <button data-id="${escapeHtml(r.id)}" data-action="${r.enabled ? "sched-pause" : "sched-resume"}"
         title="${r.enabled ? "Stop adding tasks until you resume it" : "Start adding tasks again"}">${r.enabled ? "Pause" : "Resume"}</button>
@@ -1332,7 +1337,7 @@ function drawLogs() {
 function taskRow(id) {
   if (!lastState) return null;
   return [...lastState.running, ...lastState.queue, ...lastState.archive]
-    .find(r => r.id === id && !isRemote(r)) || null; // ids repeat across nodes; this page acts on its own
+    .find(r => r.id === id) || null;
 }
 
 async function showLogs(id) {
@@ -1534,7 +1539,7 @@ function allTasks(state) {
 
 function drawBulk(state) {
   const toggle = document.getElementById("select-toggle");
-  const tasks = allTasks(state).filter(r => !isRemote(r)); // ids repeat across nodes
+  const tasks = allTasks(state);
   toggle.hidden = activeTab() === "schedules" || tasks.length === 0;
   toggle.classList.toggle("on", selecting);
   toggle.textContent = selecting ? "Done selecting" : "Select";
@@ -1866,6 +1871,12 @@ function syncFormFields() {
   const repeat = kind === "task" ? "once" : $("f-repeat").value;
   $("f-repeat-wrap").hidden = kind === "task";
   $("f-start-wrap").hidden = repeat !== "once";
+  // Placing a repeating task on another machine isn't supported yet.
+  if (kind === "new" && repeat !== "once" && !$("f-node-wrap").hidden && $("f-node").value !== "local") {
+    $("f-node").value = "local";
+    onNodeChange();
+  }
+  $("f-node").disabled = repeat !== "once";
   $("f-time-wrap").hidden = !["daily", "weekdays", "weekly"].includes(repeat);
   $("f-day-wrap").hidden = repeat !== "weekly";
   $("f-cron-wrap").hidden = repeat !== "custom";
@@ -1874,6 +1885,54 @@ function syncFormFields() {
   $("f-submit").textContent = kind === "task" || kind === "schedule" ? "Save changes"
     : repeat === "once" ? "Queue task" : "Create schedule";
 }
+
+// Only worth asking when there's a real choice of agent.
+function setAgents(list, current) {
+  const agents = [...list];
+  if (current && !agents.includes(current)) agents.push(current);
+  $("f-agent-wrap").hidden = agents.length < 2;
+  $("f-agent").innerHTML = agents.map(a =>
+    `<option value="${escapeHtml(a)}"${a === current ? " selected" : ""}>${escapeHtml(a)}</option>`
+  ).join("");
+}
+
+const LOCAL_HINT = "The folder of a git repository on this machine.";
+
+// Picking another machine swaps the project and agent choices for the ones it
+// has. Projects are named by git remote there: each machine finds its own clone.
+async function onNodeChange() {
+  const node = $("f-node").value;
+  const info = formInfo || { repos: [], agents: [], agent: null };
+  if (!node || node === "local") {
+    // A typed path stays; what came from another machine (a remote) goes.
+    if (!/^[\/~]/.test($("f-repo").value)) $("f-repo").value = info.repos[0] || "";
+    $("f-repos").innerHTML = info.repos.map(r => `<option value="${escapeHtml(r)}"></option>`).join("");
+    setAgents(info.agents, info.agent);
+    $("f-repo-hint").textContent = LOCAL_HINT;
+    fSubmit.disabled = false;
+    return;
+  }
+  fError.textContent = "";
+  // This machine's project and agent are wrong for that one: clear them, and
+  // don't submit until its own arrive.
+  $("f-repo").value = "";
+  fSubmit.disabled = true;
+  try {
+    const res = await fetch(`/api/repos?node=${encodeURIComponent(node)}`, { headers: AUTH() });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if ($("f-node").value !== node) return; // changed again while this was loading
+    $("f-repo").value = data.repos[0] ? data.repos[0].remote : "";
+    $("f-repos").innerHTML = data.repos.map(r =>
+      `<option value="${escapeHtml(r.remote)}">${escapeHtml(r.path)}</option>`).join("");
+    setAgents(data.agents, data.agent);
+    $("f-repo-hint").textContent = `A repository ${node} has a clone of, by its git remote (github.com/me/app).`;
+    fSubmit.disabled = false;
+  } catch (err) {
+    fError.textContent = String(err.message || err);
+  }
+}
+$("f-node").addEventListener("change", onNodeChange);
 
 function openForm(kind, v) {
   const info = formInfo || { repos: [], agents: [], agent: null, on_finish: "none" };
@@ -1886,14 +1945,15 @@ function openForm(kind, v) {
   $("f-repos").innerHTML = info.repos.map(r => `<option value="${escapeHtml(r)}"></option>`).join("");
   $("f-finish").value = v ? v.on_finish : info.on_finish;
 
-  // Only worth asking when there's a real choice of agent.
-  const agents = [...info.agents];
-  const current = v && v.agent ? v.agent : info.agent;
-  if (current && !agents.includes(current)) agents.push(current);
-  $("f-agent-wrap").hidden = agents.length < 2;
-  $("f-agent").innerHTML = agents.map(a =>
-    `<option value="${escapeHtml(a)}"${a === current ? " selected" : ""}>${escapeHtml(a)}</option>`
-  ).join("");
+  setAgents(info.agents, v && v.agent ? v.agent : info.agent);
+
+  // A new one-off task can go to another machine, if any are merged in.
+  const online = ((lastState && lastState.nodes) || []).filter(n => n.online && n.writable !== false);
+  $("f-node-wrap").hidden = kind !== "new" || online.length < 2;
+  $("f-node").innerHTML = online.map(n =>
+    `<option value="${escapeHtml(n.name)}">${n.name === "local" ? "This machine" : escapeHtml(n.name)}</option>`).join("");
+  $("f-node").value = "local";
+  $("f-repo-hint").textContent = LOCAL_HINT;
 
   // How often: schedules can't be "just once".
   const repeats = kind === "schedule" ? REPEAT_OPTIONS.slice(1) : REPEAT_OPTIONS;
@@ -2081,6 +2141,7 @@ newForm.addEventListener("submit", async (e) => {
     } else if (repeat === "once") {
       path = "/api/tasks";
       body = { ...common, start: $("f-start").value };
+      if (!$("f-node-wrap").hidden) body.node = $("f-node").value;
       done = (d) => `Queued ${d.id}`;
     } else {
       path = "/api/schedules";

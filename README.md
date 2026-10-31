@@ -234,8 +234,8 @@ machines instead, behind a bearer token and a `Host` allowlist (`--listen`,
 `--token-file`, `--allowed-host`). It speaks plain HTTP: put `tailscale serve`
 or an SSH tunnel (`ssh -L 7433:127.0.0.1:7433 your-box`) in front of it. See
 [docs/REMOTE.md](docs/REMOTE.md) for the setup, the flags and the cookie.
-`furmi node add` shows several machines' queues in one dashboard (read-only
-for now; see the same page).
+`furmi node add` shows several machines' queues in one dashboard, and lets you
+queue and manage tasks on any of them (see the same page).
 
 A task that is still *Waiting* has an **Edit** button: change what it does, the
 project, when it starts, or what happens when it's done (not once it has

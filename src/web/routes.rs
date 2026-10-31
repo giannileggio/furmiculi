@@ -28,6 +28,12 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
     let home = ctx.home;
     let path = url.split('?').next().unwrap_or("");
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    // A row, or a form, that belongs to another node goes there.
+    if let Some((status, answer)) =
+        crate::nodes::proxy(home, matches!(method, Method::Post), url, body)
+    {
+        return json_reply(status, answer);
+    }
     match method {
         Method::Get => match segments.as_slice() {
             [] => reply(200, "text/html; charset=utf-8", ctx.index.clone()),
@@ -110,7 +116,7 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
             }
             ["api", "schedules", id, "delete"] => mutation_reply(edit::delete_schedule(home, id)),
             ["api", "agents", "default"] => mutation_reply(perform_set_default_agent(home, body)),
-            ["api", "tasks"] => match perform_create(home, body) {
+            ["api", "tasks"] => match perform_create(home, ctx.cwd_repo.as_deref(), body) {
                 Ok(id) => json_reply(200, serde_json::json!({ "ok": true, "id": id }).to_string()),
                 Err(e) => json_reply(400, json_err(&e)),
             },
