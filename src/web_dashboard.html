@@ -920,7 +920,7 @@ function taskTable(rows, cols, empty, sortable, kind = "task") {
   // Each cell carries its column name, so a narrow screen can label it where
   // the header used to be.
   const body = rows.map(r => {
-    const tick = pick ? `<td class="pickcell" data-label=""><input type="checkbox" class="pick" data-pick="${escapeHtml(r.id)}"
+    const tick = pick && !canAct(r) ? `<td class="pickcell" data-label=""></td>` : pick ? `<td class="pickcell" data-label=""><input type="checkbox" class="pick" data-pick="${escapeHtml(r.id)}"
       ${picked.has(r.id) ? "checked" : ""} aria-label="Select ${escapeHtml(r.id)}"></td>` : "";
     const cells = tick + cols.map(c =>
       `<td data-label="${escapeHtml(c.label || "")}" class="${c.mono ? "mono" : ""}">` +
@@ -955,7 +955,11 @@ const ACTION_HELP = {
 const DANGER_ACTIONS = new Set(["fail", "cancel"]);
 const CONFIRM_ACTIONS = new Set(["fail", "cancel"]);
 
+// A row from a node added without a token can be read, not changed.
+const canAct = r => r.writable !== false;
+
 function actionButtons(r) {
+  if (!canAct(r)) return "";
   const acts = [...(ACTIONS_FOR_STATUS[r.status] || [])];
   acts.push("logs"); // always offered; the endpoint reports if there's nothing yet
   return acts.map(a =>
@@ -1069,7 +1073,7 @@ const SCHEDULE_COLS = [
   { key: "cron", label: "Repeats", render: r => `<span title="${escapeHtml(r.cron)}">${escapeHtml(describeCron(r.cron))}</span>` },
   { key: "next", label: "Next run" },
   { key: "repo", label: "Project", mono: true },
-  { key: "actions", label: "", render: r => `<div class="actions">
+  { key: "actions", label: "", render: r => !canAct(r) ? "" : `<div class="actions">
       <button data-id="${escapeHtml(r.id)}" data-action="sched-edit" title="Change what it does or when">Edit</button>
       <button data-id="${escapeHtml(r.id)}" data-action="${r.enabled ? "sched-pause" : "sched-resume"}"
         title="${r.enabled ? "Stop adding tasks until you resume it" : "Start adding tasks again"}">${r.enabled ? "Pause" : "Resume"}</button>
@@ -1900,13 +1904,19 @@ async function onNodeChange() {
   const node = $("f-node").value;
   const info = formInfo || { repos: [], agents: [], agent: null };
   if (node === "local") {
-    $("f-repo").value = info.repos[0] || "";
+    // A typed path stays; what came from another machine (a remote) goes.
+    if (!/^[\/~]/.test($("f-repo").value)) $("f-repo").value = info.repos[0] || "";
     $("f-repos").innerHTML = info.repos.map(r => `<option value="${escapeHtml(r)}"></option>`).join("");
     setAgents(info.agents, info.agent);
     $("f-repo-hint").textContent = LOCAL_HINT;
+    fSubmit.disabled = false;
     return;
   }
   fError.textContent = "";
+  // This machine's project and agent are wrong for that one: clear them, and
+  // don't submit until its own arrive.
+  $("f-repo").value = "";
+  fSubmit.disabled = true;
   try {
     const res = await fetch(`/api/repos?node=${encodeURIComponent(node)}`, { headers: AUTH() });
     const data = await res.json();
@@ -1917,6 +1927,7 @@ async function onNodeChange() {
       `<option value="${escapeHtml(r.remote)}">${escapeHtml(r.path)}</option>`).join("");
     setAgents(data.agents, data.agent);
     $("f-repo-hint").textContent = `A repository ${node} has a clone of, by its git remote (github.com/me/app).`;
+    fSubmit.disabled = false;
   } catch (err) {
     fError.textContent = String(err.message || err);
   }
@@ -1937,7 +1948,7 @@ function openForm(kind, v) {
   setAgents(info.agents, v && v.agent ? v.agent : info.agent);
 
   // A new one-off task can go to another machine, if any are merged in.
-  const online = ((lastState && lastState.nodes) || []).filter(n => n.online);
+  const online = ((lastState && lastState.nodes) || []).filter(n => n.online && n.writable !== false);
   $("f-node-wrap").hidden = kind !== "new" || online.length < 2;
   $("f-node").innerHTML = online.map(n =>
     `<option value="${escapeHtml(n.name)}">${n.name === "local" ? "This machine" : escapeHtml(n.name)}</option>`).join("");

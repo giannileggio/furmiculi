@@ -365,19 +365,36 @@ fn exchange(
     ))
 }
 
+/// What may follow `/api/tasks/<id>` or `/api/schedules/<id>` when forwarded.
+const FORWARDED: [&str; 10] = [
+    "view", "logs", "edit", "pause", "resume", "delete", "done", "fail", "cancel", "retry",
+];
+
 /// Sends a request meant for another node there, if it is one: a task or
 /// schedule id of the form `<id>@<node>` (what the merged state calls a row
 /// from `<node>`), `GET /api/repos?node=<node>`, or `POST /api/tasks` whose
 /// form names a `node`. `None` means it's this machine's own. The answer is
-/// the node's, status and all; a node that can't be reached is a 502.
+/// the node's, status and all, as JSON, with `id` put back to `<id>@<node>`; a
+/// node that can't be reached is a 502.
 pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, String)> {
     let (path, query) = url.split_once('?').unwrap_or((url, ""));
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let bad = |message: &str| Some((400, json!({ "error": message }).to_string()));
+    // The node's own id for what's asked of it, to name in the answer.
+    let mut row_id = None;
     let (name, forwarded, body) = match segments.as_slice() {
         ["api", kind @ ("tasks" | "schedules"), id, rest @ ..] if id.contains(['@', '%']) => {
             let decoded = id.replace("%40", "@");
             let (id, name) = decoded.rsplit_once('@')?;
-            let name = name.to_string();
+            // One hop only: an id with another `@` in it would be forwarded
+            // on by that node, with its tokens.
+            if validate_id(id).is_err()
+                || rest.len() > 1
+                || rest.iter().any(|r| !FORWARDED.contains(r))
+            {
+                return bad("not a task or schedule of another node");
+            }
+            row_id = Some((id.to_string(), decoded.clone()));
             let mut forwarded = format!("/api/{kind}/{id}");
             for part in rest {
                 forwarded = format!("{forwarded}/{part}");
@@ -385,7 +402,7 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
             if !query.is_empty() {
                 forwarded = format!("{forwarded}?{query}");
             }
-            (name, forwarded, body.to_string())
+            (name.to_string(), forwarded, body.to_string())
         }
         ["api", "repos"] => {
             let name = query.split('&').find_map(|p| p.strip_prefix("node="))?;
@@ -393,15 +410,21 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
         }
         ["api", "tasks"] if post => {
             let mut form: Value = serde_json::from_str(body).ok()?;
-            let name = form["node"]
-                .as_str()
-                .filter(|n| !n.is_empty() && *n != LOCAL)?;
-            let name = name.to_string();
-            // The repo field names a remote on another machine, not a path.
-            let remote = form.as_object_mut()?.remove("repo")?;
+            // No `node`, or this machine: not ours to forward.
+            match form.get("node") {
+                None | Some(Value::Null) => return None,
+                Some(Value::String(n)) if n.is_empty() || n == LOCAL => return None,
+                _ => {}
+            }
+            let name = form["node"].as_str().map(str::to_string);
             let form = form.as_object_mut()?;
+            // A form for another node is never run here, whatever it lacks.
+            let (Some(name), Some(repo)) = (name, form.remove("repo")) else {
+                return bad("a task for another machine needs a node name and a project");
+            };
             form.remove("node");
-            form.insert("remote".into(), remote);
+            // The repo field names a remote on another machine, not a path.
+            form.insert("remote".into(), repo);
             (
                 name,
                 "/api/tasks".to_string(),
@@ -419,10 +442,44 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
         Err(e) => return error(500, format!("{e:#}")),
     };
     let timeout = if post { WRITE_TIMEOUT } else { TIMEOUT };
-    match exchange(&node, post, &forwarded, &body, timeout) {
-        Ok(answer) => Some(answer),
-        Err(e) => error(502, format!("{name} didn't answer: {e:#}")),
+    let answer = exchange(&node, post, &forwarded, &body, timeout);
+    if post {
+        // Whatever happened, what the page shows next must be asked fresh.
+        if let Some(entry) = entries().get_mut(&node.name) {
+            entry.last = None;
+        }
     }
+    let (status, text) = match answer {
+        Ok(answer) => answer,
+        Err(e) if post => {
+            return error(
+                502,
+                format!(
+                    "{name} didn't answer: {e:#} (it may still have applied the change; refresh to check)"
+                ),
+            );
+        }
+        Err(e) => return error(502, format!("{name} didn't answer: {e:#}")),
+    };
+    let Ok(mut answer) = serde_json::from_str::<Value>(&text) else {
+        // Not JSON: an older furmi, or a refusal in plain text.
+        let hint = match status {
+            401 => " (it refused the token)",
+            403 => " (it refused the request: changing things there needs its token)",
+            _ => "",
+        };
+        let text: String = text.trim().chars().take(200).collect();
+        return error(
+            if status < 400 { 502 } else { status },
+            format!("{name} answered {status}{hint}: {text}"),
+        );
+    };
+    if let Some((real, full)) = row_id
+        && answer["id"].as_str() == Some(real.as_str())
+    {
+        answer["id"] = json!(full);
+    }
+    Some((status, answer.to_string()))
 }
 
 type Answer = std::result::Result<Value, String>;
@@ -518,7 +575,7 @@ pub fn merge_state(home: &Home, local: String) -> String {
         return local;
     };
     for list in LISTS {
-        tag_rows(&mut state[list], LOCAL);
+        tag_rows(&mut state[list], LOCAL, true);
     }
     // In parallel: a node that doesn't answer costs one timeout, not one each.
     let answers: Vec<Answer> = std::thread::scope(|s| {
@@ -528,12 +585,12 @@ pub fn merge_state(home: &Home, local: String) -> String {
             .map(|h| h.join().unwrap_or_else(|_| Err("crashed".into())))
             .collect()
     });
-    let mut summary = vec![json!({ "name": LOCAL, "url": null, "online": true })];
+    let mut summary = vec![json!({ "name": LOCAL, "url": null, "online": true, "writable": true })];
     for (node, answer) in nodes.iter().zip(answers) {
         match answer {
             Ok(mut theirs) => {
                 for list in LISTS {
-                    tag_rows(&mut theirs[list], &node.name);
+                    tag_rows(&mut theirs[list], &node.name, !node.token.is_empty());
                     if let (Some(rows), Some(mine)) =
                         (theirs[list].as_array().cloned(), state[list].as_array_mut())
                     {
@@ -541,7 +598,7 @@ pub fn merge_state(home: &Home, local: String) -> String {
                     }
                 }
                 add_counts(&mut state["counts"], &theirs["counts"]);
-                summary.push(json!({ "name": node.name, "url": node.url, "online": true }));
+                summary.push(json!({ "name": node.name, "url": node.url, "online": true, "writable": !node.token.is_empty() }));
             }
             Err(error) => summary.push(
                 json!({ "name": node.name, "url": node.url, "online": false, "error": error }),
@@ -553,13 +610,16 @@ pub fn merge_state(home: &Home, local: String) -> String {
     state.to_string()
 }
 
-/// Tags each row with its node. Another node's rows also get `@<node>` on
+/// Tags each row with its node and whether it can be changed. Another node's rows also get `@<node>` on
 /// their id: ids are only unique on one machine, and this is the id the page
 /// sends back, which [`proxy`] reads to know where a request goes.
-fn tag_rows(rows: &mut Value, node: &str) {
+fn tag_rows(rows: &mut Value, node: &str, writable: bool) {
     for row in rows.as_array_mut().into_iter().flatten() {
         if let Some(row) = row.as_object_mut() {
             row.insert("node".into(), json!(node));
+            // Whether this page can change it: a node added without a token
+            // can only be read.
+            row.insert("writable".into(), json!(writable));
             if node != LOCAL
                 && let Some(id) = row.get("id").and_then(Value::as_str)
             {
@@ -991,5 +1051,80 @@ mod tests {
             proxy(&home, false, "/api/repos?node=box", "").unwrap().0,
             502
         );
+    }
+
+    #[test]
+    fn what_a_node_says_about_a_row_keeps_the_rows_full_id() {
+        let (_dir, home) = home();
+        let (url, _request) = capture("200 OK", r#"{"id":"fix-ci","prompt":"p"}"#);
+        with_node(&home, "box", url);
+
+        let (_, body) = proxy(&home, false, "/api/tasks/fix-ci%40box", "").unwrap();
+
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["id"], "fix-ci@box");
+        assert_eq!(body["prompt"], "p");
+    }
+
+    #[test]
+    fn only_one_hop_and_only_known_paths_are_forwarded() {
+        let (_dir, home) = home();
+        with_node(&home, "b", "http://127.0.0.1:9".into());
+        for url in [
+            "/api/tasks/x%40a%40b/cancel",
+            "/api/tasks/%40b",
+            "/api/tasks/x%40b/..",
+            "/api/tasks/x%40b/view/extra",
+            "/api/tasks/X%40b/view",
+        ] {
+            assert_eq!(proxy(&home, true, url, "{}").unwrap().0, 400, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_form_naming_a_node_never_falls_back_to_this_machine() {
+        let (_dir, home) = home();
+        with_node(&home, "box", "http://127.0.0.1:9".into());
+        for form in [
+            r#"{"prompt":"p","node":"box","remote":"github.com/me/app"}"#,
+            r#"{"prompt":"p","node":5,"repo":"x"}"#,
+        ] {
+            assert_eq!(
+                proxy(&home, true, "/api/tasks", form).unwrap().0,
+                400,
+                "{form}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plain_text_refusal_comes_back_as_a_readable_json_error() {
+        let (_dir, home) = home();
+        let (url, _request) = capture("403 Forbidden", "forbidden: missing or wrong token");
+        with_node(&home, "box", url);
+
+        let (status, body) = proxy(&home, true, "/api/tasks/a%40box/cancel", "{}").unwrap();
+
+        assert_eq!(status, 403);
+        let error = serde_json::from_str::<Value>(&body).unwrap()["error"].to_string();
+        assert!(error.contains("needs its token"), "{error}");
+    }
+
+    #[test]
+    fn rows_say_whether_their_node_can_be_changed() {
+        let (_dir, home) = home();
+        let up = serve(
+            r#"{"queue":[{"id":"b"}],"running":[],"archive":[],"schedules":[]}"#,
+            "200 OK",
+        );
+        save(&home, vec![node("readonly", up)]).unwrap();
+        let local =
+            r#"{"counts":{},"queue":[{"id":"a"}],"running":[],"archive":[],"schedules":[]}"#;
+
+        let merged: Value = serde_json::from_str(&merge_state(&home, local.into())).unwrap();
+
+        assert_eq!(merged["queue"][0]["writable"], true);
+        assert_eq!(merged["queue"][1]["writable"], false);
+        assert_eq!(merged["nodes"][1]["writable"], false);
     }
 }
