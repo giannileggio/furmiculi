@@ -6,6 +6,10 @@ lists what changed between them.
 
 ## Unreleased
 
+- New tasks record `remote:`, the repo's `origin` as `host/owner/name`, and the
+  dashboard serves `GET /api/repos` (the repos and agents a machine can host,
+  by remote). First step towards running tasks across machines.
+
 ## 0.3.0
 
 - The dashboard has a new layout: a sticky header with a runner pill and search,

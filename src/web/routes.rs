@@ -9,7 +9,7 @@ use super::handlers::{
     perform_action, perform_create, perform_create_schedule, perform_edit_schedule,
     perform_edit_task, perform_set_default_agent, tail_of, task_view_json,
 };
-use super::state::state_json;
+use super::state::{repos_json, state_json};
 use super::{Ctx, Reply, json_reply, reply};
 
 use crate::control;
@@ -40,6 +40,10 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 ..reply(200, "image/png", "")
             },
             ["api", "state"] => match state_json(home, ctx.cwd_repo.as_deref()) {
+                Ok(json) => json_reply(200, json),
+                Err(e) => json_reply(500, json_err(&e)),
+            },
+            ["api", "repos"] => match repos_json(home, ctx.cwd_repo.as_deref()) {
                 Ok(json) => json_reply(200, json),
                 Err(e) => json_reply(500, json_err(&e)),
             },

@@ -211,6 +211,29 @@ pub(super) fn state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> 
     Ok(serde_json::to_string(&state)?)
 }
 
+/// What this node can host, for a hub placing a task: the repos it has a clone
+/// of, keyed by the remote identity (`github.com/me/app`) rather than the
+/// local path, and the agents that can run here. Repos without an `origin`
+/// have no identity another machine could ask for, so they're left out.
+pub(super) fn repos_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
+    let config = Config::load(&home.config_path())?;
+    let mut ignored = Vec::new();
+    let running_and_queue = load_all(md_files(&home.tasks())?, Task::load, &mut ignored);
+    let archive = load_all(md_files(&home.archive())?, Task::load, &mut ignored);
+    let form = form_info(&config, cwd_repo, &[&running_and_queue, &archive]);
+    let mut seen = std::collections::BTreeSet::new();
+    let repos: Vec<_> = form
+        .repos
+        .iter()
+        .filter_map(|path| {
+            let remote = crate::git::remote_id(&crate::home::expand_tilde(path.as_ref()))?;
+            seen.insert(remote.clone())
+                .then(|| serde_json::json!({ "remote": remote, "path": path }))
+        })
+        .collect();
+    Ok(serde_json::json!({ "repos": repos, "agents": form.agents }).to_string())
+}
+
 /// Repos from the folder `furmi web` started in, then from recent tasks (newest
 /// first, each once), plus the configured agents and finish action.
 fn form_info(config: &Config, cwd_repo: Option<&str>, tasks: &[&Vec<Task>]) -> FormInfo {

@@ -74,6 +74,34 @@ pub fn repo_key(repo: &Path) -> PathBuf {
     repo_root(repo).unwrap_or_else(|_| repo.to_path_buf())
 }
 
+/// The repo's identity across machines: its `origin` URL reduced to
+/// `host/owner/name`, so every spelling of the same remote compares equal.
+/// `None` if there is no `origin`, or it is a local path.
+pub fn remote_id(repo: &Path) -> Option<String> {
+    normalize_remote(git(repo, &["remote", "get-url", "origin"]).ok()?.trim())
+}
+
+/// `git@github.com:me/app.git`, `https://github.com/me/app/` and
+/// `ssh://git@github.com:22/me/app.git` all become `github.com/me/app`.
+/// The host is lowercased; the path keeps its case.
+pub fn normalize_remote(url: &str) -> Option<String> {
+    let url = url.trim();
+    let (host, path) = match url.split_once("://") {
+        Some((_, rest)) => rest.split_once('/')?,
+        // scp-like `[user@]host:path`; a leading `/`, `.` or `~` is a local path.
+        None if !url.starts_with(['/', '.', '~']) => url.split_once(':')?,
+        None => return None,
+    };
+    let host = host.rsplit('@').next()?;
+    let host = host.split(':').next()?.to_lowercase();
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
+    if host.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some(format!("{host}/{path}"))
+}
+
 /// The repo's shared `.git` directory, as an absolute path. The same for a
 /// repo and all of its linked worktrees.
 fn common_dir(dir: &Path) -> Result<std::path::PathBuf> {
@@ -338,6 +366,44 @@ mod tests {
             .unwrap()
             .trim()
             .into()
+    }
+
+    #[test]
+    fn every_spelling_of_a_remote_has_one_identity() {
+        for url in [
+            "git@github.com:me/app.git",
+            "https://github.com/me/app",
+            "https://github.com/me/app.git/",
+            "https://user:pw@GitHub.com/me/app.git",
+            "ssh://git@github.com:22/me/app.git",
+        ] {
+            assert_eq!(
+                normalize_remote(url).as_deref(),
+                Some("github.com/me/app"),
+                "{url}"
+            );
+        }
+        for local in [
+            "/srv/git/app.git",
+            "../app",
+            "~/app",
+            "file:///srv/app.git",
+            "",
+        ] {
+            assert_eq!(normalize_remote(local), None, "{local}");
+        }
+    }
+
+    #[test]
+    fn a_repo_is_identified_by_its_origin() {
+        let repo = repo();
+        assert_eq!(remote_id(repo.path()), None);
+        git(
+            repo.path(),
+            &["remote", "add", "origin", "git@github.com:me/app.git"],
+        )
+        .unwrap();
+        assert_eq!(remote_id(repo.path()).as_deref(), Some("github.com/me/app"));
     }
 
     #[test]
