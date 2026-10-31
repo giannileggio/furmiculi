@@ -1,7 +1,9 @@
 //! `furmi web`: a Sidekiq-style dashboard over the queue, with actions.
 //!
-//! Serves one HTML shell, a `/api/state` JSON endpoint the page polls, a
-//! `/api/tasks/<id>/logs` endpoint, `/api/tasks/<id>/{done,fail,cancel,retry}`
+//! Serves one HTML shell, two Server-Sent Events streams that push what
+//! changes (`/api/events` the page's state, `/api/tasks/<id>/logs/stream` a
+//! running task's log), `/api/state` and `/api/tasks/<id>/logs` for the same
+//! data as plain requests, `/api/tasks/<id>/{done,fail,cancel,retry}`
 //! POST routes that call straight into the same code `furmi done|fail|cancel|retry`
 //! use, `POST /api/tasks` to queue a new task (the "New task" form),
 //! `POST /api/tasks/<id>/edit` for a task that hasn't started, schedule
@@ -42,6 +44,7 @@
 mod auth;
 mod bind;
 mod detach;
+mod events;
 mod handlers;
 mod routes;
 mod setup;
@@ -207,7 +210,7 @@ fn run_server(home: &Home, server: Server, serving: &Serving, args: &WebArgs) ->
             let server = Arc::clone(&server);
             scope.spawn(move || {
                 for request in server.incoming_requests() {
-                    handle(ctx, request);
+                    handle(ctx, request, scope);
                 }
             });
         }
@@ -279,7 +282,11 @@ fn open_browser(url: &str) {
     });
 }
 
-fn handle(ctx: &Ctx, mut request: Request) {
+fn handle<'scope, 'env>(
+    ctx: &'env Ctx<'env>,
+    mut request: Request,
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+) {
     let url = request.url().to_string();
     let header = |name: &'static str| {
         request
@@ -318,6 +325,16 @@ fn handle(ctx: &Ctx, mut request: Request) {
             && token.as_deref().is_some_and(|t| same_token(t, &ctx.token)))
     {
         reply(403, "text/plain", "forbidden: missing or wrong token")
+    } else if let Some(kind) = (!is_post).then(|| events::kind_of(&url)).flatten() {
+        // A stream holds its thread for as long as the page is open, so it
+        // gets one of its own instead of a worker.
+        match events::claim_slot() {
+            Some(slot) => {
+                scope.spawn(move || events::serve(ctx, request, slot, kind));
+                return;
+            }
+            None => reply(503, "text/plain", "too many open streams"),
+        }
     } else {
         let mut body = String::new();
         if is_post {

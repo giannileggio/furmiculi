@@ -1286,7 +1286,7 @@ let logsShowRaw = false;
 let logsId = null;
 let logsCutOff = false;
 let logsLoaded = false;
-let logsTimer = null;
+let logsEvents = null;
 
 // How much of the end of a log the live view asks for. A runaway agent's log
 // reaches 64 MB; this is what a screenful or twenty of it needs.
@@ -1322,32 +1322,37 @@ async function showLogs(id) {
   logsCutOff = false;
   logsLoaded = false;
   logsOverlay.classList.add("active");
-  await loadLogs();
-  startLogsPolling();
+  openLogsStream(id);
 }
 
-// Reads the end of the log and redraws only when it changed, so following a
-// running task doesn't fight with scrolling up to read something.
-async function loadLogs() {
-  if (!logsId) return;
-  const follow = logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 40;
-  let data;
-  try {
-    const res = await fetch(`/api/tasks/${encodeURIComponent(logsId)}/logs?tail=${LOG_TAIL_BYTES}`,
-      { headers: AUTH() });
-    data = await res.json();
-    if (!res.ok) throw new Error(data.error || "no log");
-  } catch (e) {
-    logsRaw = `error: ${e.message}`;
+// Follows the end of the log. The server pushes a message when it changes and
+// ends the stream once the task is no longer running (a finished task's log is
+// sent once). A redraw only when the text changed, so following a running task
+// doesn't fight with scrolling up to read something.
+function openLogsStream(id) {
+  stopLogsStream();
+  logsEvents = new EventSource(`/api/tasks/${encodeURIComponent(id)}/logs/stream?tail=${LOG_TAIL_BYTES}`);
+  logsEvents.onmessage = (e) => {
+    let data;
+    try { data = JSON.parse(e.data); } catch { return; }
+    applyLogs(data.log || "", !!data.truncated);
+  };
+  logsEvents.addEventListener("end", () => { logsLive.hidden = true; stopLogsStream(); });
+  logsEvents.addEventListener("failed", (e) => {
+    let msg = "no log";
+    try { msg = JSON.parse(e.data).error || msg; } catch {}
+    logsRaw = `error: ${msg}`;
     logsReadable = null;
     logsCutOff = false;
     logsLoaded = true;
     drawLogs();
-    return;
-  }
-  const text = data.log || "";
-  const cut = !!data.truncated;
+    stopLogsStream();
+  });
+}
+
+function applyLogs(text, cut) {
   if (logsLoaded && text === logsRaw && cut === logsCutOff) return; // nothing new
+  const follow = logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 40;
   logsRaw = text;
   logsReadable = readableAgentLog(text);
   logsCutOff = cut;
@@ -1358,26 +1363,14 @@ async function loadLogs() {
   if (follow) logsBody.scrollTop = logsBody.scrollHeight;
 }
 
-// While the modal is open and the task is still running, read its log again as
-// the agent writes to it. A finished task's log doesn't change: no requests.
-function startLogsPolling() {
-  stopLogsPolling();
-  logsTimer = setInterval(async () => {
-    if (!logsOverlay.classList.contains("active")) { stopLogsPolling(); return; }
-    const row = taskRow(logsId);
-    if (!row || row.status !== "running") { logsLive.hidden = true; return; }
-    await loadLogs();
-  }, 2000);
-}
-
-function stopLogsPolling() {
-  if (logsTimer) clearInterval(logsTimer);
-  logsTimer = null;
+function stopLogsStream() {
+  if (logsEvents) logsEvents.close();
+  logsEvents = null;
 }
 
 function closeLogs() {
   logsOverlay.classList.remove("active");
-  stopLogsPolling();
+  stopLogsStream();
   logsId = null;
 }
 
@@ -2086,7 +2079,14 @@ window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", (
 });
 refresh();
 checkSetupQuietly();
-setInterval(refresh, 2000);
+// The server pushes the state when it changes; the browser reconnects by
+// itself if the stream drops. refresh() stays for the moment right after an
+// action, so the page doesn't wait for the next push.
+const events = new EventSource("/api/events");
+events.onmessage = (e) => {
+  try { lastState = JSON.parse(e.data); } catch { return; }
+  draw(lastState);
+};
 // The "running for" clock ticks on its own, so it stays right between refreshes.
 setInterval(tickElapsed, 1000);
 </script>

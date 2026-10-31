@@ -6,6 +6,11 @@ lists what changed between them.
 
 ## Unreleased
 
+- The dashboard no longer polls. It opens a Server-Sent Events stream
+  (`GET /api/events`) and redraws when the queue changes, and the log view
+  follows a running task over `GET /api/tasks/<id>/logs/stream`. Restart a
+  running `furmi start`/`furmi web` after upgrading: an older one doesn't have
+  the streams, so the page would never update.
 - New tasks record `remote:`, the repo's `origin` as `host/owner/name`, and the
   dashboard serves `GET /api/repos` (the repos and agents a machine can host,
   by remote). First step towards running tasks across machines. Restart a

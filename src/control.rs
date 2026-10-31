@@ -308,7 +308,7 @@ fn setup(home: &Home, id: Option<String>) -> Result<(Config, String)> {
 }
 
 /// The task's file, in `tasks/` or else `archive/`.
-fn find(home: &Home, id: &str) -> Result<(PathBuf, Task)> {
+pub(crate) fn find(home: &Home, id: &str) -> Result<(PathBuf, Task)> {
     validate_id(id).map_err(anyhow::Error::msg)?;
     for dir in [home.tasks(), home.archive()] {
         let path = dir.join(format!("{id}.md"));
