@@ -8,7 +8,9 @@ lists what changed between them.
 
 - New tasks record `remote:`, the repo's `origin` as `host/owner/name`, and the
   dashboard serves `GET /api/repos` (the repos and agents a machine can host,
-  by remote). First step towards running tasks across machines.
+  by remote). First step towards running tasks across machines. Restart a
+  running `furmi start`/`furmi web` after upgrading: an older one rejects the
+  new key and skips those tasks.
 
 ## 0.3.0
 

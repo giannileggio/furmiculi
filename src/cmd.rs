@@ -412,12 +412,12 @@ pub fn create_task(home: &Home, config: &Config, new: NewTask) -> Result<(Task, 
     let mut task = Task::new(id, spec, prompt);
     task.created_by = Some(new.created_by);
     task.scheduled_at = new.scheduled_at;
-    task.fill_remote();
 
     let problems = task.problems(config, None);
     if !problems.is_empty() {
         bail!("invalid task:\n  - {}", problems.join("\n  - "));
     }
+    task.fill_remote();
     let path = home.tasks().join(format!("{}.md", task.id));
     task.create(&path)?;
     Ok((task, path))

@@ -226,9 +226,11 @@ pub(super) fn repos_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> 
         .repos
         .iter()
         .filter_map(|path| {
-            let remote = crate::git::remote_id(&crate::home::expand_tilde(path.as_ref()))?;
+            // The checkout's root, not a subfolder a task happened to name.
+            let root = crate::git::repo_key(&crate::home::expand_tilde(path.as_ref()));
+            let remote = crate::git::remote_id(&root)?;
             seen.insert(remote.clone())
-                .then(|| serde_json::json!({ "remote": remote, "path": path }))
+                .then(|| serde_json::json!({ "remote": remote, "path": contract_tilde(&root) }))
         })
         .collect();
     Ok(serde_json::json!({ "repos": repos, "agents": form.agents }).to_string())

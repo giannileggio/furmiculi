@@ -15,6 +15,8 @@ use crate::spec::OnFinish;
 
 /// Local git commands (status, commit, worktree...).
 const LOCAL_TIMEOUT: Duration = Duration::from_secs(120);
+/// Reading `origin`: short, because the dashboard asks for it on a request.
+const REMOTE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Network commands: `git push`, `gh`.
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
@@ -78,25 +80,47 @@ pub fn repo_key(repo: &Path) -> PathBuf {
 /// `host/owner/name`, so every spelling of the same remote compares equal.
 /// `None` if there is no `origin`, or it is a local path.
 pub fn remote_id(repo: &Path) -> Option<String> {
-    normalize_remote(git(repo, &["remote", "get-url", "origin"]).ok()?.trim())
+    let out = run(
+        "git",
+        repo,
+        &["remote", "get-url", "origin"],
+        REMOTE_TIMEOUT,
+    )
+    .ok()?;
+    normalize_remote(out.trim())
 }
 
 /// `git@github.com:me/app.git`, `https://github.com/me/app/` and
 /// `ssh://git@github.com:22/me/app.git` all become `github.com/me/app`.
-/// The host is lowercased; the path keeps its case.
+/// The host is lowercased; the path keeps its case. Local paths (including
+/// `file://` and Windows drive letters), and anything that would carry
+/// credentials into the id, have no identity.
 pub fn normalize_remote(url: &str) -> Option<String> {
     let url = url.trim();
-    let (host, path) = match url.split_once("://") {
+    let (authority, path) = match url.split_once("://") {
+        Some((scheme, _)) if scheme.eq_ignore_ascii_case("file") => return None,
         Some((_, rest)) => rest.split_once('/')?,
-        // scp-like `[user@]host:path`; a leading `/`, `.` or `~` is a local path.
-        None if !url.starts_with(['/', '.', '~']) => url.split_once(':')?,
-        None => return None,
+        None => {
+            // git's rule: scp-like when a `:` comes before any `/` (looking
+            // past a bracketed IPv6 host), and a one-letter "host" is a drive.
+            let from = url.find(']').filter(|&i| url[..i].find('/').is_none());
+            let colon = from.unwrap_or(0) + url[from.unwrap_or(0)..].find(':')?;
+            if url[..colon].contains('/') || url[..colon].len() < 2 {
+                return None;
+            }
+            (&url[..colon], &url[colon + 1..])
+        }
     };
-    let host = host.rsplit('@').next()?;
-    let host = host.split(':').next()?.to_lowercase();
-    let path = path.trim_matches('/');
+    let host = authority.rsplit('@').next()?;
+    let host = match host.strip_prefix('[') {
+        Some(v6) => format!("[{}]", v6.split(']').next()?),
+        None => host.split(':').next()?.to_string(),
+    }
+    .to_lowercase();
+    let path = path.split(['?', '#']).next()?.trim_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
-    if host.is_empty() || path.is_empty() {
+    // A raw `/` in a password lands the secret in the host or path.
+    if host.is_empty() || path.is_empty() || host.contains('@') || path.contains('@') {
         return None;
     }
     Some(format!("{host}/{path}"))
@@ -376,6 +400,7 @@ mod tests {
             "https://github.com/me/app.git/",
             "https://user:pw@GitHub.com/me/app.git",
             "ssh://git@github.com:22/me/app.git",
+            "https://github.com/me/app?x=1#frag",
         ] {
             assert_eq!(
                 normalize_remote(url).as_deref(),
@@ -388,9 +413,25 @@ mod tests {
             "../app",
             "~/app",
             "file:///srv/app.git",
+            "file://localhost/srv/app.git",
+            "C:/src/app",
+            "C:\\src\\app",
+            "srv/a:b",
+            "https://user:p/w@github.com/me/app",
             "",
         ] {
             assert_eq!(normalize_remote(local), None, "{local}");
+        }
+    }
+
+    #[test]
+    fn an_ipv6_host_keeps_its_address() {
+        for (url, id) in [
+            ("ssh://git@[::1]:22/me/app.git", "[::1]/me/app"),
+            ("ssh://git@[2001:db8::2]/me/app", "[2001:db8::2]/me/app"),
+            ("git@[fe80::1]:me/app.git", "[fe80::1]/me/app"),
+        ] {
+            assert_eq!(normalize_remote(url).as_deref(), Some(id), "{url}");
         }
     }
 
