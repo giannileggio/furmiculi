@@ -27,11 +27,16 @@ use crate::spec::validate_id;
 
 /// The name rows from this machine carry once other nodes are merged in.
 pub const LOCAL: &str = "local";
-/// How long a node gets to answer before it counts as offline.
+/// How long a node gets, connecting and answering together, before it counts
+/// as offline. One deadline for the whole request: a node that drips a byte at
+/// a time must not hold a web worker for longer than this.
 const TIMEOUT: Duration = Duration::from_secs(3);
-/// How long an answer (or a failure) is reused, so a page polling every
-/// couple of seconds, or several open pages, ask a node once.
+/// How long an answer is reused, so a page polling every couple of seconds, or
+/// several open pages, ask a node once.
 const CACHE_TTL: Duration = Duration::from_secs(2);
+/// A failure is reused for longer: a node that is down costs a timeout each
+/// time it's asked, and a dead one shouldn't be asked on every poll.
+const FAILURE_TTL: Duration = Duration::from_secs(10);
 /// A node's state beyond this is refused rather than buffered.
 const MAX_BODY: u64 = 32 * 1024 * 1024;
 
@@ -60,6 +65,17 @@ fn path(home: &Home) -> PathBuf {
 
 pub fn load(home: &Home) -> Result<Vec<Node>> {
     let path = path(home);
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&path)
+            && meta.permissions().mode() & 0o077 != 0
+        {
+            bail!(
+                "{} must be readable only by you (chmod 600): it holds tokens",
+                path.display()
+            );
+        }
+    }
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -71,13 +87,23 @@ pub fn load(home: &Home) -> Result<Vec<Node>> {
 }
 
 fn save(home: &Home, nodes: Vec<Node>) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::OpenOptionsExt;
     let path = path(home);
     let body = toml::to_string(&NodesFile { nodes })?;
     let text = format!("# Written by `furmi node`; holds each node's token.\n{body}");
-    crate::fsutil::write_atomic(&path, text)?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("securing {}", path.display()))
+    // Private from the first byte, not chmod'ed after the fact.
+    let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(text.as_bytes()))
+        .and_then(|()| std::fs::rename(&tmp, &path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written.with_context(|| format!("writing {}", path.display()))
 }
 
 #[derive(Subcommand)]
@@ -138,13 +164,22 @@ fn add(home: &Home, args: AddArgs) -> Result<()> {
         token,
     };
     check(&node)?;
-    let _lock = home.lock()?;
-    let mut nodes = load(home)?;
-    // Same name: replaced, so adding again is how a token is changed.
-    nodes.retain(|n| n.name != node.name);
-    nodes.push(node.clone());
-    save(home, nodes)?;
+    {
+        let _lock = home.lock()?;
+        let mut nodes = load(home)?;
+        // Same name: replaced, so adding again is how a token is changed.
+        nodes.retain(|n| n.name != node.name);
+        nodes.push(node.clone());
+        save(home, nodes)?;
+    }
     println!("added {}", node.name);
+    if !node.token.is_empty() && !private_network(&parse_url(&node.url)?.0) {
+        println!(
+            "warning: {} isn't loopback or a tailnet address, and the token goes over plain \
+             HTTP; reach it through a tailnet or an SSH tunnel",
+            node.url
+        );
+    }
     match fetch(&node, "/api/state?local=1") {
         Ok(_) => println!("{} answers", node.url),
         Err(e) => println!("warning: {} doesn't answer yet: {e:#}", node.url),
@@ -158,18 +193,55 @@ fn ls(home: &Home) -> Result<()> {
         println!("no nodes; add one with `furmi node add <name> <url> --token-file <file>`");
         return Ok(());
     }
-    for node in &nodes {
-        let status = match fetch(node, "/api/state?local=1") {
-            Ok(_) => "online".to_string(),
-            Err(e) => format!("offline: {e:#}"),
-        };
+    let statuses: Vec<String> = std::thread::scope(|s| {
+        let handles: Vec<_> = nodes
+            .iter()
+            .map(|n| {
+                s.spawn(|| match fetch(n, "/api/state?local=1") {
+                    Ok(_) => "online".to_string(),
+                    Err(e) => format!("offline: {e:#}"),
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|_| "crashed".into()))
+            .collect()
+    });
+    for (node, status) in nodes.iter().zip(statuses) {
         println!("{:<16} {:<40} {status}", node.name, node.url);
     }
     Ok(())
 }
 
+/// Whether a plain-HTTP token is travelling somewhere already encrypted or
+/// private: loopback, or a tailnet (100.64.0.0/10, `*.ts.net`).
+fn private_network(host: &str) -> bool {
+    if host == "localhost" || host.ends_with(".ts.net") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            ip.is_loopback() || (ip.octets()[0] == 100 && (64..128).contains(&ip.octets()[1]))
+        }
+        Ok(std::net::IpAddr::V6(ip)) => {
+            ip.is_loopback() || ip.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0]
+        }
+        Err(_) => false,
+    }
+}
+
 fn check(node: &Node) -> Result<()> {
     validate_id(&node.name).map_err(anyhow::Error::msg)?;
+    // Both go into the request's header lines as they are.
+    if node
+        .url
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control())
+        || node.token.chars().any(|c| !c.is_ascii_graphic())
+    {
+        bail!("the URL and token must be single words of printable characters");
+    }
     if node.name == LOCAL {
         bail!("`{LOCAL}` is this machine's own name; pick another");
     }
@@ -203,15 +275,29 @@ fn parse_url(url: &str) -> Result<(String, u16, String)> {
 
 /// One GET to a node, returning the body of a 200.
 fn fetch(node: &Node, path: &str) -> Result<String> {
+    // Also checked here: nodes.toml can be edited by hand.
+    check(node)?;
+    let deadline = Instant::now() + TIMEOUT;
+    let left = || {
+        deadline
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .context("timed out")
+    };
     let (host, port, host_header) = parse_url(&node.url)?;
-    let addr = (host.as_str(), port)
+    let addrs = (host.as_str(), port)
         .to_socket_addrs()
-        .with_context(|| format!("looking up {host}"))?
-        .next()
-        .with_context(|| format!("no address for {host}"))?;
-    let mut stream = TcpStream::connect_timeout(&addr, TIMEOUT).context("connecting")?;
-    stream.set_read_timeout(Some(TIMEOUT))?;
-    stream.set_write_timeout(Some(TIMEOUT))?;
+        .with_context(|| format!("looking up {host}"))?;
+    // Each address in turn: `localhost` is often `::1` first.
+    let mut connected = Err(anyhow::anyhow!("no address for {host}"));
+    for addr in addrs {
+        connected = TcpStream::connect_timeout(&addr, left()?).context("connecting");
+        if connected.is_ok() {
+            break;
+        }
+    }
+    let mut stream = connected?;
+    stream.set_write_timeout(Some(left()?))?;
     let auth = if node.token.is_empty() {
         String::new()
     } else {
@@ -224,10 +310,19 @@ fn fetch(node: &Node, path: &str) -> Result<String> {
     );
     stream.write_all(request.as_bytes())?;
     let mut raw = Vec::new();
-    stream
-        .take(MAX_BODY)
-        .read_to_end(&mut raw)
-        .context("reading the answer")?;
+    let mut chunk = [0; 16 * 1024];
+    loop {
+        // Per read, the time left overall, so a slow trickle still ends.
+        stream.set_read_timeout(Some(left()?))?;
+        let n = stream.read(&mut chunk).context("reading the answer")?;
+        if n == 0 {
+            break;
+        }
+        raw.extend_from_slice(&chunk[..n]);
+        if raw.len() as u64 > MAX_BODY {
+            bail!("its state is over {} MB", MAX_BODY / (1024 * 1024));
+        }
+    }
     let text = String::from_utf8_lossy(&raw);
     let (head, body) = text.split_once("\r\n\r\n").context("not an HTTP answer")?;
     let status = head.lines().next().unwrap_or_default();
@@ -241,26 +336,69 @@ fn fetch(node: &Node, path: &str) -> Result<String> {
 
 type Answer = std::result::Result<Value, String>;
 
-fn cache() -> &'static Mutex<HashMap<String, (Instant, Answer)>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, Answer)>>> = OnceLock::new();
+/// What the hub last heard from a node, and whether it is asking right now.
+#[derive(Default)]
+struct Entry {
+    /// url + token the answer was fetched with, so a changed node starts over.
+    identity: String,
+    last: Option<(Instant, Answer)>,
+    asking: bool,
+}
+
+fn cache() -> &'static Mutex<HashMap<String, Entry>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Entry>>> = OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
-/// A node's `/api/state`, or why there isn't one, reused for a moment.
+fn entries() -> std::sync::MutexGuard<'static, HashMap<String, Entry>> {
+    cache().lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A node's `/api/state`, or why there isn't one. Reused for a moment, and
+/// only one request at a time goes out per node: while one is waiting on a slow
+/// node, the others get the last answer instead of queueing up behind it.
 fn state_of(node: &Node) -> Answer {
-    let key = format!("{}\n{}\n{}", node.name, node.url, node.token);
-    if let Some((at, answer)) = cache().lock().unwrap().get(&key)
-        && at.elapsed() < CACHE_TTL
+    let identity = format!("{}\n{}", node.url, node.token);
     {
-        return answer.clone();
+        let mut all = entries();
+        let entry = all.entry(node.name.clone()).or_default();
+        if entry.identity != identity {
+            *entry = Entry {
+                identity,
+                ..Entry::default()
+            };
+        }
+        if let Some((at, answer)) = &entry.last {
+            let ttl = if answer.is_ok() {
+                CACHE_TTL
+            } else {
+                FAILURE_TTL
+            };
+            if at.elapsed() < ttl {
+                return answer.clone();
+            }
+        }
+        if entry.asking {
+            return match &entry.last {
+                Some((_, answer)) => answer.clone(),
+                None => Err("still checking".into()),
+            };
+        }
+        entry.asking = true;
     }
     let answer = fetch(node, "/api/state?local=1")
-        .and_then(|body| serde_json::from_str(&body).context("not furmi's state"))
+        .and_then(|body| {
+            let state: Value = serde_json::from_str(&body).context("not furmi's state")?;
+            if !state.is_object() {
+                bail!("not furmi's state");
+            }
+            Ok(state)
+        })
         .map_err(|e| format!("{e:#}"));
-    cache()
-        .lock()
-        .unwrap()
-        .insert(key, (Instant::now(), answer.clone()));
+    if let Some(entry) = entries().get_mut(&node.name) {
+        entry.asking = false;
+        entry.last = Some((Instant::now(), answer.clone()));
+    }
     answer
 }
 
@@ -271,8 +409,19 @@ const LISTS: [&str; 4] = ["queue", "running", "archive", "schedules"];
 /// answered. With no nodes configured, `local` comes back untouched.
 pub fn merge_state(home: &Home, local: String) -> String {
     let nodes = match load(home) {
-        Ok(nodes) if !nodes.is_empty() => nodes,
-        _ => return local,
+        Ok(nodes) if nodes.is_empty() => return local,
+        Ok(nodes) => nodes,
+        Err(e) => {
+            // Say so on the page rather than quietly showing one machine.
+            let Ok(mut state) = serde_json::from_str::<Value>(&local) else {
+                return local;
+            };
+            state["nodes"] = json!([
+                { "name": LOCAL, "url": null, "online": true },
+                { "name": "nodes.toml", "url": "", "online": false, "error": format!("{e:#}") },
+            ]);
+            return state.to_string();
+        }
     };
     let Ok(mut state) = serde_json::from_str::<Value>(&local) else {
         return local;
@@ -308,13 +457,36 @@ pub fn merge_state(home: &Home, local: String) -> String {
             ),
         }
     }
+    sort_merged(&mut state);
     state["nodes"] = Value::Array(summary);
     state.to_string()
 }
 
 fn tag_rows(rows: &mut Value, node: &str) {
     for row in rows.as_array_mut().into_iter().flatten() {
-        row["node"] = json!(node);
+        if let Some(row) = row.as_object_mut() {
+            row.insert("node".into(), json!(node));
+        }
+    }
+}
+
+/// Puts each merged list back in the order a single machine serves it: the
+/// queue and running soonest first, the archive newest first. Rows with no
+/// time ("as soon as possible") come before the rest.
+fn sort_merged(state: &mut Value) {
+    let when = |row: &Value| {
+        row["when_at"]
+            .as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+    };
+    for (list, newest_first) in [("queue", false), ("running", false), ("archive", true)] {
+        if let Some(rows) = state[list].as_array_mut() {
+            // Stable, so ties keep this machine first.
+            rows.sort_by(|a, b| {
+                let order = when(a).cmp(&when(b));
+                if newest_first { order.reverse() } else { order }
+            });
+        }
     }
 }
 
@@ -489,5 +661,119 @@ mod tests {
                 .unwrap()
                 .contains("401")
         );
+    }
+
+    fn node(name: &str, url: String) -> Node {
+        Node {
+            name: name.into(),
+            url,
+            token: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_reply_that_is_not_furmis_state_is_an_error_not_a_panic() {
+        let (_dir, home) = home();
+        let array = serve("[]", "200 OK");
+        let rows = serve(r#"{"queue":[1,"x"],"counts":5}"#, "200 OK");
+        save(&home, vec![node("array", array), node("rows", rows)]).unwrap();
+        let local =
+            r#"{"counts":{"pending":0},"queue":[],"running":[],"archive":[],"schedules":[]}"#;
+
+        let merged: Value = serde_json::from_str(&merge_state(&home, local.into())).unwrap();
+
+        assert_eq!(merged["nodes"][1]["online"], false);
+        assert_eq!(merged["nodes"][2]["online"], true);
+        assert_eq!(merged["counts"]["pending"], 0);
+    }
+
+    #[test]
+    fn a_node_that_trickles_is_cut_off_at_the_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            // A byte every half second, for far longer than the deadline.
+            for _ in 0..40 {
+                if stream.write_all(b"x").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        });
+        let started = Instant::now();
+        let err = fetch(&node("slow", url), "/api/state").unwrap_err();
+        assert!(
+            started.elapsed() < TIMEOUT + Duration::from_secs(1),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn a_changed_token_does_not_get_the_old_answer() {
+        let (_dir, home) = home();
+        let url = serve(r#"{"queue":[]}"#, "200 OK");
+        let mut n = node("cache-test", url);
+        assert!(state_of(&n).is_ok());
+        n.url = "http://127.0.0.1:9".into();
+        assert!(state_of(&n).is_err());
+        drop(home);
+    }
+
+    #[test]
+    fn header_injection_and_odd_urls_are_refused() {
+        let mut n = node("box", "http://box:7433".into());
+        n.token = "abc\r\nX-Evil: 1".into();
+        assert!(check(&n).is_err());
+        n.token = String::new();
+        n.url = "http://box:7433\r\nX: 1".into();
+        assert!(check(&n).is_err());
+    }
+
+    #[test]
+    fn only_loopback_and_tailnet_hosts_are_private() {
+        for yes in [
+            "127.0.0.1",
+            "::1",
+            "localhost",
+            "box.tailnet.ts.net",
+            "100.64.0.10",
+        ] {
+            assert!(private_network(yes), "{yes}");
+        }
+        for no in ["203.0.113.5", "box", "100.128.0.1", "example.com"] {
+            assert!(!private_network(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn merged_lists_keep_each_machines_order() {
+        let mut state = json!({
+            "queue": [{"id": "late", "when_at": "2026-10-31T10:00:00+00:00"},
+                      {"id": "asap", "when_at": null},
+                      {"id": "early", "when_at": "2026-10-31T09:00:00+00:00"}],
+            "archive": [{"id": "old", "when_at": "2026-10-01T09:00:00+00:00"},
+                        {"id": "new", "when_at": "2026-10-30T09:00:00+00:00"}],
+        });
+        sort_merged(&mut state);
+        let ids = |list: &str| -> Vec<String> {
+            state[list]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(ids("queue"), ["asap", "early", "late"]);
+        assert_eq!(ids("archive"), ["new", "old"]);
+    }
+
+    #[test]
+    fn a_nodes_file_others_can_read_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, home) = home();
+        save(&home, vec![node("box", "http://box:7433".into())]).unwrap();
+        std::fs::set_permissions(path(&home), std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(load(&home).is_err());
     }
 }

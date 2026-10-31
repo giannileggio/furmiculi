@@ -904,7 +904,8 @@ const isRemote = r => !!r.node && r.node !== "local";
 function taskTable(rows, cols, empty, sortable, kind = "task") {
   if (rows.length === 0) return empty || `<div class="empty">Nothing here.</div>`;
   const pick = selecting && kind === "task";
-  const allOn = pick && rows.filter(r => !isRemote(r)).every(r => picked.has(r.id));
+  const mine = rows.filter(r => !isRemote(r));
+  const allOn = pick && mine.length > 0 && mine.every(r => picked.has(r.id));
   const head = (pick ? `<th class="pickcell"><input type="checkbox" class="pick" data-pick-all ${allOn ? "checked" : ""}
       aria-label="Select all tasks in this list" title="Select all"></th>` : "") + cols.map(c => {
     if (!sortable || !SORT_VALUES[c.key]) return `<th class="col-${c.key}">${escapeHtml(c.label)}</th>`;
@@ -1331,7 +1332,7 @@ function drawLogs() {
 function taskRow(id) {
   if (!lastState) return null;
   return [...lastState.running, ...lastState.queue, ...lastState.archive]
-    .find(r => r.id === id) || null;
+    .find(r => r.id === id && !isRemote(r)) || null; // ids repeat across nodes; this page acts on its own
 }
 
 async function showLogs(id) {
@@ -1533,7 +1534,7 @@ function allTasks(state) {
 
 function drawBulk(state) {
   const toggle = document.getElementById("select-toggle");
-  const tasks = allTasks(state);
+  const tasks = allTasks(state).filter(r => !isRemote(r)); // ids repeat across nodes
   toggle.hidden = activeTab() === "schedules" || tasks.length === 0;
   toggle.classList.toggle("on", selecting);
   toggle.textContent = selecting ? "Done selecting" : "Select";
@@ -2107,9 +2108,13 @@ applyTheme(theme, false);
 window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", () => {
   if (theme === "auto") applyTheme("auto", false);
 });
-refresh();
 checkSetupQuietly();
-setInterval(refresh, 2000);
+// One poll after another rather than on a clock: a slow reply (a node that
+// takes its time) must not pile up requests behind it.
+(async function poll() {
+  await refresh();
+  setTimeout(poll, 2000);
+})();
 // The "running for" clock ticks on its own, so it stays right between refreshes.
 setInterval(tickElapsed, 1000);
 </script>
