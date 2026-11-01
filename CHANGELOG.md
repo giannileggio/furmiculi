@@ -6,6 +6,8 @@ lists what changed between them.
 
 ## Unreleased
 
+## 0.4.0
+
 - The dashboard no longer polls. It opens a Server-Sent Events stream
   (`GET /api/events`) and redraws when the queue changes, and the log view
   follows a running task over `GET /api/tasks/<id>/logs/stream`. Restart a
