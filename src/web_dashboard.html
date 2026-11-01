@@ -475,7 +475,7 @@
 </head>
 <body>
 <header>
-  <h1><a class="brand" href="/" title="Back to the start"><img class="logo" id="logo" src="/logo.png" alt="" width="30" height="24"><span class="name">furmiculi</span></a></h1>
+  <h1><a class="brand" href="/" title="furmiculi: ants in Sicilian. Back to the start"><img class="logo" id="logo" src="/logo.png" alt="" width="30" height="24"><span class="name">furmiculi</span></a></h1>
   <div class="runner-pill" id="runner"></div>
   <span class="spacer"></span>
   <input type="search" id="search" placeholder="Search tasks" aria-label="Search tasks"
@@ -1161,11 +1161,11 @@ function draw(state) {
 
   document.getElementById("panel-queue").innerHTML = taskTable(taskRows(state.queue), withNode(TASK_COLS, state), emptyFor(firstRun
     ? `<div class="empty"><div class="big">No tasks yet</div>
-         Describe some work and an agent will do it while you're away.<br>
+         Describe some work and the colony will get to it while you're away.<br>
          <button class="btn" data-action="new">+ New task</button></div>`
     : `<div class="empty">Nothing is waiting.</div>`), true);
   document.getElementById("panel-running").innerHTML = taskTable(taskRows(state.running), withNode(TASK_COLS, state),
-    emptyFor(`<div class="empty">Nothing is being worked on right now.</div>`), true);
+    emptyFor(`<div class="empty">No ants at work right now.</div>`), true);
   document.getElementById("panel-archive").innerHTML = taskTable(taskRows(state.archive), withNode(TASK_COLS, state),
     emptyFor(`<div class="empty">${filter ? `No ${STATUS_LABELS[filter].toLowerCase()} tasks.` : "Nothing has finished yet."}</div>`), true);
   document.getElementById("panel-schedules").innerHTML = taskTable(

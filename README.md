@@ -8,7 +8,11 @@
 [![Release](https://img.shields.io/github/v/release/giannileggio/furmiculi)](https://github.com/giannileggio/furmiculi/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-Queue and run coding-agent tasks defined as Markdown files.
+Queue and run coding-agent tasks defined as Markdown files. A colony of
+agents, one file each.
+
+*Furmiculi* means "ants" in Sicilian: lots of small workers, each carrying one
+task, getting the job done while you're away.
 
 - **Tasks** are `.md` files: YAML frontmatter says where and how to run
   (repo, branch, worktree, agent, model, schedule...), and the body is the
