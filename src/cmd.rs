@@ -337,6 +337,10 @@ pub struct AddArgs {
     /// Repository the task runs in [default: the git repo you're in].
     #[arg(long)]
     repo: Option<PathBuf>,
+    /// No project: run in a new empty folder of its own (kept until
+    /// `furmi clean`), for research, drafts and the like.
+    #[arg(long, conflicts_with_all = ["repo", "branch", "no_worktree"])]
+    scratch: bool,
     /// Task id (also the file name). Derived from the prompt if omitted.
     #[arg(long)]
     id: Option<String>,
@@ -407,20 +411,42 @@ pub fn create_task(home: &Home, config: &Config, new: NewTask) -> Result<(Task, 
     };
 
     let mut spec = new.spec;
-    let repo = std::path::absolute(expand_tilde(&spec.repo))?;
-    spec.repo = PathBuf::from(contract_tilde(&repo));
-    let mut task = Task::new(id, spec, prompt);
-    task.created_by = Some(new.created_by);
-    task.scheduled_at = new.scheduled_at;
-
-    let problems = task.problems(config, None);
-    if !problems.is_empty() {
-        bail!("invalid task:\n  - {}", problems.join("\n  - "));
+    // No repo: the task gets a folder of its own to work in, kept until
+    // `furmi clean`. Nothing to branch or commit there.
+    let scratch = spec
+        .repo
+        .as_os_str()
+        .is_empty()
+        .then(|| home.scratch().join(&id));
+    if let Some(dir) = &scratch {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        spec.repo = dir.clone();
+        spec.worktree = Some(false);
+        spec.branch = None;
+        spec.on_finish = Some(OnFinish::None);
     }
-    task.fill_remote();
-    let path = home.tasks().join(format!("{}.md", task.id));
-    task.create(&path)?;
-    Ok((task, path))
+    let made = (|| {
+        let repo = std::path::absolute(expand_tilde(&spec.repo))?;
+        spec.repo = PathBuf::from(contract_tilde(&repo));
+        let mut task = Task::new(id, spec, prompt);
+        task.created_by = Some(new.created_by);
+        task.scheduled_at = new.scheduled_at;
+
+        let problems = task.problems(config, None);
+        if !problems.is_empty() {
+            bail!("invalid task:\n  - {}", problems.join("\n  - "));
+        }
+        task.fill_remote();
+        let path = home.tasks().join(format!("{}.md", task.id));
+        task.create(&path)?;
+        Ok((task, path))
+    })();
+    if made.is_err()
+        && let Some(dir) = scratch
+    {
+        let _ = std::fs::remove_dir(dir);
+    }
+    made
 }
 
 pub fn add(home: &Home, args: AddArgs) -> Result<()> {
@@ -429,6 +455,7 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
 
     let prompt = read_prompt(args.text.or(args.prompt))?;
     let repo = match args.repo {
+        _ if args.scratch => PathBuf::new(),
         Some(repo) => repo,
         None => current_repo()?,
     };
@@ -494,7 +521,7 @@ fn current_repo() -> Result<PathBuf> {
     crate::git::repo_root(&cwd).map_err(|_| {
         anyhow::anyhow!(
             "{} isn't inside a git repository: run `furmi add` from your project's folder, \
-             or say where with --repo <path>",
+             or say where with --repo <path> (or --scratch for a task with no project)",
             contract_tilde(&cwd)
         )
     })

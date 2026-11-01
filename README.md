@@ -128,6 +128,7 @@ furmi add "Fix the redirect loop after login"   # in the repo you're in; asks if
 furmi add --repo ~/Projects/myapp --on-finish pr --in 2h \
        "Fix the redirect loop after login"
 echo "Update deps and run tests" | furmi add --repo ~/Projects/myapp --agent codex
+furmi add --scratch "Compare the three queue libraries and write up a summary"   # no project
 
 furmi start             # the runner and the dashboard together (--no-open: no browser)
 furmi start -d          # ...in the background: prints the URL and returns
@@ -154,7 +155,7 @@ furmi fail [id] -r why   # give up on it, without retrying
 furmi cancel [id]       # drop a pending or running task
 furmi retry <id>        # requeue a failed/cancelled/needs_review task
 
-furmi clean             # remove worktrees of done tasks (-n: dry run)
+furmi clean             # remove worktrees and scratch folders of done tasks (-n: dry run)
 furmi clean --all --older-than 7d   # ...and of failed/cancelled ones, a week on
 furmi clean --archive --all --older-than 30d   # ...and their archived task files/logs
 

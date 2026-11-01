@@ -49,6 +49,9 @@ struct NewTaskBody {
     /// clone of it.
     #[serde(default)]
     remote: Option<String>,
+    /// No project: a folder of its own to work in.
+    #[serde(default)]
+    scratch: bool,
     /// `asap` (or empty), or a delay like `1h`.
     #[serde(default)]
     start: Option<String>,
@@ -68,6 +71,7 @@ pub(super) fn perform_create(home: &Home, cwd_repo: Option<&str>, body: &str) ->
         .filter(|r| !r.is_empty());
     let resolved;
     let repo = match (form.repo.trim(), remote) {
+        _ if form.scratch => "",
         ("", None) => anyhow::bail!("choose the repository the agent should work in"),
         ("", Some(remote)) => {
             resolved = super::state::path_of_remote(home, cwd_repo, remote)?;
@@ -450,5 +454,28 @@ mod tests {
         assert!(perform_create_schedule(&home, Some(cwd), &form("github.com/me/other")).is_err());
         let edit = perform_edit_schedule(&home, &id, &form("github.com/me/app"));
         assert!(format!("{:#}", edit.unwrap_err()).contains("by its folder"));
+    }
+
+    #[test]
+    fn a_scratch_task_gets_a_folder_of_its_own_kept_until_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        for d in home.dirs() {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(home.config_path(), "[defaults]\nagent = \"claude\"\n").unwrap();
+
+        let id =
+            perform_create(&home, None, r#"{"prompt":"look into it","scratch":true}"#).unwrap();
+
+        let task = crate::task::Task::load(&home.tasks().join(format!("{id}.md"))).unwrap();
+        let eff = task
+            .spec
+            .resolve(&Config::load(&home.config_path()).unwrap().defaults);
+        assert_eq!(eff.repo, home.scratch().join(&id));
+        assert!(eff.repo.is_dir());
+        assert!(!eff.worktree);
+        assert_eq!(eff.on_finish, OnFinish::None);
+        assert!(task.remote.is_none());
     }
 }

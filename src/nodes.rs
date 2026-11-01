@@ -419,12 +419,17 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
             let name = form["node"].as_str().map(str::to_string);
             let form = form.as_object_mut()?;
             // A form for another node is never run here, whatever it lacks.
-            let (Some(name), Some(repo)) = (name, form.remove("repo")) else {
+            // With no project (`scratch`) there's nothing to look up there.
+            let scratch = form.get("scratch") == Some(&Value::Bool(true));
+            let repo = form.remove("repo");
+            let (Some(name), true) = (name, scratch || repo.is_some()) else {
                 return bad("a form for another machine needs a node name and a project");
             };
             form.remove("node");
             // The repo field names a remote on another machine, not a path.
-            form.insert("remote".into(), repo);
+            if let Some(repo) = repo.filter(|_| !scratch) {
+                form.insert("remote".into(), repo);
+            }
             (
                 name,
                 format!("/api/{kind}"),
@@ -555,18 +560,29 @@ impl Capacity {
 /// that's full everywhere still gets a pick, since a task can wait its turn.
 fn choose<'a>(
     candidates: &'a [(String, Capacity)],
-    remote: &str,
+    remote: Option<&str>,
     agent: Option<&str>,
 ) -> Result<&'a str> {
+    // No remote: a scratch task, which needs no clone, only a free machine.
+    let has = |c: &Capacity| remote.is_none_or(|r| c.remotes.iter().any(|x| x == r));
     let with_clone: Vec<_> = candidates
         .iter()
-        .filter(|(_, c)| c.usable() && c.remotes.iter().any(|r| r == remote))
+        .filter(|(_, c)| c.usable() && has(c))
         .collect();
     if with_clone.is_empty() {
-        bail!(
-            "no machine that is online, can take new work and has its runner started has a clone of {remote}"
-        );
+        match remote {
+            Some(remote) => bail!(
+                "no machine that is online, can take new work and has its runner started has a clone of {remote}"
+            ),
+            None => bail!("no machine is online, can take new work and has its runner started"),
+        }
     }
+    let remote = remote.unwrap_or_default();
+    let with = if remote.is_empty() {
+        String::new()
+    } else {
+        format!(" with a clone of {remote}")
+    };
     with_clone
         .into_iter()
         .filter(|(_, c)| match agent {
@@ -576,8 +592,8 @@ fn choose<'a>(
         .min_by_key(|(_, c)| (c.full(remote), c.running + c.queued))
         .map(|(name, _)| name.as_str())
         .ok_or_else(|| match agent {
-            Some(a) => anyhow::anyhow!("no machine with a clone of {remote} has the agent `{a}`"),
-            None => anyhow::anyhow!("no machine with a clone of {remote} has an agent installed"),
+            Some(a) => anyhow::anyhow!("no machine{with} has the agent `{a}`"),
+            None => anyhow::anyhow!("no machine{with} has an agent installed"),
         })
 }
 
@@ -603,13 +619,20 @@ pub fn resolve_auto(
     if form.get("node").and_then(Value::as_str) != Some(AUTO) {
         return Ok(None);
     }
-    let remote = form
-        .get("repo")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|r| !r.is_empty())
-        .map(str::to_string)
-        .context("choose the project the agent should work in")?;
+    // No project (`scratch`): any machine will do.
+    let scratch = form.get("scratch") == Some(&Value::Bool(true));
+    let remote = if scratch {
+        None
+    } else {
+        Some(
+            form.get("repo")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+                .map(str::to_string)
+                .context("choose the project the agent should work in")?,
+        )
+    };
     let agent = form
         .get("agent")
         .and_then(Value::as_str)
@@ -640,11 +663,13 @@ pub fn resolve_auto(
             candidates.push((node.name.clone(), capacity));
         }
     }
-    let name = choose(&candidates, &remote, agent.as_deref())?.to_string();
+    let name = choose(&candidates, remote.as_deref(), agent.as_deref())?.to_string();
     if name == LOCAL {
         form.remove("node");
         form.remove("repo");
-        form.insert("remote".into(), json!(remote));
+        if let Some(remote) = remote {
+            form.insert("remote".into(), json!(remote));
+        }
     } else {
         form.insert("node".into(), json!(name));
     }
@@ -926,12 +951,12 @@ mod tests {
                 cap(&["github.com/me/other"], &["claude"], 0, Some(3)),
             ),
         ];
-        assert_eq!(choose(&all, app, None).unwrap(), "box");
+        assert_eq!(choose(&all, Some(app), None).unwrap(), "box");
         // Only box has codex.
-        assert_eq!(choose(&all, app, Some("codex")).unwrap(), "box");
-        let err = choose(&all, app, Some("pi")).unwrap_err().to_string();
+        assert_eq!(choose(&all, Some(app), Some("codex")).unwrap(), "box");
+        let err = choose(&all, Some(app), Some("pi")).unwrap_err().to_string();
         assert!(err.contains("`pi`"), "{err}");
-        let err = choose(&all, "github.com/me/none", None)
+        let err = choose(&all, Some("github.com/me/none"), None)
             .unwrap_err()
             .to_string();
         assert!(err.contains("no machine"), "{err}");
@@ -945,19 +970,19 @@ mod tests {
             ("local".to_string(), cap(&[app], &["claude"], 1, Some(2))),
             ("box".to_string(), cap(&[app], &["claude"], 0, Some(0))),
         ];
-        assert_eq!(choose(&all, app, None).unwrap(), "local");
+        assert_eq!(choose(&all, Some(app), None).unwrap(), "local");
         // Full everywhere: still placed, on the least loaded.
         let full = vec![
             ("local".to_string(), cap(&[app], &["claude"], 3, Some(3))),
             ("box".to_string(), cap(&[app], &["claude"], 2, Some(2))),
         ];
-        assert_eq!(choose(&full, app, None).unwrap(), "box");
+        assert_eq!(choose(&full, Some(app), None).unwrap(), "box");
         // A tie goes to the first listed.
         let tie = vec![
             ("local".to_string(), cap(&[app], &["claude"], 1, Some(3))),
             ("box".to_string(), cap(&[app], &["claude"], 1, Some(3))),
         ];
-        assert_eq!(choose(&tie, app, None).unwrap(), "local");
+        assert_eq!(choose(&tie, Some(app), None).unwrap(), "local");
     }
 
     #[test]
@@ -969,7 +994,7 @@ mod tests {
             ("local".to_string(), busy),
             ("box".to_string(), cap(&[app], &["claude"], 1, Some(3))),
         ];
-        assert_eq!(choose(&all, app, None).unwrap(), "box");
+        assert_eq!(choose(&all, Some(app), None).unwrap(), "box");
         // No runner, or no word of its limits (an older furmi): never picked.
         let mut stopped = cap(&[app], &["claude"], 0, Some(3));
         stopped.runner_alive = false;
@@ -982,10 +1007,10 @@ mod tests {
             ("old".to_string(), old),
             ("box".to_string(), cap(&[app], &["claude"], 2, Some(3))),
         ];
-        assert_eq!(choose(&all, app, None).unwrap(), "box");
+        assert_eq!(choose(&all, Some(app), None).unwrap(), "box");
         // No agent installed there.
         let all = vec![("box".to_string(), cap(&[app], &[], 0, Some(3)))];
-        let err = choose(&all, app, None).unwrap_err().to_string();
+        let err = choose(&all, Some(app), None).unwrap_err().to_string();
         assert!(err.contains("agent"), "{err}");
     }
 
@@ -997,7 +1022,44 @@ mod tests {
         // Two running, but in other repos: app has room.
         let box_ = cap(&[app], &["claude"], 2, Some(3));
         let all = vec![("local".to_string(), local), ("box".to_string(), box_)];
-        assert_eq!(choose(&all, app, None).unwrap(), "box");
+        assert_eq!(choose(&all, Some(app), None).unwrap(), "box");
+    }
+
+    #[test]
+    fn a_scratch_task_goes_to_the_least_busy_machine_clone_or_not() {
+        let all = vec![
+            ("local".to_string(), cap(&[], &["claude"], 2, Some(3))),
+            (
+                "box".to_string(),
+                cap(&["github.com/me/app"], &["claude"], 0, Some(3)),
+            ),
+        ];
+        assert_eq!(choose(&all, None, None).unwrap(), "box");
+        assert!(choose(&[], None, None).is_err());
+        let (_dir, home) = home();
+        let form = r#"{"prompt":"p","scratch":true,"node":"auto"}"#;
+        let local = cap(&[], &["claude"], 0, Some(3));
+        let (body, name) = resolve_auto(&home, || Ok(local), form).unwrap().unwrap();
+        assert_eq!(name, "local");
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert!(body.get("node").is_none() && body.get("remote").is_none());
+        assert_eq!(body["scratch"], true);
+    }
+
+    #[test]
+    fn a_scratch_task_for_another_node_names_no_project() {
+        let (_dir, home) = home();
+        let (url, request) = capture("200 OK", r#"{"ok":true,"id":"t"}"#);
+        with_node(&home, "box", url);
+        let form = r#"{"prompt":"p","scratch":true,"node":"box"}"#;
+
+        let (status, _) = proxy(&home, true, "/api/tasks", form).unwrap();
+
+        assert_eq!(status, 200);
+        let sent = request.recv().unwrap();
+        let body: Value = serde_json::from_str(sent.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["scratch"], true);
+        assert!(body.get("remote").is_none() && body.get("node").is_none());
     }
 
     #[test]

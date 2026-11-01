@@ -164,6 +164,7 @@ pub(super) fn state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> 
     }
     archive_tasks.sort_by_key(|t| Reverse(t.finished_at));
     let form = form_info(
+        home,
         &config,
         cwd_repo,
         &[&running_tasks, &queue_tasks, &archive_tasks],
@@ -253,7 +254,7 @@ pub(super) fn hostable(home: &Home, cwd_repo: Option<&str>) -> Result<Hostable> 
     let mut ignored = Vec::new();
     let running_and_queue = load_all(md_files(&home.tasks())?, Task::load, &mut ignored);
     let archive = load_all(md_files(&home.archive())?, Task::load, &mut ignored);
-    let form = form_info(&config, cwd_repo, &[&running_and_queue, &archive]);
+    let form = form_info(home, &config, cwd_repo, &[&running_and_queue, &archive]);
     let mut seen = std::collections::BTreeSet::new();
     let repos = form
         .repos
@@ -311,14 +312,22 @@ pub(super) fn path_of_remote(home: &Home, cwd_repo: Option<&str>, remote: &str) 
 
 /// Repos from the folder `furmi web` started in, then from recent tasks (newest
 /// first, each once), plus the configured agents and finish action.
-fn form_info(config: &Config, cwd_repo: Option<&str>, tasks: &[&Vec<Task>]) -> FormInfo {
+fn form_info(
+    home: &Home,
+    config: &Config,
+    cwd_repo: Option<&str>,
+    tasks: &[&Vec<Task>],
+) -> FormInfo {
     let mut recent: Vec<&Task> = tasks.iter().flat_map(|t| t.iter()).collect();
     recent.sort_by_key(|t| Reverse(t.created_at));
     let mut repos: Vec<String> = Vec::new();
     for repo in cwd_repo.map(str::to_string).into_iter().chain(
         recent
             .iter()
-            .map(|t| contract_tilde(&t.spec.resolve(&config.defaults).repo)),
+            .map(|t| t.spec.resolve(&config.defaults).repo)
+            // A scratch folder is no project to offer again.
+            .filter(|repo| !repo.starts_with(home.scratch()))
+            .map(|repo| contract_tilde(&repo)),
     ) {
         if !repos.contains(&repo) {
             repos.push(repo);

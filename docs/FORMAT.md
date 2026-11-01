@@ -11,6 +11,8 @@ All state lives under one folder: `$FURMI_HOME`, default `~/.furmiculi`.
   logs/          <id>.<attempt>.log (the agent's output), .exit (exit status)
                  and .usage (token usage, if the agent reports it) per run
   worktrees/     <id>/: the git worktree a task runs in (kept until `furmi clean`)
+  scratch/       <id>/: the empty folder of a task with no project (`furmi add
+                 --scratch`); kept until `furmi clean`
   runner.log     what `furmi run` did, appended (moved to runner.log.1 past 5 MB)
   runner.json    `furmi run`'s heartbeat: pid, start and last pass (see `furmi status`)
   AGENTS.md      guide for any agent opened in this folder
@@ -57,7 +59,7 @@ Add a regression test.
 | Field          | Required | Default (config `[defaults]`) | Meaning |
 |----------------|----------|-------------------------------|---------|
 | `id`           | yes      | —                 | `a-z`, `0-9`, `-`, max 64 chars. Must equal the file name without `.md`. |
-| `repo`         | yes      | —                 | Folder the task runs in: absolute, or starting with `~`. |
+| `repo`         | yes      | —                 | Folder the task runs in: absolute, or starting with `~`. A task with no project has `scratch/<id>` here, with `worktree: false` and `on_finish: none`. |
 | `branch`       | no       | `furmi/<id>` if `worktree` | Branch to work on. |
 | `worktree`     | no       | `true`            | Run in a dedicated git worktree for the branch. `false` runs in your own checkout — see below. |
 | `agent`        | no       | chosen at `furmi init` | Name of an agent in `config.toml` `[agents.*]`. |

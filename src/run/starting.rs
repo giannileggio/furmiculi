@@ -117,7 +117,7 @@ fn start(
             task.status = Status::Running;
             task.tmux_window = Some(format!("{session}:{}", task.id));
             task.save(path)?;
-            if !eff.worktree {
+            if !eff.worktree && !eff.repo.starts_with(home.scratch()) {
                 log(&format!(
                     "warning: {} runs directly in {} (worktree: false): the agent edits that \
                      checkout and `on_finish` commits everything in it",
