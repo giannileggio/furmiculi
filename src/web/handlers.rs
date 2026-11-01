@@ -178,8 +178,16 @@ struct ScheduleBody {
     agent: Option<String>,
 }
 
-fn schedule_form(home: &Home, cwd_repo: Option<&str>, body: &str) -> Result<ScheduleEdit> {
+fn schedule_form(
+    home: &Home,
+    cwd_repo: Option<&str>,
+    body: &str,
+    allow_remote: bool,
+) -> Result<ScheduleEdit> {
     let form: ScheduleBody = serde_json::from_str(body).context("couldn't read the form")?;
+    if form.remote.is_some() && !allow_remote {
+        anyhow::bail!("a schedule's project is changed by its folder, not by git remote");
+    }
     let repo = match (form.repo.trim(), form.remote.as_deref().map(str::trim)) {
         ("", Some(remote)) if !remote.is_empty() => {
             super::state::path_of_remote(home, cwd_repo, remote)?
@@ -200,11 +208,11 @@ pub(super) fn perform_create_schedule(
     cwd_repo: Option<&str>,
     body: &str,
 ) -> Result<String> {
-    edit::create_schedule(home, schedule_form(home, cwd_repo, body)?)
+    edit::create_schedule(home, schedule_form(home, cwd_repo, body, true)?)
 }
 
 pub(super) fn perform_edit_schedule(home: &Home, id: &str, body: &str) -> Result<()> {
-    edit::edit_schedule(home, id, schedule_form(home, None, body)?)
+    edit::edit_schedule(home, id, schedule_form(home, None, body, false)?)
 }
 
 #[derive(Deserialize)]
@@ -440,5 +448,7 @@ mod tests {
             std::path::PathBuf::from(cwd)
         );
         assert!(perform_create_schedule(&home, Some(cwd), &form("github.com/me/other")).is_err());
+        let edit = perform_edit_schedule(&home, &id, &form("github.com/me/app"));
+        assert!(format!("{:#}", edit.unwrap_err()).contains("by its folder"));
     }
 }

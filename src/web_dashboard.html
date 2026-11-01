@@ -1940,7 +1940,7 @@ async function onNodeChange() {
       `<option value="${escapeHtml(r.remote)}">${escapeHtml(r.path)}</option>`).join("");
     setAgents(data.agents, data.agent);
     $("f-repo-hint").textContent = node === "auto"
-      ? "A repository some machine has, by its git remote (github.com/me/app). The least busy one that has it runs the task."
+      ? "A repository some machine has, by its git remote (github.com/me/app). The least busy one that has it is picked once, now."
       : `A repository ${node} has a clone of, by its git remote (github.com/me/app).`;
     fSubmit.disabled = false;
   } catch (err) {
@@ -1962,7 +1962,7 @@ function openForm(kind, v) {
 
   setAgents(info.agents, v && v.agent ? v.agent : info.agent);
 
-  // A new one-off task can go to another machine, if any are merged in.
+  // A new task or schedule can go to another machine, if any are merged in.
   const online = ((lastState && lastState.nodes) || []).filter(n => n.online && n.writable !== false);
   $("f-node-wrap").hidden = kind !== "new" || online.length < 2;
   $("f-node").innerHTML = online.map(n =>

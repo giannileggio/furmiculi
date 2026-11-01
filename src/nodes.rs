@@ -420,7 +420,7 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
             let form = form.as_object_mut()?;
             // A form for another node is never run here, whatever it lacks.
             let (Some(name), Some(repo)) = (name, form.remove("repo")) else {
-                return bad("a task for another machine needs a node name and a project");
+                return bad("a form for another machine needs a node name and a project");
             };
             form.remove("node");
             // The repo field names a remote on another machine, not a path.
@@ -564,7 +564,7 @@ fn choose<'a>(
         .collect();
     if with_clone.is_empty() {
         bail!(
-            "no machine that is online, can take tasks and has its runner started has a clone of {remote}"
+            "no machine that is online, can take new work and has its runner started has a clone of {remote}"
         );
     }
     with_clone

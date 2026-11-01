@@ -133,5 +133,7 @@ A repeating schedule can be placed the same way, by choosing a machine (or
 schedule is created on that machine, which keeps it and fires it from then on,
 so it keeps running when the machine you created it from is off. With *Any
 machine* the pick is made once, when the schedule is created, and doesn't move
-later; to move it, delete it and create it again. It shows in every dashboard
+later; to move it, delete it and create it again. Times are read in that
+machine's timezone, not yours: "daily at 09:00" fires at 09:00 where the
+schedule lives. It shows in every dashboard
 that has the machine added, with `@<node>` behind its id.
