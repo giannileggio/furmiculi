@@ -16,6 +16,10 @@ npx playwright install chromium          # the browser (add --with-deps with roo
 npm test                                 # FURMI_BIN=path/to/furmi for another build
 ```
 
+To run this suite along with the build, the Rust tests and (optionally) the real
+coding agents in one go, use `scripts/e2e-local.sh` from the repository root;
+see [CONTRIBUTING.md](../CONTRIBUTING.md#checking-everything).
+
 Each test gets its own `furmi` process, home, git repo, tmux server and port
 (see `tests/fixtures.ts`), so they run in parallel and touch nothing of yours:
 no `~/.furmiculi`, no real tmux session, no network. The port is one `furmi`

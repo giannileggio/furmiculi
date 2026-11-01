@@ -45,3 +45,27 @@ The browser tests start `furmi start`/`furmi web` for each test against a throwa
 home, git repo and tmux server, with a stub agent that runs the prompt as a
 shell command, so they need `tmux` and `git` but no real coding agent and touch
 none of your files. CI runs both on every push and pull request.
+
+## Checking everything
+
+`scripts/e2e-local.sh` runs the stages above in order — build, `cargo test`, the
+browser suite — plus, with `--agents`, the real coding agents through
+`scripts/e2e-agents.sh`. It reports a pass/fail line per stage and keeps the
+output in `${XDG_CACHE_HOME:-~/.cache}/furmi-e2e/last.log`, which is what a timer
+or a furmi schedule has to show when it fails:
+
+```sh
+scripts/e2e-local.sh                      # build, Rust tests, browser tests
+scripts/e2e-local.sh --agents pi,opencode # ...and real agents writing files
+scripts/e2e-local.sh --release --fresh    # the release build, fresh npm/browser
+```
+
+`scripts/e2e-release.sh` tests what users install instead of what this checkout
+builds: it runs `install.sh` into a throwaway `$HOME`, queues a task with a stub
+agent, then moves to the previous release and back with `furmi update`. It needs
+the network, no agent and no token.
+
+[`.github/workflows/nightly.yml`](.github/workflows/nightly.yml) runs the release
+check on Linux and macOS, the browser suite on macOS, and — when the
+`REAL_AGENT_E2E` repository variable is set — the real agents, so a release, the
+installer or an agent's CLI changing under us turns into a red run.

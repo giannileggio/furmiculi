@@ -1,0 +1,14 @@
+# Config for scripts/e2e-agents.sh when it runs unattended (nightly CI, the
+# daily furmi schedule).
+#
+# Only the runner settings are here: the throwaway runner must not land in your
+# own tmux server, and its session name is replaced by the script anyway. The
+# agents themselves are deliberately left out, so the built-in presets in the
+# binary under test are what runs: a preset whose flags no longer match the
+# agent's CLI is exactly what that test is for. Point $FURMI_E2E_CONFIG at your
+# own ~/.furmiculi/config.toml to test your overrides instead.
+[runner]
+tmux_session = "furmi-e2e"
+poll_interval = "2s"
+max_parallel = 4
+max_parallel_per_repo = 4

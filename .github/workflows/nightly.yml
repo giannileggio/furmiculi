@@ -1,0 +1,191 @@
+name: Nightly
+
+# The daily "does everything still work" run: the checks that are too slow, too
+# network-dependent or too expensive for every push.
+#
+#   release-e2e    installs the newest release the way a user does, runs a task
+#                  with a stub agent, then updates to the previous release and
+#                  back (scripts/e2e-release.sh). No coding agent, no token.
+#   browser-macos  the dashboard suite in a browser on macOS; the push CI
+#                  already covers it on ubuntu.
+#   real-agents    scripts/e2e-agents.sh against the real coding agents, so a
+#                  preset whose flags an agent has outgrown shows up here. Opt
+#                  in with the REAL_AGENT_E2E repository variable and the
+#                  credentials described below.
+#
+# A red run means a release, the installer, an agent preset or a platform broke
+# without anyone touching the repository.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # What users actually run: the release installer, the archive it downloads,
+  # the install receipt, and `furmi update` in both directions.
+  release-e2e:
+    name: released binary (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install tmux (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Install tmux (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux
+
+      - name: Install a release, run a task, update and downgrade
+        run: scripts/e2e-release.sh
+        env:
+          # Lifts GitHub's anonymous API rate limit for the version lookup.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  browser-macos:
+    name: dashboard in a browser (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install stable toolchain
+        run: rustup update stable && rustup default stable
+
+      - name: Install tmux
+        run: brew install tmux
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build furmi
+        run: cargo build
+
+      - name: Install test dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install the browser
+        working-directory: e2e
+        run: npx playwright install chromium
+
+      - name: Run the browser tests
+        working-directory: e2e
+        run: npm test
+
+      - name: Keep the report when tests fail
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: playwright-report-macos
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
+
+  real-agents:
+    name: real coding agents
+    # Opt in, because a fork has no credentials and a red run there would not be
+    # the code's fault. To turn it on, in this repository:
+    #
+    #   gh variable set REAL_AGENT_E2E --body true
+    #   gh secret set PI_AUTH_JSON        --body "$(base64 -w0 < ~/.pi/agent/auth.json)"
+    #   gh secret set OPENCODE_AUTH_DB    --body "$(base64 -w0 < ~/.local/share/opencode/opencode.db)"
+    #   gh variable set PI_MODEL       --body "opencode-go/deepseek-v4.1-flash"
+    #   gh variable set OPENCODE_MODEL --body "opencode-go/deepseek-v4.1-flash"
+    #
+    # Each agent runs only when its credential is there; with none, the job
+    # says so and passes. The models are only passed when the variables are set,
+    # otherwise each agent uses its own default.
+    if: vars.REAL_AGENT_E2E == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install stable toolchain
+        run: rustup update stable && rustup default stable
+
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Install the agents
+        run: npm install -g opencode-ai @mariozechner/pi-coding-agent
+
+      - name: Put the agents' credentials in place
+        env:
+          PI_AUTH_JSON: ${{ secrets.PI_AUTH_JSON }}
+          OPENCODE_AUTH_DB: ${{ secrets.OPENCODE_AUTH_DB }}
+        run: |
+          set -eu
+          if [ -n "$PI_AUTH_JSON" ]; then
+            mkdir -p "$HOME/.pi/agent"
+            printf '%s' "$PI_AUTH_JSON" | base64 -d > "$HOME/.pi/agent/auth.json"
+            chmod 600 "$HOME/.pi/agent/auth.json"
+          fi
+          if [ -n "$OPENCODE_AUTH_DB" ]; then
+            mkdir -p "$HOME/.local/share/opencode"
+            printf '%s' "$OPENCODE_AUTH_DB" | base64 -d \
+              > "$HOME/.local/share/opencode/opencode.db"
+          fi
+
+      - name: Let opencode act without prompts
+        run: |
+          set -eu
+          mkdir -p "$HOME/.config/opencode"
+          cat > "$HOME/.config/opencode/opencode.jsonc" <<'EOF'
+          {
+            "$schema": "https://opencode.ai/config.json",
+            "permissions": [
+              { "action": "*", "resource": "*", "effect": "allow" }
+            ]
+          }
+          EOF
+
+      - name: Work out which agents have credentials
+        id: agents
+        env:
+          PI_AUTH_JSON: ${{ secrets.PI_AUTH_JSON }}
+          OPENCODE_AUTH_DB: ${{ secrets.OPENCODE_AUTH_DB }}
+        run: |
+          set -eu
+          list=
+          if [ -n "$PI_AUTH_JSON" ]; then list=pi; fi
+          if [ -n "$OPENCODE_AUTH_DB" ]; then list=${list:+$list,}opencode; fi
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+          if [ -z "$list" ]; then
+            echo "No credentials: set PI_AUTH_JSON and/or OPENCODE_AUTH_DB." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build furmi
+        run: cargo build --release
+
+      - name: Run the real-agent tasks
+        if: steps.agents.outputs.list != ''
+        env:
+          FURMI: target/release/furmi
+          PI_MODEL: ${{ vars.PI_MODEL }}
+          OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL }}
+        run: scripts/e2e-agents.sh --agents "${{ steps.agents.outputs.list }}"
