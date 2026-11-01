@@ -49,7 +49,8 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
     // `node: auto` is settled here, into a named machine, before anything is sent.
     let settled;
     let mut placed = None;
-    let body = if matches!(method, Method::Post) && segments == ["api", "tasks"] {
+    let creating = segments == ["api", "tasks"] || segments == ["api", "schedules"];
+    let body = if matches!(method, Method::Post) && creating {
         match crate::nodes::resolve_auto(home, || capacity(home, ctx.cwd_repo.as_deref()), body) {
             Ok(Some((form, name))) => {
                 settled = form;
@@ -135,10 +136,18 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 Err(e) => json_reply(400, json_err(&e)),
             },
             ["api", "tasks", id, "edit"] => mutation_reply(perform_edit_task(home, id, body)),
-            ["api", "schedules"] => match perform_create_schedule(home, body) {
-                Ok(id) => json_reply(200, serde_json::json!({ "ok": true, "id": id }).to_string()),
-                Err(e) => json_reply(400, json_err(&e)),
-            },
+            ["api", "schedules"] => {
+                match perform_create_schedule(home, ctx.cwd_repo.as_deref(), body) {
+                    Ok(id) => json_reply(
+                        200,
+                        named(
+                            serde_json::json!({ "ok": true, "id": id }).to_string(),
+                            placed.as_deref(),
+                        ),
+                    ),
+                    Err(e) => json_reply(400, json_err(&e)),
+                }
+            }
             ["api", "schedules", id, "edit"] => {
                 mutation_reply(perform_edit_schedule(home, id, body))
             }

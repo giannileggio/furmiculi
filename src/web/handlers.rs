@@ -166,7 +166,11 @@ pub(super) fn perform_edit_task(home: &Home, id: &str, body: &str) -> Result<()>
 #[derive(Deserialize)]
 struct ScheduleBody {
     prompt: String,
+    #[serde(default)]
     repo: String,
+    /// Instead of `repo`: the project by git remote, for another machine's form.
+    #[serde(default)]
+    remote: Option<String>,
     cron: String,
     #[serde(default)]
     on_finish: Option<OnFinish>,
@@ -174,23 +178,41 @@ struct ScheduleBody {
     agent: Option<String>,
 }
 
-fn schedule_form(body: &str) -> Result<ScheduleEdit> {
+fn schedule_form(
+    home: &Home,
+    cwd_repo: Option<&str>,
+    body: &str,
+    allow_remote: bool,
+) -> Result<ScheduleEdit> {
     let form: ScheduleBody = serde_json::from_str(body).context("couldn't read the form")?;
+    if form.remote.is_some() && !allow_remote {
+        anyhow::bail!("a schedule's project is changed by its folder, not by git remote");
+    }
+    let repo = match (form.repo.trim(), form.remote.as_deref().map(str::trim)) {
+        ("", Some(remote)) if !remote.is_empty() => {
+            super::state::path_of_remote(home, cwd_repo, remote)?
+        }
+        (repo, _) => repo.to_string(),
+    };
     Ok(ScheduleEdit {
         prompt: form.prompt,
-        repo: form.repo,
+        repo,
         cron: form.cron,
         on_finish: form.on_finish,
         agent: form.agent,
     })
 }
 
-pub(super) fn perform_create_schedule(home: &Home, body: &str) -> Result<String> {
-    edit::create_schedule(home, schedule_form(body)?)
+pub(super) fn perform_create_schedule(
+    home: &Home,
+    cwd_repo: Option<&str>,
+    body: &str,
+) -> Result<String> {
+    edit::create_schedule(home, schedule_form(home, cwd_repo, body, true)?)
 }
 
 pub(super) fn perform_edit_schedule(home: &Home, id: &str, body: &str) -> Result<()> {
-    edit::edit_schedule(home, id, schedule_form(body)?)
+    edit::edit_schedule(home, id, schedule_form(home, None, body, false)?)
 }
 
 #[derive(Deserialize)]
@@ -387,5 +409,46 @@ mod tests {
         let err = perform_create(&home, Some(cwd), &form("github.com/me/other")).unwrap_err();
         assert!(format!("{err:#}").contains("no clone of github.com/me/other"));
         assert!(perform_create(&home, Some(cwd), r#"{"prompt":"x"}"#).is_err());
+    }
+
+    #[test]
+    fn a_schedule_placed_here_by_remote_uses_this_machines_clone() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        for d in home.dirs() {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(home.config_path(), "[defaults]\nagent = \"claude\"\n").unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["remote", "add", "origin", "git@github.com:me/app.git"],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(repo.path())
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let cwd = repo.path().canonicalize().unwrap();
+        let cwd = cwd.to_str().unwrap();
+        let form = |remote: &str| {
+            format!(r#"{{"prompt":"nightly","remote":"{remote}","cron":"0 3 * * *"}}"#)
+        };
+
+        let id = perform_create_schedule(&home, Some(cwd), &form("github.com/me/app")).unwrap();
+
+        let s =
+            crate::schedule::Schedule::load(&home.schedules().join(format!("{id}.md"))).unwrap();
+        assert_eq!(
+            crate::home::expand_tilde(&s.spec.repo),
+            std::path::PathBuf::from(cwd)
+        );
+        assert!(perform_create_schedule(&home, Some(cwd), &form("github.com/me/other")).is_err());
+        let edit = perform_edit_schedule(&home, &id, &form("github.com/me/app"));
+        assert!(format!("{:#}", edit.unwrap_err()).contains("by its folder"));
     }
 }

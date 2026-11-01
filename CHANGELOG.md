@@ -19,7 +19,8 @@ lists what changed between them.
   given tasks.
 - **+ New task** can pick **Any machine (least busy)**: the dashboard sends the
   task to an online machine that has a clone of the repo, preferring a free
-  slot, then the fewest running tasks.
+  slot, then the fewest running tasks. A repeating schedule can be created on
+  another machine (or on one picked when it's created) the same way.
 - New tasks record `remote:`, the repo's `origin` as `host/owner/name`, and the
   dashboard serves `GET /api/repos` (the repos and agents a machine can host,
   by remote). First step towards running tasks across machines. Restart a
