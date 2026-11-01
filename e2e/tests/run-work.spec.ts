@@ -106,3 +106,21 @@ test("a running task can be marked done or failed from its row, and dropped befo
   // No reason typed, so it says who failed it rather than showing nothing.
   await expect(row(page, "drop-me").locator(".why")).toContainText("marked failed by hand");
 });
+
+test("a task with no project runs in a folder of its own, which is kept", async ({ page, forge }) => {
+  await openDashboard(page, forge);
+  await page.locator("#panel-queue").getByRole("button", { name: "+ New task" }).click();
+  await page.locator("#f-scratch").check();
+  await expect(page.locator("#f-repo-wrap")).toBeHidden();
+  await page.locator("#f-prompt").fill("echo draft > notes.txt");
+  await page.locator("#f-submit").click();
+
+  const id = await createdId(page, "Queued");
+  await tab(page, "archive").click();
+  await expect(row(page, id).locator(".badge")).toHaveText("Done");
+
+  // Nothing was branched or committed; the agent's file is left where it wrote it.
+  const dir = path.join(forge.home, "scratch", id);
+  expect(fs.readFileSync(path.join(dir, "notes.txt"), "utf8").trim()).toBe("draft");
+  expect(fs.existsSync(path.join(forge.home, "worktrees", id))).toBe(false);
+});

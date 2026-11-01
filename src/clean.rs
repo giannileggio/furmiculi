@@ -50,19 +50,7 @@ pub fn clean(home: &Home, args: CleanArgs) -> Result<()> {
     let (mut removed, mut kept) = (0, 0);
     for dir in dirs {
         let id = dir.file_name().unwrap_or_default().to_string_lossy();
-        let verdict = match task_state(home, &id)? {
-            State::Queued => Err("still queued or running".to_string()),
-            State::Archived(status, finished_at) => {
-                eligible(status, finished_at, args.all, args.older_than, now)
-            }
-            State::Unreadable => Err("unreadable task file".to_string()),
-            State::Orphan if args.older_than.is_some() => {
-                Err("no task file, so its age is unknown".into())
-            }
-            State::Orphan if args.all => Ok(()),
-            State::Orphan => Err("no task file (use --all)".into()),
-        }
-        .and_then(|()| check_clean(&dir));
+        let verdict = folder_verdict(home, &id, &args, now)?.and_then(|()| check_clean(&dir));
         match verdict {
             Err(why) => {
                 kept += 1;
@@ -103,8 +91,87 @@ pub fn clean(home: &Home, args: CleanArgs) -> Result<()> {
         home.worktrees().display()
     );
 
+    clean_scratch(home, &args, now)?;
+
     if args.archive {
         prune_archive(home, &args, now)?;
+    }
+    Ok(())
+}
+
+/// Whether the folder of task `id` (a worktree, or a scratch folder) may go.
+fn folder_verdict(
+    home: &Home,
+    id: &str,
+    args: &CleanArgs,
+    now: DateTime<FixedOffset>,
+) -> Result<std::result::Result<(), String>> {
+    Ok(match task_state(home, id)? {
+        State::Queued => Err("still queued or running".to_string()),
+        State::Archived(status, finished_at) => {
+            eligible(status, finished_at, args.all, args.older_than, now)
+        }
+        State::Unreadable => Err("unreadable task file".to_string()),
+        State::Orphan if args.older_than.is_some() => {
+            Err("no task file, so its age is unknown".into())
+        }
+        State::Orphan if args.all => Ok(()),
+        State::Orphan => Err("no task file (use --all)".into()),
+    })
+}
+
+/// Removes `scratch/<id>` of the tasks that qualify, the same ones whose
+/// worktrees go. Unlike a worktree it can hold the only copy of what the
+/// agent wrote, which is why it stays until this runs.
+fn clean_scratch(home: &Home, args: &CleanArgs, now: DateTime<FixedOffset>) -> Result<()> {
+    let Ok(entries) = std::fs::read_dir(home.scratch()) else {
+        return Ok(());
+    };
+    let mut dirs: Vec<_> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    let (mut removed, mut kept) = (0, 0);
+    for dir in dirs {
+        let id = dir.file_name().unwrap_or_default().to_string_lossy();
+        // Unlike a worktree, nothing there is committed: what a failed, cancelled
+        // or half-done task wrote may be the only copy. Only finished work goes.
+        let unfinished = match task_state(home, &id)? {
+            State::Archived(status, _) if status != Status::Done => Some(status.as_str()),
+            _ => None,
+        };
+        let verdict = match unfinished {
+            Some(status) => Err(format!("{status}: look at it, then delete it by hand")),
+            None => folder_verdict(home, &id, args, now)?,
+        };
+        match verdict {
+            Err(why) => {
+                kept += 1;
+                println!("kept     {id}: {why} (scratch)");
+            }
+            Ok(()) if args.dry_run => {
+                removed += 1;
+                println!("would remove {id} (scratch)");
+            }
+            Ok(()) => {
+                std::fs::remove_dir_all(&dir)
+                    .with_context(|| format!("removing {}", dir.display()))?;
+                removed += 1;
+                println!("removed  {id} (scratch)");
+            }
+        }
+    }
+    if removed + kept > 0 {
+        let verb = if args.dry_run {
+            "would remove"
+        } else {
+            "removed"
+        };
+        println!(
+            "{verb} {removed}, kept {kept} (in {})",
+            home.scratch().display()
+        );
     }
     Ok(())
 }
@@ -141,8 +208,8 @@ fn prune_archive(home: &Home, args: &CleanArgs, now: DateTime<FixedOffset>) -> R
             now,
         )
         .and_then(|()| {
-            if home.worktrees().join(&id).exists() {
-                Err("worktree still present".to_string())
+            if home.worktrees().join(&id).exists() || home.scratch().join(&id).exists() {
+                Err("worktree or scratch folder still present".to_string())
             } else {
                 Ok(())
             }
@@ -556,5 +623,30 @@ mod tests {
             !broken.exists(),
             "a worktree whose repo moved is removed, not kept"
         );
+    }
+
+    #[test]
+    fn clean_removes_the_scratch_folder_of_a_finished_task_only() {
+        let (_d, home) = home();
+        archive(&home, "done-one", Status::Done, Some(now()));
+        archive(&home, "failed-one", Status::Failed, Some(now()));
+        for id in ["done-one", "failed-one", "queued-one"] {
+            std::fs::create_dir_all(home.scratch().join(id)).unwrap();
+            std::fs::write(home.scratch().join(id).join("notes.md"), "x").unwrap();
+        }
+        std::fs::write(
+            home.tasks().join("queued-one.md"),
+            "---\nid: queued-one\nrepo: /tmp\n---\nx\n",
+        )
+        .unwrap();
+
+        clean(&home, clean_args(true, None)).unwrap();
+
+        assert!(!home.scratch().join("done-one").exists());
+        assert!(
+            home.scratch().join("failed-one").exists(),
+            "failed is kept, even with --all"
+        );
+        assert!(home.scratch().join("queued-one").exists());
     }
 }

@@ -17,6 +17,10 @@ lists what changed between them.
   can send a task to another machine, which finds its own clone of the repo by
   git remote. Upgrade the other machines too: older ones can be read but not
   given tasks.
+- `furmi add --scratch` (and **No project** in **+ New task**) queues a task
+  with no repo: it runs in an empty folder of its own, `scratch/<id>`, which
+  stays until `furmi clean`. It can go to any machine, since there is no clone to
+  match.
 - **+ New task** can pick **Any machine (least busy)**: the dashboard sends the
   task to an online machine that has a clone of the repo, preferring a free
   slot, then the fewest running tasks. A repeating schedule can be created on

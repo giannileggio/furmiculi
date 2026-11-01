@@ -556,7 +556,10 @@
       <label id="f-node-wrap" hidden>Which machine?
         <select id="f-node"></select>
       </label>
-      <label>Which project?
+      <label id="f-scratch-wrap" style="flex-direction:row;align-items:center;gap:8px">
+        <input type="checkbox" id="f-scratch" style="width:auto"> No project: work in a new folder of its own
+      </label>
+      <label id="f-repo-wrap">Which project?
         <input id="f-repo" list="f-repos" required autocomplete="off" placeholder="~/Projects/myapp">
         <datalist id="f-repos"></datalist>
         <small id="f-repo-hint">The folder of a git repository on this machine.</small>
@@ -1874,6 +1877,11 @@ function syncFormFields() {
   const repeat = kind === "task" ? "once" : $("f-repeat").value;
   $("f-repeat-wrap").hidden = kind === "task";
   $("f-start-wrap").hidden = repeat !== "once";
+  // Only a new one-off task can go without a project.
+  $("f-scratch-wrap").hidden = kind !== "new" || repeat !== "once";
+  if ($("f-scratch-wrap").hidden) $("f-scratch").checked = false;
+  $("f-repo-wrap").hidden = $("f-scratch").checked;
+  $("f-repo").required = !$("f-scratch").checked;
   $("f-time-wrap").hidden = !["daily", "weekdays", "weekly"].includes(repeat);
   $("f-day-wrap").hidden = repeat !== "weekly";
   $("f-cron-wrap").hidden = repeat !== "custom";
@@ -1945,9 +1953,15 @@ async function onNodeChange() {
     fSubmit.disabled = false;
   } catch (err) {
     fError.textContent = String(err.message || err);
+    if ($("f-scratch").checked) fSubmit.disabled = false;
   }
 }
 $("f-node").addEventListener("change", onNodeChange);
+$("f-scratch").addEventListener("change", () => {
+  syncFormFields();
+  // With no project there's no list to wait for.
+  if ($("f-scratch").checked) fSubmit.disabled = false;
+});
 
 function openForm(kind, v) {
   const info = formInfo || { repos: [], agents: [], agent: null, on_finish: "none" };
@@ -1970,6 +1984,7 @@ function openForm(kind, v) {
     + `<option value="auto">Any machine (least busy)</option>`;
   $("f-node").value = "local";
   $("f-repo-hint").textContent = LOCAL_HINT;
+  $("f-scratch").checked = false;
 
   // How often: schedules can't be "just once".
   const repeats = kind === "schedule" ? REPEAT_OPTIONS.slice(1) : REPEAT_OPTIONS;
@@ -2157,6 +2172,7 @@ newForm.addEventListener("submit", async (e) => {
     } else if (repeat === "once") {
       path = "/api/tasks";
       body = { ...common, start: $("f-start").value };
+      if ($("f-scratch").checked) { body.scratch = true; body.repo = ""; }
       if (!$("f-node-wrap").hidden) body.node = $("f-node").value;
       done = (d) => body.node === "auto" && d.node ? `Queued ${d.id} on ${d.node === "local" ? "this machine" : d.node}` : `Queued ${d.id}`;
     } else {

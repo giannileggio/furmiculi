@@ -128,6 +128,10 @@ Changing things on a node needs its token: a node added without one (a loopback
 address, say) can be read but not changed, and its rows show no buttons. A node
 running an older furmi can be read, but can't take tasks by remote; upgrade it.
 
+A task with no project (`--scratch`, or **No project** in the form) needs no
+clone anywhere, so any online machine can take it: *Any machine* weighs only
+load and agent. Schedules can't be scratch tasks yet.
+
 A repeating schedule can be placed the same way, by choosing a machine (or
 *Any machine*) in **+ New task** with a repeat other than "Just once". The
 schedule is created on that machine, which keeps it and fires it from then on,

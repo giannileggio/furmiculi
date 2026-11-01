@@ -53,6 +53,11 @@ impl Home {
         self.root.join("worktrees")
     }
 
+    /// Where tasks with no project run: one empty folder per task.
+    pub fn scratch(&self) -> PathBuf {
+        self.root.join("scratch")
+    }
+
     /// Whether this is `~/.furmiculi`, which `furmi` finds without
     /// `--home` or `$FURMI_HOME`.
     pub fn is_default(&self) -> bool {
@@ -64,13 +69,14 @@ impl Home {
         self.root.join(".agents/skills/furmi-tasks")
     }
 
-    pub fn dirs(&self) -> [PathBuf; 5] {
+    pub fn dirs(&self) -> [PathBuf; 6] {
         [
             self.tasks(),
             self.schedules(),
             self.archive(),
             self.logs(),
             self.worktrees(),
+            self.scratch(),
         ]
     }
 
@@ -312,6 +318,7 @@ mod tests {
                 dir.path().join("archive"),
                 dir.path().join("logs"),
                 dir.path().join("worktrees"),
+                dir.path().join("scratch"),
             ]
         );
     }

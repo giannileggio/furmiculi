@@ -15,6 +15,7 @@ Layout:
 - `archive/`: finished tasks; read-only history
 - `logs/`: output of each run; read-only
 - `worktrees/`: git checkouts where tasks run; not yours to edit
+- `scratch/`: the folders of tasks with no project; not yours to edit
 - `config.toml`: runner settings, defaults, and the agents tasks can use
 
 Useful commands: `furmi ls`, `furmi ls --schedules`, `furmi ls --archive`,

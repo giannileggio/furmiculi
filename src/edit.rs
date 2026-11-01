@@ -125,6 +125,16 @@ pub fn edit_task(home: &Home, id: &str, edit: TaskEdit) -> Result<()> {
     let (path, mut task) = load_pending(home, id)?;
 
     let repo = path_of(&edit.repo)?;
+    // A scratch task's folder is its project; moving it, or committing from it,
+    // would turn it into something else.
+    if expand_tilde(&task.spec.repo).starts_with(home.scratch()) {
+        if expand_tilde(&repo) != expand_tilde(&task.spec.repo) {
+            bail!("a task with no project can't be moved to one");
+        }
+        if edit.on_finish.is_some_and(|f| f != OnFinish::None) {
+            bail!("a task with no project has nothing to commit, push or open a PR for");
+        }
+    }
     if task.attempts > 0 && expand_tilde(&repo) != expand_tilde(&task.spec.repo) {
         bail!("this task has already run in its project, so it can't move to another one");
     }
@@ -362,6 +372,44 @@ mod tests {
             on_finish: None,
             agent: None,
         }
+    }
+
+    #[test]
+    fn a_task_with_no_project_stays_without_one() {
+        let (_d, repo, home, config) = setup();
+        let mut scratch = spec(repo.path());
+        scratch.repo = std::path::PathBuf::new();
+        scratch.branch = None;
+        let make = || {
+            create_task(
+                &home,
+                &config,
+                NewTask {
+                    prompt: "look into it".into(),
+                    id: None,
+                    spec: scratch.clone(),
+                    scheduled_at: None,
+                    created_by: "test".into(),
+                },
+            )
+            .unwrap()
+            .0
+        };
+        let task = make();
+        let folder = crate::home::expand_tilde(&task.spec.repo);
+
+        // Not moved into a project, nor given something to commit.
+        let err = edit_task(&home, &task.id, edit(repo.path(), "x")).unwrap_err();
+        assert!(format!("{err:#}").contains("can't be moved"), "{err:#}");
+        let mut e = edit(&folder, "x");
+        e.on_finish = Some(OnFinish::Commit);
+        assert!(edit_task(&home, &task.id, e).is_err());
+        edit_task(&home, &task.id, edit(&folder, "reworded")).unwrap();
+
+        // A second one with the same words gets a folder of its own.
+        let second = make();
+        assert_ne!(second.id, task.id);
+        assert_ne!(second.spec.repo, task.spec.repo);
     }
 
     #[test]
