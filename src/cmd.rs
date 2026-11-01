@@ -141,7 +141,9 @@ pub fn use_agent(home: &Home, name: &str) -> Result<()> {
 
 /// What a bare `furmi` shows: where things stand and the next thing to try.
 pub fn welcome(home: &Home) -> Result<()> {
-    println!("furmiculi (ants, in Sicilian): queue coding-agent tasks and let the colony run them while you're away.\n");
+    println!(
+        "furmiculi (ants, in Sicilian): queue coding-agent tasks and let the colony run them while you're away.\n"
+    );
     if home.ensure_initialized().is_ok() {
         crate::doctor::status(home)?;
         println!();
