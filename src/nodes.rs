@@ -408,7 +408,7 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
             let name = query.split('&').find_map(|p| p.strip_prefix("node="))?;
             (name.to_string(), "/api/repos".to_string(), String::new())
         }
-        ["api", "tasks"] if post => {
+        ["api", kind @ ("tasks" | "schedules")] if post => {
             let mut form: Value = serde_json::from_str(body).ok()?;
             // No `node`, or this machine: not ours to forward.
             match form.get("node") {
@@ -427,7 +427,7 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
             form.insert("remote".into(), repo);
             (
                 name,
-                "/api/tasks".to_string(),
+                format!("/api/{kind}"),
                 Value::Object(form.clone()).to_string(),
             )
         }
@@ -1358,6 +1358,24 @@ mod tests {
         let body: Value = serde_json::from_str(sent.split("\r\n\r\n").nth(1).unwrap()).unwrap();
         assert_eq!(body["remote"], "github.com/me/app");
         assert_eq!(body["prompt"], "p");
+        assert!(body.get("repo").is_none() && body.get("node").is_none());
+    }
+
+    #[test]
+    fn a_schedule_for_another_node_is_created_there_by_remote() {
+        let (_dir, home) = home();
+        let (url, request) = capture("200 OK", r#"{"ok":true,"id":"s"}"#);
+        with_node(&home, "box", url);
+        let form = r#"{"prompt":"p","repo":"github.com/me/app","cron":"0 3 * * *","node":"box"}"#;
+
+        let (status, _) = proxy(&home, true, "/api/schedules", form).unwrap();
+
+        assert_eq!(status, 200);
+        let sent = request.recv().unwrap();
+        assert!(sent.starts_with("POST /api/schedules "), "{sent}");
+        let body: Value = serde_json::from_str(sent.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["remote"], "github.com/me/app");
+        assert_eq!(body["cron"], "0 3 * * *");
         assert!(body.get("repo").is_none() && body.get("node").is_none());
     }
 

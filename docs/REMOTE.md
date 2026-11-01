@@ -126,5 +126,12 @@ is a reserved node name.
 
 Changing things on a node needs its token: a node added without one (a loopback
 address, say) can be read but not changed, and its rows show no buttons. A node
-running an older furmi can be read, but can't take tasks by remote; upgrade it. Repeating tasks can't be placed on
-another machine yet.
+running an older furmi can be read, but can't take tasks by remote; upgrade it.
+
+A repeating schedule can be placed the same way, by choosing a machine (or
+*Any machine*) in **+ New task** with a repeat other than "Just once". The
+schedule is created on that machine, which keeps it and fires it from then on,
+so it keeps running when the machine you created it from is off. With *Any
+machine* the pick is made once, when the schedule is created, and doesn't move
+later; to move it, delete it and create it again. It shows in every dashboard
+that has the machine added, with `@<node>` behind its id.

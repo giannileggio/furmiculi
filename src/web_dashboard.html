@@ -1874,12 +1874,6 @@ function syncFormFields() {
   const repeat = kind === "task" ? "once" : $("f-repeat").value;
   $("f-repeat-wrap").hidden = kind === "task";
   $("f-start-wrap").hidden = repeat !== "once";
-  // Placing a repeating task on another machine isn't supported yet.
-  if (kind === "new" && repeat !== "once" && !$("f-node-wrap").hidden && $("f-node").value !== "local") {
-    $("f-node").value = "local";
-    onNodeChange();
-  }
-  $("f-node").disabled = repeat !== "once";
   $("f-time-wrap").hidden = !["daily", "weekdays", "weekly"].includes(repeat);
   $("f-day-wrap").hidden = repeat !== "weekly";
   $("f-cron-wrap").hidden = repeat !== "custom";
@@ -2168,7 +2162,8 @@ newForm.addEventListener("submit", async (e) => {
     } else {
       path = "/api/schedules";
       body = { ...common, cron };
-      done = (d) => { showTab("schedules"); return `Scheduled ${d.id}`; };
+      if (!$("f-node-wrap").hidden) body.node = $("f-node").value;
+      done = (d) => { showTab("schedules"); return body.node === "auto" && d.node ? `Scheduled ${d.id} on ${d.node === "local" ? "this machine" : d.node}` : `Scheduled ${d.id}`; };
     }
     const { ok, data } = await post(path, body);
     if (!ok) {
