@@ -1953,10 +1953,15 @@ async function onNodeChange() {
     fSubmit.disabled = false;
   } catch (err) {
     fError.textContent = String(err.message || err);
+    if ($("f-scratch").checked) fSubmit.disabled = false;
   }
 }
 $("f-node").addEventListener("change", onNodeChange);
-$("f-scratch").addEventListener("change", syncFormFields);
+$("f-scratch").addEventListener("change", () => {
+  syncFormFields();
+  // With no project there's no list to wait for.
+  if ($("f-scratch").checked) fSubmit.disabled = false;
+});
 
 function openForm(kind, v) {
   const info = formInfo || { repos: [], agents: [], agent: null, on_finish: "none" };

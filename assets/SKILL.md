@@ -83,6 +83,7 @@ fall back to `[defaults]`):
 | Option | Meaning |
 |--------|---------|
 | `--repo <path>` | The project to run in. Defaults to the git repo you're in. |
+| `--scratch` | No project: run in a new empty folder of its own (`{home}/scratch/<id>`, kept until `furmi clean`), for research or drafts. Nothing is committed. Not with `--repo`, `--branch`, `--no-worktree` or `--on-finish`. |
 | `--id <id>` | File name and id: `a-z`, `0-9`, `-`. Default: derived from the prompt's first line. Pass a short descriptive one. |
 | `--branch <name>` | Default `furmi/<id>`. |
 | `--no-worktree` | Work directly in the repo checkout. Only when the user asks: the agent edits the checkout they may be working in, and `on_finish` commits everything there. |
@@ -141,7 +142,7 @@ task from the same schedule is still queued or running; add
   `tokens_in`, `tokens_out`, `model_used`, and a schedule's
   `last_enqueued_at`), and never delete task files.
 - Don't edit `running` tasks, or anything in `{home}/archive/`, `logs/` or
-  `worktrees/`.
+  `worktrees/` or `scratch/`.
 
 ## 6. Report back
 

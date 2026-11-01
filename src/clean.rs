@@ -135,7 +135,17 @@ fn clean_scratch(home: &Home, args: &CleanArgs, now: DateTime<FixedOffset>) -> R
     let (mut removed, mut kept) = (0, 0);
     for dir in dirs {
         let id = dir.file_name().unwrap_or_default().to_string_lossy();
-        match folder_verdict(home, &id, args, now)? {
+        // Unlike a worktree, nothing there is committed: what a failed, cancelled
+        // or half-done task wrote may be the only copy. Only finished work goes.
+        let unfinished = match task_state(home, &id)? {
+            State::Archived(status, _) if status != Status::Done => Some(status.as_str()),
+            _ => None,
+        };
+        let verdict = match unfinished {
+            Some(status) => Err(format!("{status}: look at it, then delete it by hand")),
+            None => folder_verdict(home, &id, args, now)?,
+        };
+        match verdict {
             Err(why) => {
                 kept += 1;
                 println!("kept     {id}: {why} (scratch)");
@@ -630,12 +640,12 @@ mod tests {
         )
         .unwrap();
 
-        clean(&home, clean_args(false, None)).unwrap();
+        clean(&home, clean_args(true, None)).unwrap();
 
         assert!(!home.scratch().join("done-one").exists());
         assert!(
             home.scratch().join("failed-one").exists(),
-            "failed needs --all"
+            "failed is kept, even with --all"
         );
         assert!(home.scratch().join("queued-one").exists());
     }

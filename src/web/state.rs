@@ -274,6 +274,13 @@ pub(super) fn hostable(home: &Home, cwd_repo: Option<&str>) -> Result<Hostable> 
     {
         // Tasks from before `remote` was recorded are known by their repo.
         let remote = t.remote.clone().or_else(|| {
+            if t.spec
+                .resolve(&config.defaults)
+                .repo
+                .starts_with(home.scratch())
+            {
+                return None;
+            }
             let path = crate::home::expand_tilde(&t.spec.resolve(&config.defaults).repo);
             crate::git::remote_id(&crate::git::repo_key(&path))
         });

@@ -339,7 +339,7 @@ pub struct AddArgs {
     repo: Option<PathBuf>,
     /// No project: run in a new empty folder of its own (kept until
     /// `furmi clean`), for research, drafts and the like.
-    #[arg(long, conflicts_with_all = ["repo", "branch", "no_worktree"])]
+    #[arg(long, conflicts_with_all = ["repo", "branch", "no_worktree", "on_finish"])]
     scratch: bool,
     /// Task id (also the file name). Derived from the prompt if omitted.
     #[arg(long)]
@@ -419,7 +419,9 @@ pub fn create_task(home: &Home, config: &Config, new: NewTask) -> Result<(Task, 
         .is_empty()
         .then(|| home.scratch().join(&id));
     if let Some(dir) = &scratch {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        std::fs::create_dir_all(home.scratch())?;
+        // Fails if it exists: never someone else's folder, or its files.
+        std::fs::create_dir(dir).with_context(|| format!("creating {}", dir.display()))?;
         spec.repo = dir.clone();
         spec.worktree = Some(false);
         spec.branch = None;
@@ -436,7 +438,10 @@ pub fn create_task(home: &Home, config: &Config, new: NewTask) -> Result<(Task, 
         if !problems.is_empty() {
             bail!("invalid task:\n  - {}", problems.join("\n  - "));
         }
-        task.fill_remote();
+        // A scratch folder is no clone of anything, even inside a repo.
+        if scratch.is_none() {
+            task.fill_remote();
+        }
         let path = home.tasks().join(format!("{}.md", task.id));
         task.create(&path)?;
         Ok((task, path))
@@ -559,7 +564,10 @@ fn describe_on_finish(on_finish: OnFinish) -> &'static str {
 
 fn id_taken(home: &Home, id: &str) -> bool {
     let file = format!("{id}.md");
-    home.tasks().join(&file).exists() || home.archive().join(&file).exists()
+    home.tasks().join(&file).exists()
+        || home.archive().join(&file).exists()
+        // A scratch folder outlives its task until `furmi clean`.
+        || home.scratch().join(id).exists()
 }
 
 pub fn unique_id(home: &Home, base: &str) -> String {

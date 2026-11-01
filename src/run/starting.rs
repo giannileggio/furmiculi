@@ -30,7 +30,7 @@ pub(super) fn start_pending(
     let running = load_tasks(home, Status::Running)?;
     for (_, t) in &running {
         let eff = t.spec.resolve(&config.defaults);
-        let key = git::repo_key(&eff.repo);
+        let key = workspace_key(home, &eff.repo);
         *per_repo.entry(key.clone()).or_default() += 1;
         if !eff.worktree {
             in_place.insert(key);
@@ -49,7 +49,7 @@ pub(super) fn start_pending(
             break;
         }
         let eff = task.spec.resolve(&config.defaults);
-        let key = git::repo_key(&eff.repo);
+        let key = workspace_key(home, &eff.repo);
         let in_repo = per_repo.entry(key.clone()).or_default();
         if *in_repo >= config.runner.max_parallel_per_repo {
             continue;
@@ -216,4 +216,14 @@ fn exec_argv(home: &Home, id: &str, status_file: &Path) -> Result<Vec<String>> {
         "--status-file".into(),
         path(status_file)?,
     ])
+}
+
+/// What tasks share a slot (and, without a worktree, a checkout) by. A scratch
+/// folder is its own: it must not resolve to a repo the home happens to sit in.
+fn workspace_key(home: &Home, repo: &Path) -> PathBuf {
+    if repo.starts_with(home.scratch()) {
+        repo.to_path_buf()
+    } else {
+        git::repo_key(repo)
+    }
 }

@@ -118,6 +118,11 @@ archived task, and worktrees with no task file; `--older-than 7d`: only
 tasks finished that long ago; `-n`: dry run). It never removes a worktree
 with uncommitted changes, and never deletes branches.
 
+It also removes `scratch/<id>` (the folder of a task made with `furmi add
+--scratch`), but only for `done` tasks, or folders with no task file under
+`--all`. Nothing there is committed, so a failed, cancelled or needs_review
+task's folder is always kept: look at it and delete it by hand.
+
 `furmi clean --archive` also deletes the archived task file and its
 `logs/<id>.*` files, for any task whose worktree is already gone (or never
 had one). This loses that task's history from `furmi ls --archive`/`furmi web`
