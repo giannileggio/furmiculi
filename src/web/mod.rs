@@ -97,6 +97,9 @@ struct Ctx<'a> {
     remote: bool,
     /// Exact `Host` allowlist for a remote bind.
     allowed_hosts: Vec<String>,
+    /// Answering another machine's `furmi node call`: its rows and forms are
+    /// this machine's own, never passed on to a third.
+    peer: bool,
 }
 
 struct Reply {
@@ -177,6 +180,7 @@ fn run_server(home: &Home, server: Server, serving: &Serving, args: &WebArgs) ->
         cwd_repo,
         remote: serving.remote,
         allowed_hosts: serving.allowed_hosts.clone(),
+        peer: false,
     };
     let addr = &serving.addr;
     let url = format!("http://{addr}");
@@ -280,6 +284,33 @@ fn open_browser(url: &str) {
             .stderr(Stdio::null())
             .status();
     });
+}
+
+/// One dashboard request answered here without a server: what `furmi node call`
+/// runs when a hub asks over SSH. Being able to log in is the authentication,
+/// so there is no token, host or origin to check, which is also why it serves
+/// only the `/api` routes and never forwards.
+pub fn call(home: &Home, method: &str, url: &str, body: &str) -> Result<(u16, String)> {
+    let method = match method {
+        "GET" => Method::Get,
+        "POST" => Method::Post,
+        other => anyhow::bail!("`{other}` isn't GET or POST"),
+    };
+    let path = url.split('?').next().unwrap_or("");
+    if !path.starts_with("/api/") || path.contains(['@', '%']) || events::kind_of(url).is_some() {
+        anyhow::bail!("`{url}` isn't something a node answers");
+    }
+    let ctx = Ctx {
+        home,
+        token: String::new(),
+        index: String::new(),
+        cwd_repo: None,
+        remote: false,
+        allowed_hosts: Vec::new(),
+        peer: true,
+    };
+    let reply = route(&ctx, &method, url, body);
+    Ok((reply.status, reply.body))
 }
 
 fn handle<'scope, 'env>(
@@ -390,4 +421,61 @@ fn handle<'scope, 'env>(
         }
     }
     let _ = request.respond(response);
+}
+
+#[cfg(test)]
+mod call_tests {
+    use super::*;
+
+    fn home() -> (tempfile::TempDir, Home) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        for d in home.dirs() {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        (dir, home)
+    }
+
+    #[test]
+    fn a_node_call_only_answers_api_routes_of_its_own() {
+        let (_dir, home) = home();
+        for url in [
+            "/etc/passwd",
+            "/",
+            "/api/events",
+            "/api/tasks/t/logs/stream",
+            "/api/tasks/t%40box/cancel",
+            "/api/tasks/t@box/cancel",
+        ] {
+            assert!(call(&home, "GET", url, "").is_err(), "{url}");
+        }
+        assert!(call(&home, "DELETE", "/api/state", "").is_err());
+    }
+
+    #[test]
+    fn a_node_call_never_passes_a_request_on() {
+        let (_dir, home) = home();
+        // A node called `box` that, if consulted, would be unreachable (a 502).
+        std::fs::write(
+            home.root().join("nodes.toml"),
+            "[[node]]\nname = \"box\"\nssh = \"-nonsense\"\n",
+        )
+        .unwrap();
+
+        // Its own repos, not box's.
+        let (status, _) = call(&home, "GET", "/api/repos?node=box", "").unwrap();
+        assert_eq!(status, 200);
+        // No merge: a hub asking a hub can't loop.
+        let (_, state) = call(&home, "GET", "/api/state", "").unwrap();
+        assert!(!state.contains("\"nodes\""), "{state}");
+        // A form naming another machine, or `auto`, is this machine's own.
+        for node in ["box", "auto"] {
+            let form = format!(r#"{{"prompt":"p","scratch":true,"node":"{node}"}}"#);
+            let (status, answer) = call(&home, "POST", "/api/tasks", &form).unwrap();
+            assert!(
+                status != 502 && status != 404 && status != 409,
+                "{node}: {status} {answer}"
+            );
+        }
+    }
 }

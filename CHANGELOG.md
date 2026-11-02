@@ -6,6 +6,15 @@ lists what changed between them.
 
 ## Unreleased
 
+- Nodes are reached over SSH instead of HTTP and a token:
+  `furmi node add box me@box`. The hub runs `furmi node call` on the other
+  machine, so that machine needs no open port, no running dashboard and no
+  token, and OpenSSH does the authenticating and encrypting. `node add` checks
+  the connection first and saves nothing if it fails. Every node can be changed
+  now (there are no read-only nodes), and `nodes.toml` holds no secrets. A node
+  added the old way (`url` and `token`) has to be added again, and both machines
+  need this release.
+
 ## 0.4.0
 
 - The dashboard no longer polls. It opens a Server-Sent Events stream
