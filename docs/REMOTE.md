@@ -101,7 +101,7 @@ key; if that fails, nothing is saved. The connection is then shared for ten
 minutes (OpenSSH `ControlPersist`, sockets in `~/.furmiculi/ssh/`), so the
 dashboard polling a node doesn't log in each time. Everything after that is
 non-interactive (`BatchMode`): a node that now wants a password shows as
-offline, and `furmi node add` again (or `ssh box`) is how you sign in. Nodes are
+offline, and `furmi node add` again is how you sign in (a plain `ssh box` doesn't share furmi's connection). Nodes are
 kept in `~/.furmiculi/nodes.toml`; it holds no secrets. `FURMI_SSH` names a
 different `ssh` program.
 

@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -67,6 +67,15 @@ fn path(home: &Home) -> PathBuf {
     home.root().join("nodes.toml")
 }
 
+/// The nodes for `add` and `rm`: a file that won't parse (one from before ssh
+/// nodes) counts as empty, so these can still replace it.
+fn load_for_edit(home: &Home) -> Vec<Node> {
+    load(home).unwrap_or_else(|e| {
+        eprintln!("warning: dropping the nodes in the old nodes.toml: {e:#}");
+        Vec::new()
+    })
+}
+
 pub fn load(home: &Home) -> Result<Vec<Node>> {
     let path = path(home);
     let text = match std::fs::read_to_string(&path) {
@@ -77,7 +86,7 @@ pub fn load(home: &Home) -> Result<Vec<Node>> {
     let file: NodesFile = toml::from_str(&text).with_context(|| {
         format!(
             "parsing {} (nodes used to be a url and a token; they are an SSH target now, so \
-             `furmi node add <name> <ssh-target>` again)",
+             `furmi node add <name> <ssh-target>` again, or `furmi node rm` to drop them all)",
             path.display()
         )
     })?;
@@ -143,7 +152,7 @@ pub fn run(home: &Home, cmd: NodeCmd) -> Result<()> {
         NodeCmd::Call { method, path } => call(home, &method, &path),
         NodeCmd::Rm { name } => {
             let _lock = home.lock()?;
-            let mut nodes = load(home)?;
+            let mut nodes = load_for_edit(home);
             let before = nodes.len();
             nodes.retain(|n| n.name != name);
             if nodes.len() == before {
@@ -184,7 +193,7 @@ fn add(home: &Home, args: AddArgs) -> Result<()> {
     }
     {
         let _lock = home.lock()?;
-        let mut nodes = load(home)?;
+        let mut nodes = load_for_edit(home);
         // Same name: replaced, so adding again is how a target is changed.
         nodes.retain(|n| n.name != node.name);
         nodes.push(node.clone());
@@ -286,6 +295,32 @@ fn control_dir(home: &Home) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// A first login gets longer than a request on a connection already open.
+const COLD_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Longest folder ssh can still put its control socket in: the path is limited
+/// to about 107 bytes, and ssh adds 17 while setting one up.
+const MAX_CONTROL_DIR: usize = 45;
+
+/// ssh's options for sharing one connection per node, or none when the folder
+/// can't be named safely: ssh reads `%` and quotes in the value, and the
+/// socket path has a length limit.
+fn control_options(dir: &Path) -> Vec<String> {
+    let dir = dir.to_string_lossy();
+    if dir.len() > MAX_CONTROL_DIR || dir.contains(['"', '\\', '\n']) {
+        return vec!["-o".into(), "ControlMaster=no".into()];
+    }
+    let escaped = dir.replace('%', "%%");
+    vec![
+        "-o".into(),
+        "ControlMaster=auto".into(),
+        "-o".into(),
+        "ControlPersist=600".into(),
+        "-o".into(),
+        format!("ControlPath=\"{escaped}/%C\""),
+    ]
+}
+
 /// One request to a node: its status and body, whatever the status is. With
 /// `interactive`, ssh may ask the person (a passphrase, an unknown host key);
 /// otherwise it must not, since nobody is there to answer.
@@ -303,18 +338,27 @@ fn exchange(
     if let Some(fake) = tests::fake(&node.ssh) {
         return fake(post, path, body);
     }
+    let control = control_dir(home)?;
+    // A first login (no shared connection yet) is several round trips more
+    // than a reused one, and killing it half way keeps no connection to reuse.
+    let cold = std::fs::read_dir(&control).is_ok_and(|mut d| d.next().is_none());
+    let timeout = if cold {
+        timeout.max(COLD_TIMEOUT)
+    } else {
+        timeout
+    };
     let deadline = Instant::now() + timeout;
     let program = std::env::var("FURMI_SSH").unwrap_or_else(|_| "ssh".into());
-    let control = control_dir(home)?;
     let mut ssh = Command::new(program);
     ssh.arg("-T")
         .args(["-o", "ClearAllForwardings=yes", "-o", "LogLevel=ERROR"])
+        // A host that opens tmux or the like for you would refuse a command.
+        .args(["-o", "RemoteCommand=none"])
         .args([
             "-o",
             &format!("ConnectTimeout={}", timeout.as_secs().max(1)),
         ])
-        .args(["-o", "ControlMaster=auto", "-o", "ControlPersist=600"])
-        .args(["-o", &format!("ControlPath={}/%C", control.display())]);
+        .args(control_options(&control));
     if !interactive {
         ssh.args(["-o", "BatchMode=yes"]);
     }
@@ -365,9 +409,10 @@ fn exchange(
     };
     // The background connection ssh leaves behind has these pipes closed, but
     // don't wait on that: a moment, then take what has arrived.
-    let grace = Duration::from_secs(2);
-    let out = out.recv_timeout(grace).unwrap_or_default();
-    let err = err.recv_timeout(grace).unwrap_or_default();
+    let grace = Instant::now() + Duration::from_secs(1);
+    let left = || grace.saturating_duration_since(Instant::now());
+    let out = out.recv_timeout(left()).unwrap_or_default();
+    let err = err.recv_timeout(left()).unwrap_or_default();
     if out.len() as u64 > MAX_BODY {
         bail!("its answer is over {} MB", MAX_BODY / (1024 * 1024));
     }
@@ -689,7 +734,7 @@ pub fn resolve_auto(
         .filter(|a| !a.is_empty())
         .map(str::to_string);
     let mut candidates = vec![(LOCAL.to_string(), local()?)];
-    // Only nodes that can be written to and weren't just found down; asked at
+    // Only nodes that weren't just found down; asked at
     // once, since each may be slow.
     let peers: Vec<Node> = load(home)?
         .into_iter()
@@ -1168,12 +1213,12 @@ mod tests {
             vec![
                 Node {
                     name: "box".into(),
-                    ssh: url.clone(),
-                },
-                // Read-only: never picked.
-                Node {
-                    name: "ro".into(),
                     ssh: url,
+                },
+                // Down: skipped, not an error.
+                Node {
+                    name: "gone".into(),
+                    ssh: down(),
                 },
             ],
         )
@@ -1294,6 +1339,23 @@ mod tests {
         assert!(state_of(&home, &n).is_ok());
         n.ssh = down();
         assert!(state_of(&home, &n).is_err());
+    }
+
+    #[test]
+    fn the_remote_path_survives_the_remote_shell() {
+        assert_eq!(shell_quote("/api/state?a=1&b=2"), "'/api/state?a=1&b=2'");
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
+    }
+
+    #[test]
+    fn the_control_path_is_escaped_or_left_out() {
+        let ok = control_options(Path::new("/home/me/.furmiculi/ssh"));
+        assert!(ok.contains(&"ControlPath=\"/home/me/.furmiculi/ssh/%C\"".to_string()));
+        let pct = control_options(Path::new("/home/100%/ssh"));
+        assert!(pct.iter().any(|o| o.contains("100%%/ssh")), "{pct:?}");
+        for bad in ["/a\"b/ssh", &format!("/{}/ssh", "x".repeat(60))] {
+            assert_eq!(control_options(Path::new(bad)), ["-o", "ControlMaster=no"]);
+        }
     }
 
     #[test]

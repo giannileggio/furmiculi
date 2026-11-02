@@ -1661,9 +1661,9 @@ fn furmi_agents_lists_installs_and_picks_the_default() {
 /// A stand-in for `ssh` that runs the remote command here, as if the other
 /// machine were this one with its own furmi home: it skips ssh's options and
 /// the target, then hands the command to `sh`.
-fn fake_ssh(dir: &Path, peer_home: &Path, body: &str) -> std::path::PathBuf {
+fn fake_ssh(dir: &Path, name: &str, peer_home: &Path, body: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
-    let script = dir.join("ssh");
+    let script = dir.join(name);
     std::fs::write(
         &script,
         format!(
@@ -1697,6 +1697,7 @@ fn a_node_is_reached_over_ssh_and_only_saved_when_it_answers() {
     init(peer.path());
     let ssh = fake_ssh(
         tools.path(),
+        "ssh",
         peer.path(),
         "FURMI_HOME=PEER exec sh -c \"$1\"",
     );
@@ -1740,7 +1741,12 @@ fn a_node_is_reached_over_ssh_and_only_saved_when_it_answers() {
     assert!(stderr(&out).contains("isn't something"), "{}", stderr(&out));
 
     // A machine that can't be reached is not saved.
-    let down = fake_ssh(tools.path(), peer.path(), "echo 'no route' >&2; exit 255");
+    let down = fake_ssh(
+        tools.path(),
+        "down",
+        peer.path(),
+        "echo 'no route' >&2; exit 255",
+    );
     let out = failed(run(
         via(hub.path(), &down).args(["node", "add", "gone", "gone"])
     ));
@@ -1751,6 +1757,7 @@ fn a_node_is_reached_over_ssh_and_only_saved_when_it_answers() {
     // And one without furmi says so.
     let bare = fake_ssh(
         tools.path(),
+        "bare",
         peer.path(),
         "echo 'sh: furmi: not found' >&2; exit 127",
     );
@@ -1764,4 +1771,17 @@ fn a_node_is_reached_over_ssh_and_only_saved_when_it_answers() {
     );
 
     ok(run(furmi(hub.path()).args(["node", "rm", "box"])));
+
+    // A nodes.toml from before ssh nodes is replaced by `add`, not a dead end.
+    std::fs::write(
+        hub.path().join("nodes.toml"),
+        "[[node]]\nname = \"old\"\nurl = \"http://old:7433\"\ntoken = \"t\"\n",
+    )
+    .unwrap();
+    let out = ok(run(
+        via(hub.path(), &ssh).args(["node", "add", "box", "me@box"])
+    ));
+    assert!(stderr(&out).contains("old nodes.toml"), "{}", stderr(&out));
+    let out = ok(run(via(hub.path(), &ssh).args(["node", "ls"])));
+    assert!(!stdout(&out).contains("old"), "{}", stdout(&out));
 }
