@@ -958,7 +958,7 @@ const ACTION_HELP = {
 const DANGER_ACTIONS = new Set(["fail", "cancel"]);
 const CONFIRM_ACTIONS = new Set(["fail", "cancel"]);
 
-// A row from a node added without a token can be read, not changed.
+// Every node can be changed over ssh; the flag stays for older hubs' rows.
 const canAct = r => r.writable !== false;
 
 function actionButtons(r) {
@@ -1132,7 +1132,7 @@ function draw(state) {
   downEl.hidden = down.length === 0;
   downEl.innerHTML = down.length === 0 ? "" :
     `<strong>${down.length === 1 ? "A node isn't" : down.length + " nodes aren't"} answering, so its tasks are missing:</strong><ul>` +
-    down.map(n => `<li><span class="mono">${escapeHtml(n.name)}</span> (${escapeHtml(n.url || "")}): ${escapeHtml(n.error || "")}</li>`).join("") + "</ul>";
+    down.map(n => `<li><span class="mono">${escapeHtml(n.name)}</span> (${escapeHtml(n.ssh || "")}): ${escapeHtml(n.error || "")}</li>`).join("") + "</ul>";
 
   drawSide(state);
   drawBulk(state);

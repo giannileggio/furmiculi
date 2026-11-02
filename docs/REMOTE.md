@@ -84,24 +84,32 @@ Each machine runs its own furmi; one dashboard can show them all. On the
 machine you open, add the others as nodes:
 
 ```sh
-furmi node add box http://box.tailnet.ts.net:7433 --token-file ~/box-web-token
+furmi node add box box.tailnet.ts.net     # or me@box, or a Host from ~/.ssh/config
 furmi node ls                    # each node, and whether it answers
 furmi node rm box
 ```
 
-The URL is where that machine serves `furmi web` (above), and the token is its
-`~/.furmiculi/web-token`; `http://` only, since the dashboard speaks plain HTTP
-(a tailnet or an SSH tunnel such as `http://127.0.0.1:7434` already encrypts
-it). Nodes are kept in `~/.furmiculi/nodes.toml`, 0600 because of the tokens.
+A node is an SSH target, the way herdr saves its machines: anything `ssh`
+takes, and it must work without furmi's help (`ssh box` logs in). furmi runs
+`furmi node call` there, which answers the dashboard's own routes in-process,
+so the other machine needs **furmi installed** (0.5 or later, at
+`~/.cargo/bin` or `~/.local/bin` or on the PATH of a non-interactive login) but
+no open port, no running dashboard and no token. Your keys, agent and
+`known_hosts` do the authenticating and the encrypting. `node add` connects
+once before saving anything, so it can ask for a passphrase or an unknown host
+key; if that fails, nothing is saved. The connection is then shared for ten
+minutes (OpenSSH `ControlPersist`, sockets in `~/.furmiculi/ssh/`), so the
+dashboard polling a node doesn't log in each time. Everything after that is
+non-interactive (`BatchMode`): a node that now wants a password shows as
+offline, and `furmi node add` again (or `ssh box`) is how you sign in. Nodes are
+kept in `~/.furmiculi/nodes.toml`; it holds no secrets. `FURMI_SSH` names a
+different `ssh` program.
 
 The dashboard then lists every machine's tasks and schedules with a **Node**
 column, and the counts add up. A node that doesn't answer within 3 seconds is
 named in a notice and its rows drop out (a failure is remembered for 10 seconds,
 so a dead node isn't asked on every refresh); nothing else is affected. The same
-project path on two machines is one project in the sidebar. `furmi node add`
-warns when the URL isn't loopback or a tailnet address, since the token travels
-in the clear. 
-You can act on other machines' rows from here: their buttons (done, fail, drop,
+project path on two machines is one project in the sidebar. You can act on other machines' rows from here: their buttons (done, fail, drop,
 try again, edit, output) and the bulk bar work on a task wherever it runs, and
 **+ New task** has a **Which machine?** choice. A task for another machine names
 its project by git remote (`github.com/me/app`, the repo's `origin`): that
@@ -124,9 +132,8 @@ so is one on an older furmi, which doesn't report its load. Agents aren't
 picked in the form for this choice: each machine uses its own default. `auto`
 is a reserved node name.
 
-Changing things on a node needs its token: a node added without one (a loopback
-address, say) can be read but not changed, and its rows show no buttons. A node
-running an older furmi can be read, but can't take tasks by remote; upgrade it.
+A node running an older furmi (before ssh nodes) can't be reached at all;
+upgrade it with `furmi update`.
 
 A task with no project (`--scratch`, or **No project** in the form) needs no
 clone anywhere, so any online machine can take it: *Any machine* weighs only

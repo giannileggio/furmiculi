@@ -1,19 +1,23 @@
 //! Other machines running furmi, whose queues the dashboard shows next to this
 //! one's.
 //!
-//! Each node is a self-contained furmi serving its own dashboard. The hub (the
-//! machine you open) asks every node for its `/api/state`, tags the rows with
-//! the node's name and merges them. Nothing is shared or synced: a node that
-//! is down is shown as offline and its rows drop out, and everything else
-//! keeps working.
+//! Each node is a self-contained furmi with its own queue. The hub (the machine
+//! you open) asks every node for its `/api/state`, tags the rows with the
+//! node's name and merges them. Nothing is shared or synced: a node that is
+//! down is shown as offline and its rows drop out, and everything else keeps
+//! working.
 //!
-//! The list lives in `nodes.toml` beside `config.toml`, 0600 because it holds
-//! each node's bearer token.
+//! The hub reaches a node over SSH, the way herdr reaches its machines: it runs
+//! `furmi node call <METHOD> <path>` there, which answers the dashboard's own
+//! route in-process. So a node needs no open port, no running dashboard and no
+//! token, and authentication, host keys and encryption are all OpenSSH's. The
+//! list lives in `nodes.toml` beside `config.toml` and holds only a name and an
+//! SSH target for each.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -47,12 +51,9 @@ const MAX_BODY: u64 = 32 * 1024 * 1024;
 #[serde(deny_unknown_fields)]
 pub struct Node {
     pub name: String,
-    /// `http://host[:port]`, where that node's `furmi web` is served.
-    pub url: String,
-    /// The node's bearer token (its `~/.furmiculi/web-token`). Optional for a
-    /// loopback address, e.g. an SSH tunnel to a node that only listens there.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub token: String,
+    /// What `ssh` is given: a host from `~/.ssh/config`, `user@host`, or
+    /// `ssh://user@host:port`.
+    pub ssh: String,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -68,24 +69,18 @@ fn path(home: &Home) -> PathBuf {
 
 pub fn load(home: &Home) -> Result<Vec<Node>> {
     let path = path(home);
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&path)
-            && meta.permissions().mode() & 0o077 != 0
-        {
-            bail!(
-                "{} must be readable only by you (chmod 600): it holds tokens",
-                path.display()
-            );
-        }
-    }
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     };
-    let file: NodesFile =
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let file: NodesFile = toml::from_str(&text).with_context(|| {
+        format!(
+            "parsing {} (nodes used to be a url and a token; they are an SSH target now, so \
+             `furmi node add <name> <ssh-target>` again)",
+            path.display()
+        )
+    })?;
     Ok(file.nodes)
 }
 
@@ -93,8 +88,7 @@ fn save(home: &Home, nodes: Vec<Node>) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     let path = path(home);
     let body = toml::to_string(&NodesFile { nodes })?;
-    let text = format!("# Written by `furmi node`; holds each node's token.\n{body}");
-    // Private from the first byte, not chmod'ed after the fact.
+    let text = format!("# Written by `furmi node`.\n{body}");
     let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
     let written = std::fs::OpenOptions::new()
         .write(true)
@@ -113,33 +107,40 @@ fn save(home: &Home, nodes: Vec<Node>) -> Result<()> {
 pub enum NodeCmd {
     /// Show another machine's queue in this dashboard.
     ///
-    /// URL is where that machine serves `furmi web` (see docs/REMOTE.md), and
-    /// the token its `~/.furmiculi/web-token`.
+    /// SSH-TARGET is anything `ssh` takes: a host from ~/.ssh/config,
+    /// `user@host`, or `ssh://user@host:2222`. Check that `ssh <target>` works
+    /// first; furmi uses your keys, agent and known hosts, and needs furmi
+    /// installed on the other machine.
     Add(AddArgs),
     /// List the nodes and whether they answer.
     Ls,
     /// Stop showing a node.
     Rm { name: String },
+    /// Answer one dashboard request on this machine and print the result. What
+    /// the hub runs on a node over SSH; not meant to be typed.
+    #[command(hide = true)]
+    Call {
+        /// GET or POST.
+        method: String,
+        /// The path and query, e.g. `/api/state?local=1`. A POST's body is
+        /// read from standard input.
+        path: String,
+    },
 }
 
 #[derive(Args)]
 pub struct AddArgs {
     /// A short name for the node, shown beside its tasks (a-z, 0-9, `-`).
     name: String,
-    /// e.g. http://box.tailnet.ts.net:7433
-    url: String,
-    /// Read the bearer token from this file (must be 0600).
-    #[arg(long, conflicts_with = "token")]
-    token_file: Option<PathBuf>,
-    /// The bearer token itself (lands in shell history; prefer --token-file).
-    #[arg(long)]
-    token: Option<String>,
+    /// e.g. `box`, `me@box.tailnet.ts.net` or `ssh://me@box:2222`.
+    ssh_target: String,
 }
 
 pub fn run(home: &Home, cmd: NodeCmd) -> Result<()> {
     match cmd {
         NodeCmd::Add(args) => add(home, args),
         NodeCmd::Ls => ls(home),
+        NodeCmd::Call { method, path } => call(home, &method, &path),
         NodeCmd::Rm { name } => {
             let _lock = home.lock()?;
             let mut nodes = load(home)?;
@@ -155,52 +156,55 @@ pub fn run(home: &Home, cmd: NodeCmd) -> Result<()> {
     }
 }
 
+/// How long `node add` waits: the person may be typing a passphrase or
+/// accepting a host key.
+const ADD_TIMEOUT: Duration = Duration::from_secs(120);
+
 fn add(home: &Home, args: AddArgs) -> Result<()> {
-    let token = match (args.token, args.token_file) {
-        (Some(t), _) => t.trim().to_string(),
-        (None, Some(file)) => crate::web::auth::read_token_file(&file)?,
-        (None, None) => String::new(),
-    };
     let node = Node {
         name: args.name,
-        url: args.url.trim().trim_end_matches('/').to_string(),
-        token,
+        ssh: args.ssh_target.trim().to_string(),
     };
     check(&node)?;
+    // Like herdr: nothing is saved for a machine that can't be reached, so a
+    // typo doesn't leave a node that is always offline. The connection made
+    // here stays open for a while, so the dashboard's calls reuse it.
+    match exchange(
+        home,
+        &node,
+        false,
+        "/api/state?local=1",
+        "",
+        ADD_TIMEOUT,
+        true,
+    ) {
+        Ok((200, _)) => {}
+        Ok((status, _)) => bail!("{} answered HTTP {status}", node.ssh),
+        Err(e) => bail!("can't reach {} over ssh: {e:#}", node.ssh),
+    }
     {
         let _lock = home.lock()?;
         let mut nodes = load(home)?;
-        // Same name: replaced, so adding again is how a token is changed.
+        // Same name: replaced, so adding again is how a target is changed.
         nodes.retain(|n| n.name != node.name);
         nodes.push(node.clone());
         save(home, nodes)?;
     }
-    println!("added {}", node.name);
-    if !node.token.is_empty() && !private_network(&parse_url(&node.url)?.0) {
-        println!(
-            "warning: {} isn't loopback or a tailnet address, and the token goes over plain \
-             HTTP; reach it through a tailnet or an SSH tunnel",
-            node.url
-        );
-    }
-    match fetch(&node, "/api/state?local=1") {
-        Ok(_) => println!("{} answers", node.url),
-        Err(e) => println!("warning: {} doesn't answer yet: {e:#}", node.url),
-    }
+    println!("added {} ({})", node.name, node.ssh);
     Ok(())
 }
 
 fn ls(home: &Home) -> Result<()> {
     let nodes = load(home)?;
     if nodes.is_empty() {
-        println!("no nodes; add one with `furmi node add <name> <url> --token-file <file>`");
+        println!("no nodes; add one with `furmi node add <name> <ssh-target>`");
         return Ok(());
     }
     let statuses: Vec<String> = std::thread::scope(|s| {
         let handles: Vec<_> = nodes
             .iter()
             .map(|n| {
-                s.spawn(|| match fetch(n, "/api/state?local=1") {
+                s.spawn(|| match fetch(home, n, "/api/state?local=1") {
                     Ok(_) => "online".to_string(),
                     Err(e) => format!("offline: {e:#}"),
                 })
@@ -212,157 +216,207 @@ fn ls(home: &Home) -> Result<()> {
             .collect()
     });
     for (node, status) in nodes.iter().zip(statuses) {
-        println!("{:<16} {:<40} {status}", node.name, node.url);
+        println!("{:<16} {:<40} {status}", node.name, node.ssh);
     }
     Ok(())
-}
-
-/// Whether a plain-HTTP token is travelling somewhere already encrypted or
-/// private: loopback, or a tailnet (100.64.0.0/10, `*.ts.net`).
-fn private_network(host: &str) -> bool {
-    if host == "localhost" || host.ends_with(".ts.net") {
-        return true;
-    }
-    match host.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(ip)) => {
-            ip.is_loopback() || (ip.octets()[0] == 100 && (64..128).contains(&ip.octets()[1]))
-        }
-        Ok(std::net::IpAddr::V6(ip)) => {
-            ip.is_loopback() || ip.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0]
-        }
-        Err(_) => false,
-    }
 }
 
 fn check(node: &Node) -> Result<()> {
     validate_id(&node.name).map_err(anyhow::Error::msg)?;
-    // Both go into the request's header lines as they are.
-    if node
-        .url
-        .chars()
-        .any(|c| c.is_whitespace() || c.is_control())
-        || node.token.chars().any(|c| !c.is_ascii_graphic())
-    {
-        bail!("the URL and token must be single words of printable characters");
-    }
     if node.name == LOCAL || node.name == AUTO {
         bail!("`{}` is a reserved name; pick another", node.name);
     }
-    parse_url(&node.url)?;
+    // Also checked on every call: nodes.toml can be edited by hand. The target
+    // is one argument to ssh, never a shell line, but a leading `-` would be
+    // read as an option.
+    if node.ssh.is_empty()
+        || node.ssh.starts_with('-')
+        || node
+            .ssh
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+    {
+        bail!(
+            "`{}` isn't an ssh target: use a host from ~/.ssh/config, user@host or \
+             ssh://user@host:port",
+            node.ssh
+        );
+    }
     Ok(())
 }
 
-/// `(host, port, Host header)` of a plain-HTTP node URL.
-fn parse_url(url: &str) -> Result<(String, u16, String)> {
-    let rest = match url.strip_prefix("http://") {
-        Some(rest) => rest,
-        None if url.starts_with("https://") => bail!(
-            "`{url}`: furmi's dashboard speaks plain HTTP, so use http:// (the tailnet or an \
-             SSH tunnel already encrypts it)"
-        ),
-        None => bail!("`{url}` must look like http://host:7433"),
-    };
-    if rest.is_empty() || rest.contains(['/', '?', '#', '@']) {
-        bail!("`{url}` must be just http://host[:port], with no path or credentials");
-    }
-    let (host, port) = match rest.rsplit_once(':') {
-        Some((h, p)) if !p.contains(']') => (h, p.parse().context("the port isn't a number")?),
-        _ => (rest, 80),
-    };
-    Ok((
-        host.trim_matches(['[', ']']).to_string(),
-        port,
-        rest.to_string(),
-    ))
-}
-
 /// One GET to a node, returning the body of a 200.
-fn fetch(node: &Node, path: &str) -> Result<String> {
-    match exchange(node, false, path, "", TIMEOUT)? {
+fn fetch(home: &Home, node: &Node, path: &str) -> Result<String> {
+    match exchange(home, node, false, path, "", TIMEOUT, false)? {
         (200, body) => Ok(body),
-        (401, _) => bail!("refused the token (HTTP 401)"),
-        (403, _) => bail!("refused the request (HTTP 403): is its host allowed on that node?"),
-        (status, _) => bail!("answered HTTP {status}"),
+        (status, body) => {
+            let said = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| v["error"].as_str().map(str::to_string));
+            match said {
+                Some(said) => bail!("answered HTTP {status}: {said}"),
+                None => bail!("answered HTTP {status}"),
+            }
+        }
     }
 }
 
-/// One request to a node: its status and body, whatever the status is.
+/// Starts every remote command: the usual install places aren't on the PATH
+/// of a non-interactive ssh session.
+const REMOTE_PATH: &str = r#"PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH""#;
+
+/// Marks where the node's answer starts, so anything a login script prints
+/// first is ignored.
+const ANSWER_MARK: &str = "\u{1}furmi ";
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// The directory ssh keeps its shared connections in (0700), so the dashboard
+/// polling a node every couple of seconds doesn't log in each time.
+fn control_dir(home: &Home) -> Result<PathBuf> {
+    use std::os::unix::fs::DirBuilderExt;
+    let dir = home.root().join("ssh");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .with_context(|| format!("creating {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// One request to a node: its status and body, whatever the status is. With
+/// `interactive`, ssh may ask the person (a passphrase, an unknown host key);
+/// otherwise it must not, since nobody is there to answer.
 fn exchange(
+    home: &Home,
     node: &Node,
     post: bool,
     path: &str,
     body: &str,
     timeout: Duration,
+    interactive: bool,
 ) -> Result<(u16, String)> {
-    // Also checked here: nodes.toml can be edited by hand.
     check(node)?;
+    #[cfg(test)]
+    if let Some(fake) = tests::fake(&node.ssh) {
+        return fake(post, path, body);
+    }
     let deadline = Instant::now() + timeout;
-    let left = || {
-        deadline
-            .checked_duration_since(Instant::now())
-            .filter(|d| !d.is_zero())
-            .context("timed out")
-    };
-    let (host, port, host_header) = parse_url(&node.url)?;
-    let addrs = (host.as_str(), port)
-        .to_socket_addrs()
-        .with_context(|| format!("looking up {host}"))?;
-    // Each address in turn: `localhost` is often `::1` first.
-    let mut connected = Err(anyhow::anyhow!("no address for {host}"));
-    for addr in addrs {
-        connected = TcpStream::connect_timeout(&addr, left()?).context("connecting");
-        if connected.is_ok() {
-            break;
-        }
+    let program = std::env::var("FURMI_SSH").unwrap_or_else(|_| "ssh".into());
+    let control = control_dir(home)?;
+    let mut ssh = Command::new(program);
+    ssh.arg("-T")
+        .args(["-o", "ClearAllForwardings=yes", "-o", "LogLevel=ERROR"])
+        .args([
+            "-o",
+            &format!("ConnectTimeout={}", timeout.as_secs().max(1)),
+        ])
+        .args(["-o", "ControlMaster=auto", "-o", "ControlPersist=600"])
+        .args(["-o", &format!("ControlPath={}/%C", control.display())]);
+    if !interactive {
+        ssh.args(["-o", "BatchMode=yes"]);
     }
-    let mut stream = connected?;
-    stream.set_write_timeout(Some(left()?))?;
-    let mut headers = String::new();
-    if !node.token.is_empty() {
-        headers += &format!("Authorization: Bearer {}\r\n", node.token);
-    }
-    if post {
-        // A node's own bearer token is also what its page sends as the
-        // per-run token, so this is the same proof a browser gives. No
-        // `Origin`: there is no page.
-        if !node.token.is_empty() {
-            headers += &format!("X-Furmi-Token: {}\r\n", node.token);
-        }
-        headers += &format!(
-            "Content-Type: application/json\r\nContent-Length: {}\r\n",
-            body.len()
-        );
-    }
-    let method = if post { "POST" } else { "GET" };
-    // HTTP/1.0: the answer is never chunked, so the body is whatever follows
-    // the headers until the connection closes.
-    let request = format!(
-        "{method} {path} HTTP/1.0\r\nHost: {host_header}\r\n{headers}Accept: application/json\r\n\r\n{}",
-        if post { body } else { "" }
+    let remote = format!(
+        "{REMOTE_PATH} furmi node call {} {}",
+        if post { "POST" } else { "GET" },
+        shell_quote(path)
     );
-    stream.write_all(request.as_bytes())?;
-    let mut raw = Vec::new();
-    let mut chunk = [0; 16 * 1024];
-    loop {
-        // Per read, the time left overall, so a slow trickle still ends.
-        stream.set_read_timeout(Some(left()?))?;
-        let n = stream.read(&mut chunk).context("reading the answer")?;
-        if n == 0 {
-            break;
+    let mut child = ssh
+        .arg("--")
+        .arg(&node.ssh)
+        .arg(remote)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("running ssh (is it installed?)")?;
+    // The request body goes in on stdin, off this thread so a big one can't
+    // block against a node that isn't reading.
+    let mut stdin = child.stdin.take().context("ssh has no stdin")?;
+    let body = body.to_string();
+    std::thread::spawn(move || {
+        let _ = stdin.write_all(body.as_bytes());
+    });
+    let read = |pipe: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut out = Vec::new();
+            if let Some(pipe) = pipe {
+                let _ = pipe.take(MAX_BODY + 1).read_to_end(&mut out);
+            }
+            let _ = tx.send(out);
+        });
+        rx
+    };
+    let out = read(child.stdout.take().map(|p| Box::new(p) as _));
+    let err = read(child.stderr.take().map(|p| Box::new(p) as _));
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
         }
-        raw.extend_from_slice(&chunk[..n]);
-        if raw.len() as u64 > MAX_BODY {
-            bail!("its answer is over {} MB", MAX_BODY / (1024 * 1024));
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("timed out");
         }
+        std::thread::sleep(Duration::from_millis(15));
+    };
+    // The background connection ssh leaves behind has these pipes closed, but
+    // don't wait on that: a moment, then take what has arrived.
+    let grace = Duration::from_secs(2);
+    let out = out.recv_timeout(grace).unwrap_or_default();
+    let err = err.recv_timeout(grace).unwrap_or_default();
+    if out.len() as u64 > MAX_BODY {
+        bail!("its answer is over {} MB", MAX_BODY / (1024 * 1024));
     }
-    let text = String::from_utf8_lossy(&raw);
-    let (head, body) = text.split_once("\r\n\r\n").context("not an HTTP answer")?;
-    let status = head.lines().next().unwrap_or_default();
-    let code = status.split(' ').nth(1).and_then(|c| c.parse().ok());
-    Ok((
-        code.with_context(|| format!("answered `{status}`"))?,
-        body.to_string(),
-    ))
+    let out = String::from_utf8_lossy(&out);
+    let err = String::from_utf8_lossy(&err);
+    let err = err.trim();
+    if let Some((_, rest)) = out.split_once(ANSWER_MARK)
+        && let Some((code, body)) = rest.split_once('\n')
+        && let Ok(code) = code.trim().parse()
+    {
+        return Ok((code, body.to_string()));
+    }
+    // No answer: say why in the terms of what to do about it.
+    let hint = if status.code() == Some(255) {
+        String::new()
+    } else if status.code() == Some(127) || err.contains("not found") {
+        " (furmi isn't installed there, or isn't in ~/.cargo/bin or ~/.local/bin)".into()
+    } else if err.contains("unrecognized subcommand") || err.contains("unexpected argument") {
+        " (its furmi is too old to be a node: update it with `furmi update`)".into()
+    } else {
+        format!(
+            " (exit {})",
+            status.code().map_or("signal".into(), |c| c.to_string())
+        )
+    };
+    let err: String = err
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .chars()
+        .take(300)
+        .collect();
+    bail!("{}{hint}", if err.is_empty() { "no answer" } else { &err })
+}
+
+/// `furmi node call`: answers one dashboard request here, in-process, and
+/// prints it after [`ANSWER_MARK`]. Only the dashboard's `/api` routes, and
+/// never forwarded on to another node.
+fn call(home: &Home, method: &str, url: &str) -> Result<()> {
+    let mut body = String::new();
+    if method == "POST" {
+        std::io::stdin()
+            .take(MAX_BODY)
+            .read_to_string(&mut body)
+            .context("reading the request body")?;
+    }
+    let (status, answer) = crate::web::call(home, method, url, &body)?;
+    println!("{ANSWER_MARK}{status}\n{answer}");
+    Ok(())
 }
 
 /// What may follow `/api/tasks/<id>` or `/api/schedules/<id>` when forwarded.
@@ -387,7 +441,7 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
             let decoded = id.replace("%40", "@");
             let (id, name) = decoded.rsplit_once('@')?;
             // One hop only: an id with another `@` in it would be forwarded
-            // on by that node, with its tokens.
+            // on by that node, as if it were a hub.
             if validate_id(id).is_err()
                 || rest.len() > 1
                 || rest.iter().any(|r| !FORWARDED.contains(r))
@@ -447,7 +501,7 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
         Err(e) => return error(500, format!("{e:#}")),
     };
     let timeout = if post { WRITE_TIMEOUT } else { TIMEOUT };
-    let answer = exchange(&node, post, &forwarded, &body, timeout);
+    let answer = exchange(home, &node, post, &forwarded, &body, timeout, false);
     if post {
         // Whatever happened, what the page shows next must be asked fresh.
         if let Some(entry) = entries().get_mut(&node.name) {
@@ -467,16 +521,11 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
         Err(e) => return error(502, format!("{name} didn't answer: {e:#}")),
     };
     let Ok(mut answer) = serde_json::from_str::<Value>(&text) else {
-        // Not JSON: an older furmi, or a refusal in plain text.
-        let hint = match status {
-            401 => " (it refused the token)",
-            403 => " (it refused the request: changing things there needs its token)",
-            _ => "",
-        };
+        // Not JSON: something other than furmi's route answered.
         let text: String = text.trim().chars().take(200).collect();
         return error(
             if status < 400 { 502 } else { status },
-            format!("{name} answered {status}{hint}: {text}"),
+            format!("{name} answered {status}: {text}"),
         );
     };
     if let Some((real, full)) = row_id
@@ -644,14 +693,14 @@ pub fn resolve_auto(
     // once, since each may be slow.
     let peers: Vec<Node> = load(home)?
         .into_iter()
-        .filter(|n| !n.token.is_empty() && !known_down(&n.name))
+        .filter(|n| !known_down(&n.name))
         .collect();
     let answers: Vec<Option<Capacity>> = std::thread::scope(|scope| {
         let asked: Vec<_> = peers
             .iter()
             .map(|n| {
                 scope.spawn(move || {
-                    let text = fetch(n, "/api/repos").ok()?;
+                    let text = fetch(home, n, "/api/repos").ok()?;
                     Some(Capacity::from_json(&serde_json::from_str(&text).ok()?))
                 })
             })
@@ -681,7 +730,7 @@ type Answer = std::result::Result<Value, String>;
 /// What the hub last heard from a node, and whether it is asking right now.
 #[derive(Default)]
 struct Entry {
-    /// url + token the answer was fetched with, so a changed node starts over.
+    /// The ssh target the answer was fetched from, so a changed node starts over.
     identity: String,
     last: Option<(Instant, Answer)>,
     asking: bool,
@@ -699,8 +748,8 @@ fn entries() -> std::sync::MutexGuard<'static, HashMap<String, Entry>> {
 /// A node's `/api/state`, or why there isn't one. Reused for a moment, and
 /// only one request at a time goes out per node: while one is waiting on a slow
 /// node, the others get the last answer instead of queueing up behind it.
-fn state_of(node: &Node) -> Answer {
-    let identity = format!("{}\n{}", node.url, node.token);
+fn state_of(home: &Home, node: &Node) -> Answer {
+    let identity = node.ssh.clone();
     {
         let mut all = entries();
         let entry = all.entry(node.name.clone()).or_default();
@@ -728,7 +777,7 @@ fn state_of(node: &Node) -> Answer {
         }
         entry.asking = true;
     }
-    let answer = fetch(node, "/api/state?local=1")
+    let answer = fetch(home, node, "/api/state?local=1")
         .and_then(|body| {
             let state: Value = serde_json::from_str(&body).context("not furmi's state")?;
             if !state.is_object() {
@@ -759,8 +808,8 @@ pub fn merge_state(home: &Home, local: String) -> String {
                 return local;
             };
             state["nodes"] = json!([
-                { "name": LOCAL, "url": null, "online": true },
-                { "name": "nodes.toml", "url": "", "online": false, "error": format!("{e:#}") },
+                { "name": LOCAL, "ssh": null, "online": true },
+                { "name": "nodes.toml", "ssh": "", "online": false, "error": format!("{e:#}") },
             ]);
             return state.to_string();
         }
@@ -773,18 +822,21 @@ pub fn merge_state(home: &Home, local: String) -> String {
     }
     // In parallel: a node that doesn't answer costs one timeout, not one each.
     let answers: Vec<Answer> = std::thread::scope(|s| {
-        let handles: Vec<_> = nodes.iter().map(|n| s.spawn(|| state_of(n))).collect();
+        let handles: Vec<_> = nodes
+            .iter()
+            .map(|n| s.spawn(|| state_of(home, n)))
+            .collect();
         handles
             .into_iter()
             .map(|h| h.join().unwrap_or_else(|_| Err("crashed".into())))
             .collect()
     });
-    let mut summary = vec![json!({ "name": LOCAL, "url": null, "online": true, "writable": true })];
+    let mut summary = vec![json!({ "name": LOCAL, "ssh": null, "online": true, "writable": true })];
     for (node, answer) in nodes.iter().zip(answers) {
         match answer {
             Ok(mut theirs) => {
                 for list in LISTS {
-                    tag_rows(&mut theirs[list], &node.name, !node.token.is_empty());
+                    tag_rows(&mut theirs[list], &node.name, true);
                     if let (Some(rows), Some(mine)) =
                         (theirs[list].as_array().cloned(), state[list].as_array_mut())
                     {
@@ -792,10 +844,12 @@ pub fn merge_state(home: &Home, local: String) -> String {
                     }
                 }
                 add_counts(&mut state["counts"], &theirs["counts"]);
-                summary.push(json!({ "name": node.name, "url": node.url, "online": true, "writable": !node.token.is_empty() }));
+                summary.push(
+                    json!({ "name": node.name, "ssh": node.ssh, "online": true, "writable": true }),
+                );
             }
             Err(error) => summary.push(
-                json!({ "name": node.name, "url": node.url, "online": false, "error": error }),
+                json!({ "name": node.name, "ssh": node.ssh, "online": false, "error": error }),
             ),
         }
     }
@@ -811,8 +865,7 @@ fn tag_rows(rows: &mut Value, node: &str, writable: bool) {
     for row in rows.as_array_mut().into_iter().flatten() {
         if let Some(row) = row.as_object_mut() {
             row.insert("node".into(), json!(node));
-            // Whether this page can change it: a node added without a token
-            // can only be read.
+            // Every node can be changed over ssh; older pages look for this.
             row.insert("writable".into(), json!(writable));
             if node != LOCAL
                 && let Some(id) = row.get("id").and_then(Value::as_str)
@@ -863,6 +916,31 @@ fn add_counts(ours: &mut Value, theirs: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    type Fake = Arc<dyn Fn(bool, &str, &str) -> Result<(u16, String)> + Send + Sync>;
+
+    fn fakes() -> &'static Mutex<HashMap<String, Fake>> {
+        static FAKES: OnceLock<Mutex<HashMap<String, Fake>>> = OnceLock::new();
+        FAKES.get_or_init(Default::default)
+    }
+
+    /// The stand-in for a node's ssh target, if `target` is one: what
+    /// `exchange` asks instead of running ssh.
+    pub(super) fn fake(target: &str) -> Option<Fake> {
+        fakes().lock().unwrap().get(target).cloned()
+    }
+
+    /// A fresh ssh target whose requests go to `answer`.
+    fn register(answer: Fake) -> String {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let target = format!(
+            "fake-{}",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        fakes().lock().unwrap().insert(target.clone(), answer);
+        target
+    }
 
     fn home() -> (tempfile::TempDir, Home) {
         let dir = tempfile::tempdir().unwrap();
@@ -871,47 +949,29 @@ mod tests {
     }
 
     #[test]
-    fn urls_are_plain_http_hosts() {
-        assert_eq!(
-            parse_url("http://box.ts.net:7433").unwrap(),
-            ("box.ts.net".into(), 7433, "box.ts.net:7433".into())
-        );
-        assert_eq!(parse_url("http://box").unwrap().1, 80);
-        assert_eq!(parse_url("http://[::1]:7433").unwrap().0, "::1");
-        for bad in [
-            "https://box:7433",
-            "box:7433",
-            "http://",
-            "http://box/path",
-            "http://user:pw@box",
-            "http://box:abc",
-        ] {
-            assert!(parse_url(bad).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn nodes_round_trip_through_a_private_file() {
-        use std::os::unix::fs::PermissionsExt;
+    fn nodes_round_trip_and_an_old_url_node_says_what_to_do() {
         let (_dir, home) = home();
         assert!(load(&home).unwrap().is_empty());
         let node = Node {
             name: "box".into(),
-            url: "http://box:7433".into(),
-            token: "secret".into(),
+            ssh: "me@box".into(),
         };
         save(&home, vec![node.clone()]).unwrap();
         assert_eq!(load(&home).unwrap(), vec![node]);
-        let mode = std::fs::metadata(path(&home)).unwrap().permissions().mode();
-        assert_eq!(mode & 0o077, 0);
+        std::fs::write(
+            path(&home),
+            "[[node]]\nname = \"box\"\nurl = \"http://box:7433\"\ntoken = \"t\"\n",
+        )
+        .unwrap();
+        let err = format!("{:#}", load(&home).unwrap_err());
+        assert!(err.contains("furmi node add"), "{err}");
     }
 
     #[test]
     fn names_are_ids_and_not_the_local_one() {
         let node = |name: &str| Node {
             name: name.into(),
-            url: "http://box:7433".into(),
-            token: String::new(),
+            ssh: "box".into(),
         };
         assert!(check(&node("box-2")).is_ok());
         assert!(check(&node("Box")).is_err());
@@ -1066,8 +1126,7 @@ mod tests {
     fn a_node_cannot_be_called_auto() {
         let node = Node {
             name: "auto".into(),
-            url: "http://box:7433".into(),
-            token: "t".into(),
+            ssh: "box".into(),
         };
         assert!(check(&node).is_err());
     }
@@ -1109,14 +1168,12 @@ mod tests {
             vec![
                 Node {
                     name: "box".into(),
-                    url: url.clone(),
-                    token: "t".into(),
+                    ssh: url.clone(),
                 },
                 // Read-only: never picked.
                 Node {
                     name: "ro".into(),
-                    url,
-                    token: String::new(),
+                    ssh: url,
                 },
             ],
         )
@@ -1131,30 +1188,10 @@ mod tests {
     }
 
     /// A node that answers `body` to every request, once per connection.
+    /// A node that answers every request with `status` and `body`.
     fn serve(body: &'static str, status: &'static str) -> String {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let mut stream = stream.unwrap();
-                // The whole request, as a real server reads it, so closing
-                // doesn't reset the connection under the answer.
-                let mut seen = Vec::new();
-                let mut buf = [0; 512];
-                while !seen.ends_with(b"\r\n\r\n") {
-                    match stream.read(&mut buf) {
-                        Ok(n) if n > 0 => seen.extend_from_slice(&buf[..n]),
-                        _ => break,
-                    }
-                }
-                let _ = write!(
-                    stream,
-                    "HTTP/1.0 {status}\r\nContent-Length: {}\r\n\r\n{body}",
-                    body.len()
-                );
-            }
-        });
-        format!("http://127.0.0.1:{port}")
+        let code: u16 = status.split(' ').next().unwrap().parse().unwrap();
+        register(Arc::new(move |_, _, _| Ok((code, body.to_string()))))
     }
 
     #[test]
@@ -1171,19 +1208,16 @@ mod tests {
             vec![
                 Node {
                     name: "up".into(),
-                    url: up,
-                    token: "t".into(),
+                    ssh: up,
                 },
                 Node {
                     name: "refused".into(),
-                    url: refused,
-                    token: "t".into(),
+                    ssh: refused,
                 },
                 // Nothing listens on port 9 of loopback.
                 Node {
                     name: "gone".into(),
-                    url: "http://127.0.0.1:9".into(),
-                    token: String::new(),
+                    ssh: down(),
                 },
             ],
         )
@@ -1222,11 +1256,17 @@ mod tests {
         );
     }
 
+    /// A node whose every request fails.
+    fn down() -> String {
+        register(Arc::new(|_, _, _| {
+            Err(anyhow::anyhow!("connection refused"))
+        }))
+    }
+
     fn node(name: &str, url: String) -> Node {
         Node {
             name: name.into(),
-            url,
-            token: String::new(),
+            ssh: url,
         }
     }
 
@@ -1247,61 +1287,22 @@ mod tests {
     }
 
     #[test]
-    fn a_node_that_trickles_is_cut_off_at_the_deadline() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            // A byte every half second, for far longer than the deadline.
-            for _ in 0..40 {
-                if stream.write_all(b"x").is_err() {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(500));
-            }
-        });
-        let started = Instant::now();
-        let err = fetch(&node("slow", url), "/api/state").unwrap_err();
-        assert!(
-            started.elapsed() < TIMEOUT + Duration::from_secs(1),
-            "{err:#}"
-        );
-    }
-
-    #[test]
-    fn a_changed_token_does_not_get_the_old_answer() {
+    fn a_changed_target_does_not_get_the_old_answer() {
         let (_dir, home) = home();
         let url = serve(r#"{"queue":[]}"#, "200 OK");
         let mut n = node("cache-test", url);
-        assert!(state_of(&n).is_ok());
-        n.url = "http://127.0.0.1:9".into();
-        assert!(state_of(&n).is_err());
-        drop(home);
+        assert!(state_of(&home, &n).is_ok());
+        n.ssh = down();
+        assert!(state_of(&home, &n).is_err());
     }
 
     #[test]
-    fn header_injection_and_odd_urls_are_refused() {
-        let mut n = node("box", "http://box:7433".into());
-        n.token = "abc\r\nX-Evil: 1".into();
-        assert!(check(&n).is_err());
-        n.token = String::new();
-        n.url = "http://box:7433\r\nX: 1".into();
-        assert!(check(&n).is_err());
-    }
-
-    #[test]
-    fn only_loopback_and_tailnet_hosts_are_private() {
-        for yes in [
-            "127.0.0.1",
-            "::1",
-            "localhost",
-            "box.tailnet.ts.net",
-            "100.64.0.10",
-        ] {
-            assert!(private_network(yes), "{yes}");
+    fn odd_ssh_targets_are_refused() {
+        for bad in ["", "-oProxyCommand=x", "box other", "box\n", "-J box"] {
+            assert!(check(&node("box", bad.into())).is_err(), "{bad:?}");
         }
-        for no in ["203.0.113.5", "box", "100.128.0.1", "example.com"] {
-            assert!(!private_network(no), "{no}");
+        for good in ["box", "me@box.ts.net", "ssh://me@box:2222"] {
+            assert!(check(&node("box", good.into())).is_ok(), "{good}");
         }
     }
 
@@ -1327,46 +1328,24 @@ mod tests {
         assert_eq!(ids("archive"), ["new", "old"]);
     }
 
-    #[test]
-    fn a_nodes_file_others_can_read_is_refused() {
-        use std::os::unix::fs::PermissionsExt;
-        let (_dir, home) = home();
-        save(&home, vec![node("box", "http://box:7433".into())]).unwrap();
-        std::fs::set_permissions(path(&home), std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(load(&home).is_err());
-    }
-
-    /// A node that records the request it gets and answers `status` + `body`.
+    /// A node that records the request it gets (as `METHOD path`, a blank
+    /// line, then the body) and answers `status` + `body`.
     fn capture(
         status: &'static str,
         body: &'static str,
     ) -> (String, std::sync::mpsc::Receiver<String>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut seen = Vec::new();
-            let mut buf = [0; 1024];
-            // Headers, then as much body as Content-Length says.
-            loop {
-                let n = stream.read(&mut buf).unwrap();
-                seen.extend_from_slice(&buf[..n]);
-                let text = String::from_utf8_lossy(&seen).to_string();
-                if let Some((head, rest)) = text.split_once("\r\n\r\n") {
-                    let want = head
-                        .lines()
-                        .find_map(|l| l.strip_prefix("Content-Length: "))
-                        .map_or(0, |n| n.parse().unwrap());
-                    if rest.len() >= want || n == 0 {
-                        break;
-                    }
-                }
-            }
-            tx.send(String::from_utf8_lossy(&seen).to_string()).unwrap();
-            let _ = write!(stream, "HTTP/1.0 {status}\r\n\r\n{body}");
-        });
-        (url, rx)
+        let tx = Mutex::new(tx);
+        let code: u16 = status.split(' ').next().unwrap().parse().unwrap();
+        let target = register(Arc::new(move |post, path, sent| {
+            let method = if post { "POST" } else { "GET" };
+            let _ = tx
+                .lock()
+                .unwrap()
+                .send(format!("{method} {path}\r\n\r\n{sent}"));
+            Ok((code, body.to_string()))
+        }));
+        (target, rx)
     }
 
     fn with_node(home: &Home, name: &str, url: String) {
@@ -1374,8 +1353,7 @@ mod tests {
             home,
             vec![Node {
                 name: name.into(),
-                url,
-                token: "tok".into(),
+                ssh: url,
             }],
         )
         .unwrap();
@@ -1398,11 +1376,9 @@ mod tests {
         assert_eq!((status, body.as_str()), (400, r#"{"error":"nope"}"#));
         let sent = request.recv().unwrap();
         assert!(
-            sent.starts_with("POST /api/tasks/fix-ci/fail HTTP/1.0"),
+            sent.starts_with("POST /api/tasks/fix-ci/fail\r\n"),
             "{sent}"
         );
-        assert!(sent.contains("Authorization: Bearer tok"));
-        assert!(sent.contains("X-Furmi-Token: tok"));
         assert!(sent.ends_with(r#"{"reason":"x"}"#));
     }
 
@@ -1434,7 +1410,7 @@ mod tests {
 
         assert_eq!(status, 200);
         let sent = request.recv().unwrap();
-        assert!(sent.starts_with("POST /api/schedules "), "{sent}");
+        assert!(sent.starts_with("POST /api/schedules\r\n"), "{sent}");
         let body: Value = serde_json::from_str(sent.split("\r\n\r\n").nth(1).unwrap()).unwrap();
         assert_eq!(body["remote"], "github.com/me/app");
         assert_eq!(body["cron"], "0 3 * * *");
@@ -1444,7 +1420,7 @@ mod tests {
     #[test]
     fn this_machines_own_requests_are_not_proxied() {
         let (_dir, home) = home();
-        with_node(&home, "box", "http://127.0.0.1:9".into());
+        with_node(&home, "box", down());
         assert!(proxy(&home, false, "/api/tasks/fix-ci/view", "").is_none());
         assert!(
             proxy(
@@ -1486,7 +1462,7 @@ mod tests {
     #[test]
     fn only_one_hop_and_only_known_paths_are_forwarded() {
         let (_dir, home) = home();
-        with_node(&home, "b", "http://127.0.0.1:9".into());
+        with_node(&home, "b", down());
         for url in [
             "/api/tasks/x%40a%40b/cancel",
             "/api/tasks/%40b",
@@ -1501,7 +1477,7 @@ mod tests {
     #[test]
     fn a_form_naming_a_node_never_falls_back_to_this_machine() {
         let (_dir, home) = home();
-        with_node(&home, "box", "http://127.0.0.1:9".into());
+        with_node(&home, "box", down());
         for form in [
             r#"{"prompt":"p","node":"box","remote":"github.com/me/app"}"#,
             r#"{"prompt":"p","node":5,"repo":"x"}"#,
@@ -1515,33 +1491,15 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_text_refusal_comes_back_as_a_readable_json_error() {
+    fn a_plain_text_answer_comes_back_as_a_readable_json_error() {
         let (_dir, home) = home();
-        let (url, _request) = capture("403 Forbidden", "forbidden: missing or wrong token");
+        let (url, _request) = capture("403 Forbidden", "forbidden: nope");
         with_node(&home, "box", url);
 
         let (status, body) = proxy(&home, true, "/api/tasks/a%40box/cancel", "{}").unwrap();
 
         assert_eq!(status, 403);
         let error = serde_json::from_str::<Value>(&body).unwrap()["error"].to_string();
-        assert!(error.contains("needs its token"), "{error}");
-    }
-
-    #[test]
-    fn rows_say_whether_their_node_can_be_changed() {
-        let (_dir, home) = home();
-        let up = serve(
-            r#"{"queue":[{"id":"b"}],"running":[],"archive":[],"schedules":[]}"#,
-            "200 OK",
-        );
-        save(&home, vec![node("readonly", up)]).unwrap();
-        let local =
-            r#"{"counts":{},"queue":[{"id":"a"}],"running":[],"archive":[],"schedules":[]}"#;
-
-        let merged: Value = serde_json::from_str(&merge_state(&home, local.into())).unwrap();
-
-        assert_eq!(merged["queue"][0]["writable"], true);
-        assert_eq!(merged["queue"][1]["writable"], false);
-        assert_eq!(merged["nodes"][1]["writable"], false);
+        assert!(error.contains("forbidden: nope"), "{error}");
     }
 }

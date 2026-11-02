@@ -50,7 +50,7 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
     let settled;
     let mut placed = None;
     let creating = segments == ["api", "tasks"] || segments == ["api", "schedules"];
-    let body = if matches!(method, Method::Post) && creating {
+    let body = if matches!(method, Method::Post) && creating && !ctx.peer {
         match crate::nodes::resolve_auto(home, || capacity(home, ctx.cwd_repo.as_deref()), body) {
             Ok(Some((form, name))) => {
                 settled = form;
@@ -64,8 +64,9 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
         body
     };
     // A row, or a form, that belongs to another node goes there.
-    if let Some((status, answer)) =
-        crate::nodes::proxy(home, matches!(method, Method::Post), url, body)
+    if !ctx.peer
+        && let Some((status, answer)) =
+            crate::nodes::proxy(home, matches!(method, Method::Post), url, body)
     {
         return json_reply(status, named(answer, placed.as_deref()));
     }
@@ -83,7 +84,9 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
             ["api", "state"] => match state_json(home, ctx.cwd_repo.as_deref()) {
                 // `?local=1` is how a hub asks: this machine's own queue,
                 // never a merge, so two hubs can't end up asking each other.
-                Ok(json) if query_param(url, "local") == Some("1") => json_reply(200, json),
+                Ok(json) if ctx.peer || query_param(url, "local") == Some("1") => {
+                    json_reply(200, json)
+                }
                 Ok(json) => json_reply(200, crate::nodes::merge_state(home, json)),
                 Err(e) => json_reply(500, json_err(&e)),
             },
