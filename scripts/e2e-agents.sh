@@ -80,26 +80,22 @@ furmi init >/dev/null 2>&1
 if [ -f "$SRC_CONFIG" ]; then
   cp "$SRC_CONFIG" "$HOME_DIR/config.toml"
 fi
-sed -i \
+# -i.bak is the one form both GNU and BSD sed accept, then drop the copy.
+sed -i.bak \
   -e "s/^tmux_session = .*/tmux_session = \"$SESSION\"/" \
   -e 's/^poll_interval = .*/poll_interval = "2s"/' \
   -e 's/^max_parallel = .*/max_parallel = 4/' \
   -e 's/^max_parallel_per_repo = .*/max_parallel_per_repo = 4/' \
   "$HOME_DIR/config.toml"
+rm -f "$HOME_DIR/config.toml.bak"
 cat >> "$HOME_DIR/config.toml" <<'EOF'
 
 [agents.fake]
 headless = ["sh", "-c", "{prompt}"]
 interactive = ["sh", "-c", "{prompt}"]
 EOF
-# Pi isn't a built-in preset; add it if the copied config lacks it.
-grep -q '^\[agents\.pi\]' "$HOME_DIR/config.toml" || cat >> "$HOME_DIR/config.toml" <<'EOF'
-
-[agents.pi]
-headless = ["pi", "--print", "{prompt}"]
-interactive = ["pi", "{prompt}"]
-model_args = ["--model", "{model}"]
-EOF
+# No pi table is added: pi, opencode and the rest are built-in presets, so a
+# config that doesn't mention them still runs the flags the binary ships with.
 
 # --- helpers ------------------------------------------------------------------
 
