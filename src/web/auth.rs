@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use tiny_http::Method;
 
 use super::Ctx;
-use super::routes::query_param;
+use super::routes::{is_page, query_param};
 
 use crate::home::{contract_tilde, expand_tilde};
 
@@ -195,8 +195,14 @@ pub(super) fn bearer_ok(
     if let Some(supplied) = authorization.and_then(|a| a.strip_prefix("Bearer ")) {
         return same_token(supplied, &ctx.token);
     }
+    let path = url.split('?').next().unwrap_or("");
     if *method == Method::Get
-        && url.split('?').next() == Some("/")
+        && is_page(
+            &path
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>(),
+        )
         && query_param(url, "token").is_some_and(|t| same_token(t, &ctx.token))
     {
         return true;

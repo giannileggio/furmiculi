@@ -42,6 +42,12 @@ fn named(answer: String, placed: Option<&str>) -> String {
     v.to_string()
 }
 
+/// The addresses that serve the dashboard page: the root, and the permalinks it
+/// writes for an open task, an open log and a list.
+pub(super) fn is_page(segments: &[&str]) -> bool {
+    matches!(segments, [] | ["tasks" | "logs" | "views", _])
+}
+
 pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply {
     let home = ctx.home;
     let path = url.split('?').next().unwrap_or("");
@@ -72,7 +78,8 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
     }
     match method {
         Method::Get => match segments.as_slice() {
-            [] => reply(200, "text/html; charset=utf-8", ctx.index.clone()),
+            // The page itself, at the addresses it puts in the bar (see `is_page`).
+            segs if is_page(segs) => reply(200, "text/html; charset=utf-8", ctx.index.clone()),
             ["logo.png"] => Reply {
                 asset: Some(LOGO),
                 ..reply(200, "image/png", "")

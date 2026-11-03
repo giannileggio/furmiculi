@@ -97,12 +97,12 @@
   .runner-pill .dot.off { background: var(--cancelled); animation: none; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
   @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
-  header input[type="search"] {
-    font: inherit; font-size: 14px; padding: 0 10px; height: 34px;
-    flex: 1 1 140px; max-width: 280px; min-width: 110px;
+  .toolbar input[type="search"] {
+    font: inherit; padding: 4px 8px;
+    flex: 0 1 240px; min-width: 110px;
     border: 1px solid var(--border); background: var(--surface); color: var(--text);
   }
-  header input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .toolbar input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 
   .layout { display: flex; align-items: flex-start; }
   .content { flex: 1; min-width: 0; }
@@ -397,7 +397,7 @@
   .pick { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; margin: 0; }
   th.pickcell, td.pickcell { width: 28px; padding-right: 0; }
   tbody tr.picked td { background: rgba(127,127,127,.14); }
-  .copy, .chip, kbd, .modal, .notice, .toolbar select, .btn { border-radius: 0; }
+  .copy, .chip, kbd, .modal, .notice, .toolbar select, .toolbar input, .btn { border-radius: 0; }
 
   kbd {
     font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -417,7 +417,7 @@
     header { padding: 10px 14px; gap: 8px; flex-wrap: wrap; }
     .view-head { flex-wrap: wrap; }
     header h1 .name, .runner-pill .detail, #setup-open, #keys-open { display: none; }
-    header input[type="search"] { order: 9; flex: 1 1 100%; max-width: none; height: 40px; }
+    .toolbar input[type="search"] { flex: 1 1 100%; height: 40px; }
     main { padding: 12px 14px 32px; }
     .layout { display: block; }
     /* The sidebar becomes a row of chips to swipe through. */
@@ -478,8 +478,6 @@
   <h1><a class="brand" href="/" title="furmiculi: ants in Sicilian. Back to the start"><img class="logo" id="logo" src="/logo.png" alt="" width="30" height="24"><span class="name">furmiculi</span></a></h1>
   <div class="runner-pill" id="runner"></div>
   <span class="spacer"></span>
-  <input type="search" id="search" placeholder="Search tasks" aria-label="Search tasks"
-    autocomplete="off" spellcheck="false" title="Narrow the list to what matches. Press / to jump here.">
   <button class="ghost" id="setup-open" title="Pick and install your coding agent, and check that tmux and git are set up">Setup</button>
   <button class="ghost" id="theme-toggle" title="Light, dark, or whatever this computer is set to">Auto</button>
   <button class="ghost" id="keys-open" title="Keyboard shortcuts (?)">?</button>
@@ -511,8 +509,12 @@
 <div class="warn" id="invalid" hidden></div>
 <div class="warn" id="nodes-down" hidden></div>
 <div class="toolbar" id="toolbar" hidden>
+  <input type="search" id="search" placeholder="Search" aria-label="Search this list"
+    autocomplete="off" spellcheck="false" title="Narrow this list to what matches. Press / to jump here.">
+  <label id="project-wrap" hidden>Project <select id="project-select"></select></label>
   <label id="age-wrap">Time <select id="age"></select></label>
   <span class="note" id="toolbar-note"></span>
+  <span class="note" id="toolbar-count"></span>
   <button class="linkish clear" id="toolbar-clear" data-action="clear-filters" hidden>Show everything</button>
 </div>
 
@@ -1106,6 +1108,52 @@ async function refresh() {
   draw(lastState);
 }
 
+// ---- Permalinks
+//
+// What is on screen is in the address, so a URL can be copied, shared or
+// bookmarked: `/tasks/<id>` and `/logs/<id>` for an open task or log,
+// `/views/<id>` for a list, and `?project=&age=&q=` for the narrowing. The
+// server hands out this page for all of them. Opening or closing a task or log
+// adds a history entry (Back closes it); changing a filter only rewrites the
+// current one.
+let pageOverlay = "";
+function syncUrl() {
+  const q = new URLSearchParams();
+  if (project) q.set("project", project);
+  if (age !== "any") q.set("age", age);
+  if (query) q.set("q", query);
+  const view = activeView();
+  let path = "/";
+  if (taskShown) path = `/tasks/${encodeURIComponent(taskShown)}`;
+  else if (logsId) path = `/logs/${encodeURIComponent(logsId)}`;
+  else if (view && view !== VIEWS[0]) path = `/views/${encodeURIComponent(view.id)}`;
+  const url = path + (q.size ? `?${q}` : "");
+  if (url === location.pathname + location.search) return;
+  const overlay = taskShown ? `task:${taskShown}` : logsId ? `logs:${logsId}` : "";
+  const open = overlay !== pageOverlay;
+  pageOverlay = overlay;
+  history[open ? "pushState" : "replaceState"](null, "", url);
+}
+
+function applyUrl() {
+  const [, kind, raw] = location.pathname.split("/");
+  const id = raw ? decodeURIComponent(raw) : null;
+  const q = new URLSearchParams(location.search);
+  const v = (kind === "views" && VIEWS.find(x => x.id === id)) || VIEWS[0];
+  filter = v.filter || null;
+  project = q.get("project") || null;
+  age = AGE_OPTIONS.some(o => o.value === q.get("age")) ? q.get("age") : "any";
+  query = q.get("q") || "";
+  ageEl.value = age;
+  searchEl.value = query;
+  showTab(v.tab);
+  const task = kind === "tasks" ? id : null, logs = kind === "logs" ? id : null;
+  if (task) { if (taskShown !== task) showTask(task); } else if (taskShown) closeTask();
+  if (logs) { if (logsId !== logs) showLogs(logs); } else if (logsId) closeLogs();
+  pageOverlay = task ? `task:${task}` : logs ? `logs:${logs}` : "";
+  if (lastState) draw(lastState);
+}
+
 // Everything on the page comes from one state object.
 function draw(state) {
   document.getElementById("home").textContent = state.home;
@@ -1141,7 +1189,7 @@ function draw(state) {
 
   // The toolbar over the tables: how far back to look, and what a clicked
   // number has narrowed things to.
-  document.getElementById("toolbar").hidden = firstRun;
+  document.getElementById("toolbar").hidden = firstRun && state.schedules.length === 0;
   // The window is about when a task ran; a schedule is a rule, not a run.
   document.getElementById("age-wrap").hidden = activeTab() === "schedules";
   if (ageEl.value !== age) ageEl.value = age;
@@ -1157,6 +1205,9 @@ function draw(state) {
     .filter(r => !filter || r.status === filter)
     .filter(r => !project || r.repo === project)
     .filter(r => matches(r, TASK_SEARCH_FIELDS)));
+  // A schedule is searched by what the row says: Active/Paused, "Every day at 9:00".
+  const scheduleRows = state.schedules.filter(r => !project || r.repo === project)
+    .map(r => ({ ...r, state: r.enabled ? "active" : "paused", words: describeCron(r.cron) }));
   const emptyFor = (base) => (firstRun || !narrowed ? base : windowMessage());
 
   document.getElementById("panel-queue").innerHTML = taskTable(taskRows(state.queue), withNode(TASK_COLS, state), emptyFor(firstRun
@@ -1169,16 +1220,25 @@ function draw(state) {
   document.getElementById("panel-archive").innerHTML = taskTable(taskRows(state.archive), withNode(TASK_COLS, state),
     emptyFor(`<div class="empty">${filter ? `No ${STATUS_LABELS[filter].toLowerCase()} tasks.` : "Nothing has finished yet."}</div>`), true);
   document.getElementById("panel-schedules").innerHTML = taskTable(
-    state.schedules.filter(r => !project || r.repo === project).filter(r => matches(r, SCHEDULE_SEARCH_FIELDS)), withNode(SCHEDULE_COLS, state),
+    scheduleRows.filter(r => matches(r, SCHEDULE_SEARCH_FIELDS)), withNode(SCHEDULE_COLS, state),
     `<div class="empty">${query ? `Nothing matches “${escapeHtml(query)}”.` : "No repeating tasks yet."}` +
       `${query ? "" : ` A schedule is a Markdown file in <code>${escapeHtml(state.home)}/schedules</code>; see the README.`}` +
       `</div>`, false, "schedule");
+  // Say what the box is searching, and how much of it is left.
+  const tab = activeTab();
+  const noun = { queue: "waiting tasks", running: "tasks at work", archive: "finished tasks", schedules: "repeating tasks" }[tab];
+  searchEl.placeholder = `Search ${noun}`;
+  searchEl.setAttribute("aria-label", searchEl.placeholder);
+  const total = state[tab === "schedules" ? "schedules" : tab].length;
+  const left = document.querySelectorAll(`#panel-${tab} tbody tr[data-kind]`).length;
+  document.getElementById("toolbar-count").textContent = query ? `${left} of ${total}` : "";
   tickElapsed();
+  syncUrl();
 }
 
 // What a search looks through, per kind of row.
 const TASK_SEARCH_FIELDS = ["id", "summary", "repo", "branch", "agent", "model", "status", "node"];
-const SCHEDULE_SEARCH_FIELDS = ["id", "summary", "repo", "cron", "node"];
+const SCHEDULE_SEARCH_FIELDS = ["id", "summary", "repo", "cron", "node", "state", "words"];
 
 // What the search box holds, and whether a row answers to it: every word has to
 // turn up somewhere, so "pi failed" finds the failed task that ran on pi.
@@ -1232,6 +1292,11 @@ function drawSide(state) {
   const repos = [...new Set(allTasks(state).map(r => r.repo))].sort();
   if (project && !repos.includes(project)) project = null; // nothing left in it
   document.getElementById("projects-wrap").hidden = repos.length === 0;
+  const projectSel = document.getElementById("project-select");
+  document.getElementById("project-wrap").hidden = repos.length === 0;
+  projectSel.innerHTML = [null, ...repos].map(repo =>
+    `<option value="${repo === null ? "" : escapeHtml(repo)}">${repo === null ? "All" : escapeHtml(baseName(repo))}</option>`).join("");
+  projectSel.value = project || "";
   const tasks = allTasks(state);
   const all = tasks.length;
   const count = repo => tasks.filter(r => r.repo === repo).length;
@@ -1284,6 +1349,10 @@ ageEl.addEventListener("change", () => { age = ageEl.value; refresh(); });
 // The search box filters what's already on the page, so a keystroke redraws
 // instead of asking the server for the same list again.
 const searchEl = document.getElementById("search");
+document.getElementById("project-select").addEventListener("change", e => {
+  project = e.target.value || null;
+  refresh();
+});
 searchEl.addEventListener("input", () => {
   query = searchEl.value.trim();
   if (lastState) draw(lastState);
@@ -1355,6 +1424,7 @@ async function showLogs(id) {
   logsLoaded = false;
   logsOverlay.classList.add("active");
   openLogsStream(id);
+  syncUrl();
 }
 
 // Follows the end of the log. The server pushes a message when it changes and
@@ -1414,6 +1484,7 @@ function closeLogs() {
   logsOverlay.classList.remove("active");
   stopLogsStream();
   logsId = null;
+  syncUrl();
 }
 
 /// The readable view of an agent's transcript: what the assistant said and
@@ -1715,6 +1786,7 @@ async function showTask(id) {
   taskTitle.textContent = id;
   taskBody.innerHTML = "loading&hellip;";
   taskOverlay.classList.add("active");
+  syncUrl();
   try {
     const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/view`, { headers: AUTH() });
     const data = await res.json();
@@ -1731,6 +1803,7 @@ async function showTask(id) {
 function closeTask() {
   taskShown = null;
   taskOverlay.classList.remove("active");
+  syncUrl();
 }
 
 document.getElementById("task-close").addEventListener("click", closeTask);
@@ -2240,6 +2313,8 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) closeEvents();
   else { refresh(); openEvents(); }
 });
+addEventListener("popstate", applyUrl);
+applyUrl();
 openEvents();
 // The "running for" clock ticks on its own, so it stays right between refreshes.
 setInterval(tickElapsed, 1000);
