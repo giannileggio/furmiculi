@@ -255,7 +255,7 @@ without a screen, the first `furmi web` asks whether to serve your other
 machines instead, behind a bearer token and a `Host` allowlist (`--listen`,
 `--token-file`, `--allowed-host`). It speaks plain HTTP: put `tailscale serve`
 or an SSH tunnel (`ssh -L 7433:127.0.0.1:7433 your-box`) in front of it. See
-[docs/REMOTE.md](docs/REMOTE.md) for the setup, the flags and the cookie.
+[docs/REMOTE.md](docs/REMOTE.md) for the setup, the flags and the session cookie.
 `furmi node add` (over SSH) shows several machines' queues in one dashboard, and lets you
 queue and manage tasks on any of them (see the same page).
 
