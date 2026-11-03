@@ -131,9 +131,11 @@ fn state_stream(ctx: &Ctx, request: Request, slot: Slot) {
 }
 
 /// The end of a task's log, as `{log, truncated}` like the plain logs
-/// endpoint. A task that isn't running has nothing more to say: its last
-/// snapshot is followed by an `end` event. A log that can't be read ends the
-/// stream with a `failed` event carrying the error.
+/// endpoint. A task of another machine has no log here: its own logs endpoint
+/// is asked through [`crate::nodes::proxy`] instead. A task that isn't running
+/// has nothing more to say: its last snapshot is followed by an `end` event. A
+/// log that can't be read ends the stream with a `failed` event carrying the
+/// error.
 fn log_stream(
     ctx: &Ctx,
     request: Request,
@@ -142,6 +144,9 @@ fn log_stream(
     attempt: Option<u32>,
     tail: Option<usize>,
 ) {
+    if let Some(remote) = crate::nodes::split_remote(id) {
+        return remote_log_stream(ctx, request, slot, remote, attempt, tail);
+    }
     stream(request, slot, false, || {
         let running = control::find(ctx.home, id).is_ok_and(|(_, t)| t.status == Status::Running);
         let log = match control::logs(ctx.home, id, attempt) {
@@ -166,6 +171,66 @@ fn log_stream(
             Step::Last(format!("data: {json}\n\nevent: end\ndata: {{}}\n\n"))
         }
     });
+}
+
+/// Another machine's log: its own plain logs endpoint, forwarded the same way
+/// every other view of a remote row is. Whether the task is still running
+/// comes from the state the page already polls, so a finished task's stream
+/// ends as a local one's does.
+fn remote_log_stream(
+    ctx: &Ctx,
+    request: Request,
+    slot: Slot,
+    (own, node): (String, String),
+    attempt: Option<u32>,
+    tail: Option<usize>,
+) {
+    let mut url = format!("/api/tasks/{own}@{node}/logs");
+    let query: Vec<String> = [
+        attempt.map(|a| format!("attempt={a}")),
+        tail.map(|t| format!("tail={t}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !query.is_empty() {
+        url = format!("{url}?{}", query.join("&"));
+    }
+    stream(request, slot, false, || {
+        let (status, body) = match crate::nodes::proxy(ctx.home, false, &url, "") {
+            Some(answer) => answer,
+            None => {
+                return Step::Last(failed(&format!(
+                    "`{own}@{node}` isn't a task of another node"
+                )));
+            }
+        };
+        if status != 200 {
+            // The proxy answers a node's errors as `{"error": ...}` already.
+            return Step::Last(format!("event: failed\ndata: {body}\n\n"));
+        }
+        let answer: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(answer) => answer,
+            Err(_) => return Step::Last(failed(&format!("{node} answered something else"))),
+        };
+        let log = answer["log"].as_str().unwrap_or_default();
+        let cut = answer["truncated"].as_bool().unwrap_or(false);
+        let json = json_log_with(log, cut);
+        if crate::nodes::is_running(ctx.home, &node, &own).unwrap_or(true) {
+            Step::Snapshot {
+                key: json.clone(),
+                json,
+            }
+        } else {
+            Step::Last(format!("data: {json}\n\nevent: end\ndata: {{}}\n\n"))
+        }
+    });
+}
+
+/// The `failed` event the page shows at the end of a log it can't read.
+fn failed(message: &str) -> String {
+    let data = serde_json::json!({ "error": message }).to_string();
+    format!("event: failed\ndata: {data}\n\n")
 }
 
 /// Serves a stream on this thread until the client goes away, `look` says it

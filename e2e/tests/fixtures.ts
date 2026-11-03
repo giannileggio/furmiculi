@@ -21,6 +21,11 @@ export interface Forge {
   add(id: string, prompt: string, ...extra: string[]): void;
   /** Path of a task file, wherever it currently is (tasks/ or archive/). */
   taskFile(id: string): string | undefined;
+  /**
+   * Adds a node that answers from canned JSON instead of a machine, so a test
+   * can exercise another machine's rows (see the fake ssh below).
+   */
+  fakeNode(name: string, answers: { state: unknown; logs: unknown }): void;
 }
 
 /** Most of the dashboard's own output kept for a failure report. */
@@ -91,6 +96,35 @@ function git(cwd: string, ...args: string[]) {
   execFileSync("git", args, { cwd, stdio: "pipe" });
 }
 
+/**
+ * A stand-in for `ssh`, so a test can add a node with nothing on the other
+ * end: `furmi` is pointed at it with `FURMI_SSH` and it prints what
+ * `furmi node call` on that machine would, out of the answers
+ * `Forge.fakeNode` wrote under $FAKE_SSH_DIR/<target>. The ssh target is the
+ * argument before furmi's remote command, which is the last one.
+ */
+const FAKE_SSH = `#!/bin/sh
+remote=""
+target=""
+for arg in "$@"; do
+  target="$remote"
+  remote="$arg"
+done
+dir="$FAKE_SSH_DIR/$target"
+case "$remote" in
+  *"/logs"*) file="$dir/logs.json" ;;
+  *"/api/state"*) file="$dir/state.json" ;;
+  *"/api/repos"*) file="$dir/repos.json" ;;
+  *) file="$dir/error.json" ;;
+esac
+if [ ! -f "$file" ]; then
+  echo "fake ssh: $target has no answer" >&2
+  exit 255
+fi
+printf '\\001furmi 200\\n'
+cat "$file"
+`;
+
 export const test = base.extend<{ forge: Forge; runner: boolean; config: string }>({
   /** Run `furmi start` (runner + dashboard) instead of just `furmi web`. */
   runner: [false, { option: true }],
@@ -104,6 +138,15 @@ export const test = base.extend<{ forge: Forge; runner: boolean; config: string 
     const tmux = path.join(root, "tmux");
     fs.mkdirSync(repo);
     fs.mkdirSync(tmux);
+    // A node's answers, for a test that wants another machine without one:
+    // the dashboard is pointed at the fake ssh below and reads nodes.toml
+    // afresh on every call, so a test can add a node while it serves.
+    const fakeNodes = path.join(root, "fake-nodes");
+    fs.mkdirSync(fakeNodes);
+    const fakeSsh = path.join(root, "fake-ssh");
+    fs.writeFileSync(fakeSsh, FAKE_SSH);
+    fs.chmodSync(fakeSsh, 0o755);
+    const addedNodes: string[] = [];
 
     // Nothing here may touch the real user's files or tmux server.
     const env = {
@@ -111,6 +154,8 @@ export const test = base.extend<{ forge: Forge; runner: boolean; config: string 
       HOME: root,
       TMUX_TMPDIR: tmux,
       FURMI_NO_UPDATE_CHECK: "1",
+      FURMI_SSH: fakeSsh,
+      FAKE_SSH_DIR: fakeNodes,
     };
     delete env.TMUX;
 
@@ -181,6 +226,17 @@ ${config}
           ["tasks", "archive"]
             .map((d) => path.join(home, d, `${id}.md`))
             .find((p) => fs.existsSync(p)),
+        fakeNode: (name, answers) => {
+          const dir = path.join(fakeNodes, name);
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(answers.state));
+          fs.writeFileSync(path.join(dir, "logs.json"), JSON.stringify(answers.logs));
+          addedNodes.push(name);
+          fs.writeFileSync(
+            path.join(home, "nodes.toml"),
+            addedNodes.map((n) => `[[node]]\nname = "${n}"\nssh = "${n}"\n`).join(""),
+          );
+        },
       });
       // A dashboard that died on its own takes the page with it, and the test
       // would otherwise report some later assertion as the cause.

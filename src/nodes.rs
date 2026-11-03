@@ -496,6 +496,15 @@ const FORWARDED: [&str; 10] = [
     "view", "logs", "edit", "pause", "resume", "delete", "done", "fail", "cancel", "retry",
 ];
 
+/// An id of the form `<id>@<node>` (or `%40`), the way the merged state names
+/// a row from another machine: the id that node knows it by, and the node's
+/// name. `None` for an id that doesn't name a node.
+pub fn split_remote(id: &str) -> Option<(String, String)> {
+    let decoded = id.replace("%40", "@");
+    let (own, name) = decoded.rsplit_once('@')?;
+    Some((own.to_string(), name.to_string()))
+}
+
 /// Sends a request meant for another node there, if it is one: a task or
 /// schedule id of the form `<id>@<node>` (what the merged state calls a row
 /// from `<node>`), `GET /api/repos?node=<node>`, or `POST /api/tasks` whose
@@ -510,25 +519,24 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
     let mut row_id = None;
     let (name, forwarded, body) = match segments.as_slice() {
         ["api", kind @ ("tasks" | "schedules"), id, rest @ ..] if id.contains(['@', '%']) => {
-            let decoded = id.replace("%40", "@");
-            let (id, name) = decoded.rsplit_once('@')?;
+            let (own, name) = split_remote(id)?;
             // One hop only: an id with another `@` in it would be forwarded
             // on by that node, as if it were a hub.
-            if validate_id(id).is_err()
+            if validate_id(&own).is_err()
                 || rest.len() > 1
                 || rest.iter().any(|r| !FORWARDED.contains(r))
             {
                 return bad("not a task or schedule of another node");
             }
-            row_id = Some((id.to_string(), decoded.clone()));
-            let mut forwarded = format!("/api/{kind}/{id}");
+            row_id = Some((own.clone(), id.replace("%40", "@")));
+            let mut forwarded = format!("/api/{kind}/{own}");
             for part in rest {
                 forwarded = format!("{forwarded}/{part}");
             }
             if !query.is_empty() {
                 forwarded = format!("{forwarded}?{query}");
             }
-            (name.to_string(), forwarded, body.to_string())
+            (name, forwarded, body.to_string())
         }
         ["api", "repos"] => {
             let name = query.split('&').find_map(|p| p.strip_prefix("node="))?;
@@ -863,6 +871,20 @@ fn state_of(home: &Home, node: &Node) -> Answer {
         entry.last = Some((Instant::now(), answer.clone()));
     }
     answer
+}
+
+/// Whether a row of another node is running there, from the state this
+/// dashboard already polls (so it costs a request only when that cache is
+/// cold). `None` when the node isn't known, or can't say right now.
+pub fn is_running(home: &Home, name: &str, id: &str) -> Option<bool> {
+    let node = load(home).ok()?.into_iter().find(|n| n.name == name)?;
+    let state = state_of(home, &node).ok()?;
+    Some(
+        state["running"]
+            .as_array()?
+            .iter()
+            .any(|row| row["id"].as_str() == Some(id)),
+    )
 }
 
 const LISTS: [&str; 4] = ["queue", "running", "archive", "schedules"];
@@ -1479,6 +1501,34 @@ mod tests {
             }],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_remote_rows_id_splits_into_the_nodes_own_id_and_its_name() {
+        assert_eq!(
+            split_remote("fix-ci@box"),
+            Some(("fix-ci".to_string(), "box".to_string()))
+        );
+        assert_eq!(
+            split_remote("fix-ci%40box"),
+            Some(("fix-ci".to_string(), "box".to_string()))
+        );
+        assert_eq!(split_remote("fix-ci"), None);
+    }
+
+    #[test]
+    fn a_remote_rows_running_comes_from_the_state_the_page_already_polls() {
+        let (_dir, home) = home();
+        let up = serve(
+            r#"{"queue":[{"id":"waiting"}],"running":[{"id":"busy"}],"archive":[{"id":"done"}]}"#,
+            "200 OK",
+        );
+        with_node(&home, "box", up);
+
+        assert_eq!(is_running(&home, "box", "busy"), Some(true));
+        assert_eq!(is_running(&home, "box", "waiting"), Some(false));
+        assert_eq!(is_running(&home, "box", "done"), Some(false));
+        assert_eq!(is_running(&home, "nope", "busy"), None);
     }
 
     #[test]

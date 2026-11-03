@@ -563,6 +563,61 @@ fn web_actions_mutate_tasks_through_the_api() {
     child.wait().unwrap();
 }
 
+/// A stand-in for `ssh` in a test: `furmi` runs this instead (through
+/// `FURMI_SSH`) and it answers what `furmi node call` on another machine would
+/// print, marker included.
+const FAKE_NODE_SSH: &str = r#"#!/bin/sh
+case "$*" in
+  *"/logs"*)
+    printf '\001furmi 200\n%s' '{"log":"hello-from-the-other-machine\n","truncated":false}'
+    ;;
+  *"/api/state"*)
+    printf '\001furmi 200\n%s' '{"counts":{"done":1},"queue":[],"running":[],"archive":[{"id":"demo-task"}],"schedules":[]}'
+    ;;
+  *)
+    printf '\001furmi 404\n%s' '{"error":"not here"}'
+    ;;
+esac
+"#;
+
+#[test]
+fn another_machines_log_stream_is_served_from_that_machine() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    init(home.path());
+    let ssh = home.path().join("fake-ssh");
+    std::fs::write(&ssh, FAKE_NODE_SSH).unwrap();
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(
+        home.path().join("nodes.toml"),
+        "[[node]]\nname = \"box\"\nssh = \"box\"\n",
+    )
+    .unwrap();
+
+    let port = 18350u16;
+    let mut child = furmi(home.path())
+        .env("FURMI_SSH", &ssh)
+        .args(["web", "--no-open", "--port", &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let _token = page_token(port); // also waits for the server to come up
+
+    // This used to be answered here, with "invalid id `demo-task@box`": the
+    // node's own logs endpoint is what has the log.
+    let stream = http_get(port, "/api/tasks/demo-task%40box/logs/stream?tail=1000");
+
+    assert!(stream.starts_with("HTTP/1.1 200"), "{stream}");
+    assert!(stream.contains("hello-from-the-other-machine"), "{stream}");
+    assert!(stream.contains("event: end"), "{stream}");
+    assert!(!stream.contains("invalid id"), "{stream}");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
 #[test]
 fn web_refuses_cross_site_and_rebound_requests() {
     let home = tempfile::tempdir().unwrap();
