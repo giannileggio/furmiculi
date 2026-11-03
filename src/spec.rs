@@ -40,6 +40,10 @@ pub struct TaskSpec {
     pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// A shell command to run instead of an agent. A task with this set has
+    /// no prompt, agent, model or mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<Mode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -66,6 +70,7 @@ pub const SPEC_KEYS: &[&str] = &[
     "worktree",
     "agent",
     "model",
+    "run",
     "mode",
     "on_finish",
     "retries",
@@ -82,6 +87,9 @@ pub struct Effective {
     pub agent: Option<String>,
     /// The task's model. The agent's own `model` applies if this is unset.
     pub model: Option<String>,
+    /// The shell command of a command task; such a task has no agent or model
+    /// and is always headless.
+    pub run: Option<String>,
     pub mode: Mode,
     pub on_finish: OnFinish,
     pub retries: u32,
@@ -91,13 +99,26 @@ pub struct Effective {
 
 impl TaskSpec {
     pub fn resolve(&self, defaults: &Defaults) -> Effective {
+        let command = self.run.is_some();
         Effective {
             repo: expand_tilde(&self.repo),
             branch: self.branch.clone(),
-            worktree: self.worktree.unwrap_or(defaults.worktree),
-            agent: self.agent.clone().or_else(|| defaults.agent.clone()),
-            model: self.model.clone(),
-            mode: self.mode.unwrap_or(defaults.mode),
+            // A command rarely needs a checkout of its own.
+            worktree: self
+                .worktree
+                .unwrap_or(defaults.worktree && !command),
+            agent: self
+                .agent
+                .clone()
+                .or_else(|| defaults.agent.clone())
+                .filter(|_| !command),
+            model: self.model.clone().filter(|_| !command),
+            run: self.run.clone(),
+            mode: if command {
+                Mode::Headless
+            } else {
+                self.mode.unwrap_or(defaults.mode)
+            },
             on_finish: self.on_finish.unwrap_or(defaults.on_finish),
             retries: self.retries.unwrap_or(defaults.retries),
             retry_delay: self.retry_delay.unwrap_or(defaults.retry_delay),
@@ -123,6 +144,34 @@ impl TaskSpec {
                 eff.repo.display()
             ));
         }
+        if let Some(run) = &self.run {
+            if run.trim().is_empty() {
+                out.push("`run` is empty: give the shell command to run".into());
+            }
+            for (set, key) in [
+                (self.agent.is_some(), "agent"),
+                (self.model.is_some(), "model"),
+                (self.mode.is_some(), "mode"),
+            ] {
+                if set {
+                    out.push(format!("a command task (`run`) can't set `{key}`"));
+                }
+            }
+        } else {
+            self.agent_problems(config, &eff, &mut out);
+        }
+        if let Some(b) = &self.branch
+            && !git::valid_branch_name(b)
+        {
+            out.push(format!("invalid branch name `{b}`"));
+        }
+        if eff.on_finish == OnFinish::Pr && eff.branch.is_none() && !eff.worktree {
+            out.push("on_finish: pr needs a branch or a worktree".into());
+        }
+        out
+    }
+
+    fn agent_problems(&self, config: &Config, eff: &Effective, out: &mut Vec<String>) {
         let known = || {
             let names: Vec<_> = config.agents.keys().map(String::as_str).collect();
             names.join(", ")
@@ -145,15 +194,6 @@ impl TaskSpec {
                 }
             }
         }
-        if let Some(b) = &self.branch
-            && !git::valid_branch_name(b)
-        {
-            out.push(format!("invalid branch name `{b}`"));
-        }
-        if eff.on_finish == OnFinish::Pr && eff.branch.is_none() && !eff.worktree {
-            out.push("on_finish: pr needs a branch or a worktree".into());
-        }
-        out
     }
 }
 
@@ -228,6 +268,7 @@ mod tests {
             worktree: None,
             agent: None,
             model: Some("custom".into()),
+            run: None,
             mode: None,
             on_finish: None,
             retries: Some(5),
@@ -253,6 +294,7 @@ mod tests {
             worktree: Some(false),
             agent: None,
             model: None,
+            run: None,
             mode: None,
             on_finish: None,
             retries: None,
@@ -286,6 +328,7 @@ mod tests {
             worktree: Some(false),
             agent: Some("codex".into()),
             model: None,
+            run: None,
             mode: None,
             on_finish: None,
             retries: None,
