@@ -18,6 +18,11 @@ pub struct CleanArgs {
     /// with no task file.
     #[arg(long)]
     all: bool,
+    /// Also remove worktrees git can't inspect — ones whose owning repo moved
+    /// or was deleted. They are kept by default, because what they hold can't
+    /// be checked and any uncommitted work in them would be lost.
+    #[arg(long)]
+    remove_broken: bool,
     /// Only tasks that finished at least this long ago, e.g. 7d.
     #[arg(long, value_parser = humantime::parse_duration)]
     older_than: Option<Duration>,
@@ -33,7 +38,9 @@ pub struct CleanArgs {
 
 /// Removes `worktrees/<id>` for archived tasks that qualify, and with
 /// `--archive`, also the archived task file and its logs. Worktrees with
-/// uncommitted changes are always kept; branches are never deleted.
+/// uncommitted changes, and worktrees git can't inspect at all, are always
+/// kept (`--remove-broken` is the exception to the latter); branches are never
+/// deleted.
 pub fn clean(home: &Home, args: CleanArgs) -> Result<()> {
     home.ensure_initialized()?;
     // Keeps `furmi run` from starting (or `furmi retry` from requeueing) a task
@@ -50,35 +57,39 @@ pub fn clean(home: &Home, args: CleanArgs) -> Result<()> {
     let (mut removed, mut kept) = (0, 0);
     for dir in dirs {
         let id = dir.file_name().unwrap_or_default().to_string_lossy();
-        let verdict = folder_verdict(home, &id, &args, now)?.and_then(|()| check_clean(&dir));
+        let verdict =
+            folder_verdict(home, &id, &args, now)?.and_then(|()| check_clean(&dir, &args));
         match verdict {
             Err(why) => {
                 kept += 1;
                 println!("kept     {id}: {why}");
             }
-            Ok(()) if args.dry_run => {
+            Ok(broken) if args.dry_run => {
                 removed += 1;
-                println!("would remove {id}");
+                let what = if broken { " (broken worktree)" } else { "" };
+                println!("would remove {id}{what}");
             }
-            Ok(()) => match git::remove_worktree(&dir) {
-                Ok(()) => {
-                    removed += 1;
-                    println!("removed  {id}");
-                }
-                // A worktree whose owning repo moved or was deleted
-                // can't be removed by git at all, so it would stay
-                // "kept" forever.
-                Err(_) => match git::remove_broken_worktree(&dir) {
+            Ok(broken) => {
+                // A worktree whose owning repo moved or was deleted can't be
+                // removed by git at all, so with `--remove-broken` the
+                // directory goes directly.
+                let removal = if broken {
+                    git::remove_broken_worktree(&dir)
+                } else {
+                    git::remove_worktree(&dir)
+                };
+                match removal {
                     Ok(()) => {
                         removed += 1;
-                        println!("removed  {id} (broken worktree)");
+                        let what = if broken { " (broken worktree)" } else { "" };
+                        println!("removed  {id}{what}");
                     }
                     Err(e) => {
                         kept += 1;
                         println!("kept     {id}: {e:#}");
                     }
-                },
-            },
+                }
+            }
         }
     }
     let verb = if args.dry_run {
@@ -310,15 +321,22 @@ fn eligible(
     Ok(())
 }
 
-/// Whether `dir` has uncommitted changes, which `furmi clean` always
-/// keeps. A directory git can't inspect — a worktree whose owning
-/// repo moved or was deleted — is not reported as dirty: the
-/// removal attempt decides what to do with it (see
-/// [`git::remove_broken_worktree`]).
-fn check_clean(dir: &Path) -> Result<(), String> {
+/// Whether `dir` may go: `Ok(broken)` where `broken` says git can't inspect
+/// it at all, or why it has to stay. `furmi clean` always keeps a worktree
+/// with uncommitted changes, and also one git can't inspect — a worktree
+/// whose owning repo moved or was deleted, say — because what it holds is
+/// then unknown and may be the only copy of the agent's work. Only
+/// `--remove-broken` accepts losing that, and only for a directory
+/// [`git::remove_broken_worktree`] really will remove, so a dry run can say
+/// so up front.
+fn check_clean(dir: &Path, args: &CleanArgs) -> Result<bool, String> {
     match git::has_changes(dir) {
         Ok(true) => Err("has uncommitted changes".into()),
-        _ => Ok(()),
+        Ok(false) => Ok(false),
+        Err(e) if args.remove_broken => git::check_broken_worktree(dir)
+            .map(|()| true)
+            .map_err(|why| format!("can't inspect: {e:#}; {why:#}")),
+        Err(e) => Err(format!("can't inspect: {e:#}")),
     }
 }
 
@@ -385,6 +403,7 @@ mod tests {
             older_than: None,
             archive: true,
             dry_run: false,
+            remove_broken: false,
         };
         clean(&home, args).unwrap();
 
@@ -407,6 +426,7 @@ mod tests {
             older_than: None,
             archive: true,
             dry_run: false,
+            remove_broken: false,
         };
         clean(&home, args).unwrap();
 
@@ -423,6 +443,7 @@ mod tests {
             older_than: None,
             archive: true,
             dry_run: true,
+            remove_broken: false,
         };
         clean(&home, args).unwrap();
 
@@ -440,6 +461,7 @@ mod tests {
             older_than: None,
             archive: false,
             dry_run: false,
+            remove_broken: false,
         };
         clean(&home, args).unwrap();
 
@@ -465,6 +487,7 @@ mod tests {
             older_than: None,
             archive: true,
             dry_run: false,
+            remove_broken: false,
         };
         clean(&home, args).unwrap();
 
@@ -536,6 +559,7 @@ mod tests {
             older_than,
             archive: false,
             dry_run: false,
+            remove_broken: false,
         }
     }
 
@@ -587,41 +611,114 @@ mod tests {
         assert!(!orphan.exists(), "an orphan worktree is cleaned with --all");
     }
 
+    /// A worktree git can't inspect is kept, not removed: what it holds is
+    /// then unknown. The regression is a `git status` that fails where it used
+    /// to succeed — `furmi clean --all` used to take such a worktree as clean
+    /// and `rm -rf` it, uncommitted work and all.
     #[test]
-    fn clean_removes_a_worktree_whose_repo_was_deleted() {
+    fn clean_keeps_a_worktree_git_cannot_inspect() {
         let (_d, home) = home();
         let repo = git_repo();
         archive(&home, "deleted", Status::Done, Some(now()));
         let broken = worktree(&home, repo.path(), "deleted");
-        // The owning repo is gone: no git command works in the
-        // worktree, so it would stay "kept" forever.
+        std::fs::write(broken.join("wip.txt"), "unfinished").unwrap();
+        // The owning repo is gone: `git status` in the worktree now fails.
         drop(repo);
 
         clean(&home, clean_args(false, None)).unwrap();
 
         assert!(
-            !broken.exists(),
-            "a worktree whose repo is gone is removed, not kept"
+            broken.join("wip.txt").exists(),
+            "a worktree git can't inspect is kept, with what it holds"
         );
+        assert!(home.archive().join("deleted.md").exists());
     }
 
     #[test]
-    fn clean_removes_a_worktree_whose_repo_moved() {
+    fn clean_keeps_a_worktree_whose_repo_moved() {
         let (_d, home) = home();
         let repo = git_repo();
         archive(&home, "moved", Status::Done, Some(now()));
         let broken = worktree(&home, repo.path(), "moved");
         // The owning repo moved away, like a relocated project:
         // the worktree's gitdir points at a path that is no
-        // longer a repository.
+        // longer a repository, so git can't inspect it either.
         let new_repo = tempfile::tempdir().unwrap();
         std::fs::rename(repo.path(), new_repo.path()).unwrap();
 
         clean(&home, clean_args(false, None)).unwrap();
 
         assert!(
+            broken.exists(),
+            "a worktree whose repo moved is kept, not removed"
+        );
+    }
+
+    fn remove_broken_args(dry_run: bool) -> CleanArgs {
+        CleanArgs {
+            all: false,
+            older_than: None,
+            archive: false,
+            dry_run,
+            remove_broken: true,
+        }
+    }
+
+    #[test]
+    fn remove_broken_removes_a_worktree_whose_repo_was_deleted() {
+        let (_d, home) = home();
+        let repo = git_repo();
+        archive(&home, "deleted", Status::Done, Some(now()));
+        let broken = worktree(&home, repo.path(), "deleted");
+        // The owning repo is gone, so it would stay "kept" forever.
+        drop(repo);
+
+        // The dry run promises what the real run does.
+        clean(&home, remove_broken_args(true)).unwrap();
+        assert!(broken.exists(), "a dry run removes nothing");
+
+        clean(&home, remove_broken_args(false)).unwrap();
+
+        assert!(
             !broken.exists(),
-            "a worktree whose repo moved is removed, not kept"
+            "--remove-broken takes a worktree whose repo is gone"
+        );
+    }
+
+    /// `--remove-broken` only takes a worktree: a plain directory under
+    /// `worktrees/` is kept with or without it, since removing it would lose
+    /// work nothing else holds.
+    #[test]
+    fn remove_broken_keeps_a_plain_directory() {
+        let (_d, home) = home();
+        archive(&home, "plain", Status::Done, Some(now()));
+        let plain = home.worktrees().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("notes.md"), "x").unwrap();
+
+        clean(&home, remove_broken_args(true)).unwrap();
+        clean(&home, remove_broken_args(false)).unwrap();
+
+        assert!(
+            plain.join("notes.md").exists(),
+            "not a worktree, so it is kept"
+        );
+    }
+
+    #[test]
+    fn remove_broken_removes_a_worktree_whose_repo_moved() {
+        let (_d, home) = home();
+        let repo = git_repo();
+        archive(&home, "moved", Status::Done, Some(now()));
+        let broken = worktree(&home, repo.path(), "moved");
+        let new_repo = tempfile::tempdir().unwrap();
+        std::fs::rename(repo.path(), new_repo.path()).unwrap();
+
+        clean(&home, remove_broken_args(false)).unwrap();
+
+        assert!(
+            !broken.exists(),
+            "--remove-broken takes a worktree whose repo moved"
         );
     }
 

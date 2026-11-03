@@ -207,13 +207,27 @@ pub fn remove_worktree(path: &Path) -> Result<()> {
 /// other git command when the repo is gone), then the directory is
 /// removed directly.
 ///
-/// Only a linked worktree root is removed this way: its `.git`
+/// [`check_broken_worktree`] holds the refusals, so a dry run can say
+/// what this would and wouldn't take.
+pub fn remove_broken_worktree(path: &Path) -> Result<()> {
+    check_broken_worktree(path)?;
+    // Best effort: forget the worktree in a repo that is still
+    // reachable. When the repo is gone there is nothing left that
+    // references the worktree, and nothing to prune.
+    let _ = git(path, &["worktree", "prune"]);
+    std::fs::remove_dir_all(path).with_context(|| format!("removing {}", path.display()))?;
+    Ok(())
+}
+
+/// Whether [`remove_broken_worktree`] would remove `path`.
+///
+/// Only a linked worktree root is removable this way: its `.git`
 /// is a file naming the (unreachable) gitdir, and `git rev-parse
 /// --show-toplevel` either fails (the repo is gone) or names the
 /// directory itself. A plain directory, a checkout of its own, or
 /// a subdirectory of a larger checkout is refused — removing any
 /// of those would delete unrelated work.
-pub fn remove_broken_worktree(path: &Path) -> Result<()> {
+pub fn check_broken_worktree(path: &Path) -> Result<()> {
     if !path.join(".git").is_file() {
         bail!(
             "{} is not a git worktree; remove it by hand",
@@ -229,11 +243,6 @@ pub fn remove_broken_worktree(path: &Path) -> Result<()> {
             root.display()
         );
     }
-    // Best effort: forget the worktree in a repo that is still
-    // reachable. When the repo is gone there is nothing left that
-    // references the worktree, and nothing to prune.
-    let _ = git(path, &["worktree", "prune"]);
-    std::fs::remove_dir_all(path).with_context(|| format!("removing {}", path.display()))?;
     Ok(())
 }
 

@@ -118,6 +118,11 @@ archived task, and worktrees with no task file; `--older-than 7d`: only
 tasks finished that long ago; `-n`: dry run). It never removes a worktree
 with uncommitted changes, and never deletes branches.
 
+A worktree git can't inspect — one whose owning repo moved or was deleted —
+is kept too (`kept <id>: can't inspect: …`), because its uncommitted work
+can't be checked and would be lost with it. `furmi clean --remove-broken`
+removes those worktrees anyway; the branch survives either way.
+
 It also removes `scratch/<id>` (the folder of a task made with `furmi add
 --scratch`), but only for `done` tasks, or folders with no task file under
 `--all`. Nothing there is committed, so a failed, cancelled or needs_review
