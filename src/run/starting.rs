@@ -150,7 +150,7 @@ fn start(
 /// runner-only checks. Chiefly, whether the agent's program can actually be
 /// run — that is deliberately not part of `Task::problems`, so a task may
 /// still be queued (and validated) before its agent is installed.
-fn start_problems(config: &Config, task: &Task, path: &Path) -> Vec<String> {
+pub(super) fn start_problems(config: &Config, task: &Task, path: &Path) -> Vec<String> {
     let mut out = task.problems(config, Some(path));
     let eff = task.spec.resolve(&config.defaults);
     if let Some(name) = eff.agent.as_deref()

@@ -115,6 +115,8 @@ struct State {
     invalid: Vec<InvalidRow>,
     runner: RunnerRow,
     form: FormInfo,
+    /// Problems and suggestions from the runner's last housekeeping pass.
+    health: Vec<crate::run::Health>,
 }
 
 /// Loads every file in `paths`, setting aside the ones that don't parse
@@ -298,6 +300,7 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
                 .map(fmt_time),
         },
         form,
+        health: crate::run::load_health(home),
     };
     Ok(serde_json::to_string(&state)?)
 }

@@ -302,7 +302,7 @@ fn task_state(home: &Home, id: &str) -> Result<State> {
 }
 
 /// Whether an archived task's worktree may go, or why not.
-fn eligible(
+pub(crate) fn eligible(
     status: Status,
     finished_at: Option<DateTime<FixedOffset>>,
     all: bool,

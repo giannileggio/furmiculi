@@ -231,6 +231,9 @@
     border-bottom: 1px solid var(--accent); background: var(--accent-wash);
   }
   .notice[hidden] { display: none; }
+  #health summary { cursor: pointer; }
+  #health ul { margin: 8px 0 0; padding-left: 20px; }
+  #health code { display: block; margin-top: 2px; font-size: 12px; overflow-wrap: anywhere; }
   .empty .big { font-size: 16px; color: var(--text); margin-bottom: 6px; }
   .empty button { margin-top: 12px; }
   .btn {
@@ -490,6 +493,7 @@
   <button class="btn" data-action="runner-start" id="runner-start">Start the runner</button>
 </div>
 <div class="notice bad" id="setup-notice" hidden></div>
+<div class="notice" id="health" hidden></div>
 
 <div class="layout">
 <aside id="side">
@@ -1169,6 +1173,8 @@ function draw(state) {
       `<button class="linkish" data-action="runner-start" title="Start picking up waiting tasks.">Start</button>`;
   document.getElementById("runner-notice").hidden = state.runner.alive;
   formInfo = state.form;
+
+  renderHealth(state.health || []);
 
   const invalid = document.getElementById("invalid");
   invalid.hidden = state.invalid.length === 0;
@@ -1891,6 +1897,28 @@ async function useAgent(name, btn) {
   loadAgents().then(renderAgents).catch(() => {});
   checkSetupQuietly();
   refresh();
+}
+
+// What the runner's last housekeeping pass found. Redrawn only when it changes,
+// so a live update doesn't snap an opened list shut.
+let healthShown = "[]";
+function renderHealth(items) {
+  const key = JSON.stringify(items);
+  if (key === healthShown) return;
+  healthShown = key;
+  const box = document.getElementById("health");
+  box.hidden = items.length === 0;
+  box.classList.toggle("bad", items.some(h => h.level === "fail"));
+  const problems = items.filter(h => h.level !== "info").length;
+  const suggestions = items.length - problems;
+  const counts = [];
+  if (problems) counts.push(problems === 1 ? "1 problem" : `${problems} problems`);
+  if (suggestions) counts.push(suggestions === 1 ? "1 suggestion" : `${suggestions} suggestions`);
+  box.innerHTML = items.length === 0 ? "" :
+    `<details><summary><strong>Housekeeping: ${counts.join(", ")}</strong></summary><ul>` +
+    items.map(h => `<li data-level="${escapeHtml(h.level)}">${escapeHtml(h.message)}` +
+      `${h.command ? `<code>${escapeHtml(h.command)}</code>` : ""}</li>`).join("") +
+    "</ul></details>";
 }
 
 // A banner only when something needs attention; the full list is one click away.
