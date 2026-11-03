@@ -1772,6 +1772,37 @@ fn a_node_is_reached_over_ssh_and_only_saved_when_it_answers() {
 
     ok(run(furmi(hub.path()).args(["node", "rm", "box"])));
 
+    // --furmi says how to start furmi there; this ssh only knows `docker exec`.
+    let docker = fake_ssh(
+        tools.path(),
+        "docker",
+        peer.path(),
+        "case \"$1\" in *'docker exec -i pod furmi'*) ;; *) echo 'no such container' >&2; exit 1;; esac\n\
+         cmd=$(printf '%s' \"$1\" | sed 's/docker exec -i pod //')\nFURMI_HOME=PEER exec sh -c \"$cmd\"",
+    );
+    let out = failed(run(
+        via(hub.path(), &docker).args(["node", "add", "pod", "me@box"])
+    ));
+    assert!(
+        stderr(&out).contains("no such container"),
+        "{}",
+        stderr(&out)
+    );
+    ok(run(via(hub.path(), &docker).args([
+        "node",
+        "add",
+        "pod",
+        "me@box",
+        "--furmi",
+        "docker exec -i pod furmi",
+    ])));
+    let out = ok(run(via(hub.path(), &docker).args(["node", "ls"])));
+    assert!(
+        stdout(&out).contains("docker exec -i pod furmi") && stdout(&out).contains("online"),
+        "{}",
+        stdout(&out)
+    );
+
     // A nodes.toml from before ssh nodes is replaced by `add`, not a dead end.
     std::fs::write(
         hub.path().join("nodes.toml"),

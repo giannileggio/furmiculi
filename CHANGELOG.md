@@ -6,6 +6,11 @@ lists what changed between them.
 
 ## Unreleased
 
+- `furmi node add <name> <ssh-target> --furmi '<command>'` says how to start
+  furmi on a node that isn't plain `furmi` on the PATH, e.g.
+  `--furmi 'docker exec -i pod furmi'` for one inside a container that the SSH
+  login only reaches the host of.
+
 - The dashboard has permalinks. An open task is `/tasks/<id>`, an open log
   `/logs/<id>` and a list `/views/<id>`, with `?project=`, `?age=` and `?q=` for
   the narrowing. Copy the address to share it; Back closes a task or log.
