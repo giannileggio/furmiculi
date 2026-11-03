@@ -6,6 +6,8 @@ lists what changed between them.
 
 ## Unreleased
 
+## 0.5.1
+
 - `furmi node add <name> <ssh-target> --furmi '<command>'` says how to start
   furmi on a node that isn't plain `furmi` on the PATH, e.g.
   `--furmi 'docker exec -i pod furmi'` for one inside a container that the SSH
