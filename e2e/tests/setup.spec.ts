@@ -15,7 +15,7 @@ test("Setup lists agents and checks, and lets you pick the default agent", async
   // Rows are matched on their name cell: "stub" must not also match "stub2".
   const agentRow = (name: string) =>
     agents.filter({ has: page.locator(".name", { hasText: new RegExp(`^${name}$`) }) });
-  for (const name of ["claude", "codex", "gemini", "opencode", "pi"]) {
+  for (const name of ["claude", "codex", "gemini", "hermes", "opencode", "pi"]) {
     await expect(agentRow(name)).toHaveCount(1);
   }
   const stub = agentRow("stub");

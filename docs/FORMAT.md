@@ -201,7 +201,8 @@ records `last_enqueued_at`; it fires from then on. Firings missed while
 `furmi init` writes a `config.toml` with every default, commented, and asks
 which agent tasks use by default (or detects the only one on `$PATH`, or
 takes `--agent`). Presets are built in for `claude`, `codex`, `gemini`,
-`opencode` and `pi`; add an `[agents.<name>]` table for any other CLI agent:
+`hermes`, `opencode` and `pi`; add an `[agents.<name>]` table for any other
+CLI agent:
 
 ```toml
 [agents.aider]

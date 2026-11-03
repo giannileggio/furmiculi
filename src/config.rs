@@ -36,7 +36,9 @@ timeout = "2h"
 #
 # Headless runs can't answer permission prompts: add each agent's
 # auto-approve flags (e.g. claude "--permission-mode", "acceptEdits";
-# codex "--full-auto"; gemini "--yolo") to suit your trust level.
+# codex "--full-auto"; gemini "--yolo"; hermes "--yolo") to suit your trust
+# level. hermes' one-shot `-z` bypasses approvals on its own, so it needs
+# nothing extra.
 #
 # claude's headless preset asks for `--output-format json`, and pi's for
 # `--mode json`: furmi parses those for token usage (see
@@ -56,6 +58,11 @@ model_args = ["--model", "{model}"]
 [agents.gemini]
 headless = ["gemini", "--prompt", "{prompt}"]
 interactive = ["gemini", "--prompt-interactive", "{prompt}"]
+model_args = ["--model", "{model}"]
+
+[agents.hermes]
+headless = ["hermes", "-z", "{prompt}"]
+interactive = ["hermes", "chat", "-q", "{prompt}"]
 model_args = ["--model", "{model}"]
 
 [agents.opencode]
@@ -219,6 +226,11 @@ const PRESETS: &[(&str, &[&str], &[&str])] = &[
         &["gemini", "--prompt-interactive", "{prompt}"],
     ),
     (
+        "hermes",
+        &["hermes", "-z", "{prompt}"],
+        &["hermes", "chat", "-q", "{prompt}"],
+    ),
+    (
         "opencode",
         &["opencode", "run", "{prompt}"],
         &["opencode", "--prompt", "{prompt}"],
@@ -246,12 +258,17 @@ fn builtin_agents() -> BTreeMap<String, Agent> {
         .collect()
 }
 
-/// How to install each preset's CLI. All are npm packages, checked to exist
-/// and to provide the program the preset runs.
+/// How to install each preset's CLI, checked to exist and to provide the
+/// program the preset runs. Most are npm packages; hermes has its own
+/// installer.
 const INSTALL_HINTS: &[(&str, &str)] = &[
     ("claude", "npm install -g @anthropic-ai/claude-code"),
     ("codex", "npm install -g @openai/codex"),
     ("gemini", "npm install -g @google/gemini-cli"),
+    (
+        "hermes",
+        "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+    ),
     ("opencode", "npm install -g opencode-ai"),
     ("pi", "npm install -g @mariozechner/pi-coding-agent"),
 ];
@@ -631,7 +648,10 @@ mod tests {
         let config = Config::parse("[defaults]\nagent = \"codex\"\n").unwrap();
         let agents = agent_statuses(&config);
         let names: Vec<_> = agents.iter().map(|a| a.name.as_str()).collect();
-        assert_eq!(names, ["claude", "codex", "gemini", "opencode", "pi"]);
+        assert_eq!(
+            names,
+            ["claude", "codex", "gemini", "hermes", "opencode", "pi"]
+        );
         assert!(agents.iter().all(|a| a.install.is_some()));
         assert_eq!(agents.iter().filter(|a| a.is_default).count(), 1);
         assert!(
@@ -724,6 +744,17 @@ mod tests {
         );
         let with_agent = Config::parse(&default_config_toml(Some("codex"))).unwrap();
         assert_eq!(with_agent.defaults.agent.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn hermes_preset_is_one_shot_and_chat() {
+        let c = Config::default();
+        let hermes = &c.agents["hermes"];
+        assert_eq!(hermes.headless, ["hermes", "-z", "{prompt}"]);
+        assert_eq!(hermes.interactive, ["hermes", "chat", "-q", "{prompt}"]);
+        assert_eq!(hermes.model_args, ["--model", "{model}"]);
+        // No auto-approve flag: `--yolo` is hermes' own, left to the user.
+        assert!(!hermes.headless.iter().any(|a| a == "--yolo"));
     }
 
     #[test]
