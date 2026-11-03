@@ -12,6 +12,7 @@ mod home;
 mod nodes;
 mod run;
 mod schedule;
+mod schedule_cmd;
 mod skill;
 mod spec;
 mod task;
@@ -59,6 +60,9 @@ enum Command {
     },
     /// Create a new task file.
     Add(Box<cmd::AddArgs>),
+    /// Manage schedules: list, add, edit, pause, resume, delete.
+    #[command(subcommand)]
+    Schedule(schedule_cmd::ScheduleCmd),
     /// Check task/schedule files against the format. Checks all if none given.
     Validate { files: Vec<PathBuf> },
     /// Enqueue due schedules and run pending tasks in tmux, until interrupted.
@@ -217,6 +221,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             interval,
         } => cmd::ls(&home, archive, schedules, watch.then_some(interval))?,
         Command::Add(args) => cmd::add(&home, *args)?,
+        Command::Schedule(command) => schedule_cmd::run(&home, command)?,
         Command::Validate { files } => return cmd::validate(&home, files),
         Command::Run { once } => run::run(&home, once)?,
         Command::Done { id } => control::done(&home, id)?,

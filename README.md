@@ -149,6 +149,12 @@ furmi ls --watch        # ...live, every --interval (default 2s); in a terminal 
                         # first), r retry, a attach, tab queue/archive, q quit
 furmi validate          # check every task and schedule file
 
+furmi schedule add --cron "0 2 * * *" "update deps"   # same options as add, plus --allow-overlap
+furmi schedule ls       # same as ls --schedules
+furmi schedule edit <id> --cron "0 3 * * *"   # changes only the options you give
+furmi schedule pause <id>    # stop firing, keep the file (resume <id> undoes it)
+furmi schedule delete <id>   # tasks it already queued stay
+
 furmi run               # run the queue until Ctrl-C (rescans every poll_interval)
 furmi run --once        # one pass: enqueue due schedules, reap finished tasks, start new ones
 furmi attach [id]       # watch running tasks in tmux, one window each

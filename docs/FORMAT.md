@@ -193,6 +193,10 @@ on_finish: pr
 Update dependencies, run the test suite, and fix any breakage.
 ```
 
+`furmi schedule add|edit|pause|resume|delete|ls` writes and changes these files
+for you, with the same checks as `furmi validate` (pausing sets `enabled:
+false`); prefer it to editing by hand.
+
 Each time the schedule fires, `furmi run` creates a task `<id>-<YYYYMMDD-HHMM>`
 in `tasks/` with the schedule's fields and prompt and sets
 `created_by: schedule:<id>`. The first time `furmi run` sees a schedule it only

@@ -204,26 +204,14 @@ pub fn schedule_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
 
 /// Adds a schedule, with an id taken from the first line of its prompt.
 pub fn create_schedule(home: &Home, new: ScheduleEdit) -> Result<String> {
-    let config = load_config(home)?;
-    let _lock = home.lock()?;
-    let prompt = new.prompt.trim().to_string();
-    if prompt.is_empty() {
-        bail!("the prompt is empty");
-    }
-    let base = slugify(prompt.lines().next().unwrap_or_default(), 48);
-    let id = (1..)
-        .map(|n| {
-            if n == 1 {
-                base.clone()
-            } else {
-                format!("{base}-{n}")
-            }
-        })
-        .find(|id| !home.schedules().join(format!("{id}.md")).exists())
-        .expect("infinite iterator");
+    let mut spec = blank_spec(path_of(&new.repo)?);
+    apply_choices(&mut spec, new.on_finish, new.agent);
+    add_schedule(home, None, new.cron, false, spec, new.prompt)
+}
 
-    let mut spec = TaskSpec {
-        repo: path_of(&new.repo)?,
+pub(crate) fn blank_spec(repo: PathBuf) -> TaskSpec {
+    TaskSpec {
+        repo,
         branch: None,
         worktree: None,
         agent: None,
@@ -233,13 +221,56 @@ pub fn create_schedule(home: &Home, new: ScheduleEdit) -> Result<String> {
         retries: None,
         retry_delay: None,
         timeout: None,
+    }
+}
+
+/// Validates and writes a new schedule: the one place schedule files are
+/// created, for the dashboard and `furmi schedule add`. `id` is taken from the
+/// first line of the prompt if `None`. Returns the id.
+pub fn add_schedule(
+    home: &Home,
+    id: Option<String>,
+    cron: String,
+    allow_overlap: bool,
+    spec: TaskSpec,
+    prompt: String,
+) -> Result<String> {
+    let config = load_config(home)?;
+    let _lock = home.lock()?;
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        bail!("the prompt is empty");
+    }
+    let taken = |id: &str| home.schedules().join(format!("{id}.md")).exists();
+    let id = match id {
+        Some(id) => {
+            validate_id(&id).map_err(anyhow::Error::msg)?;
+            if taken(&id) {
+                bail!("a schedule with id `{id}` already exists");
+            }
+            id
+        }
+        None => {
+            let base = slugify(prompt.lines().next().unwrap_or_default(), 48);
+            (1..)
+                .map(|n| {
+                    if n == 1 {
+                        base.clone()
+                    } else {
+                        format!("{base}-{n}")
+                    }
+                })
+                .find(|id| !taken(id))
+                .expect("infinite iterator")
+        }
     };
-    apply_choices(&mut spec, new.on_finish, new.agent);
+    let mut spec = spec;
+    spec.repo = path_of(&spec.repo.to_string_lossy())?;
     let schedule = Schedule {
         id: id.clone(),
-        cron: new.cron.trim().to_string(),
+        cron: cron.trim().to_string(),
         enabled: true,
-        allow_overlap: false,
+        allow_overlap,
         spec,
         last_enqueued_at: None,
         prompt,
@@ -260,21 +291,35 @@ fn check_schedule(schedule: &Schedule, config: &Config, path: &std::path::Path) 
 }
 
 pub fn edit_schedule(home: &Home, id: &str, edit: ScheduleEdit) -> Result<()> {
+    update_schedule(home, id, |s| {
+        s.cron = edit.cron.trim().to_string();
+        s.prompt = edit.prompt.trim().to_string();
+        s.spec.repo = path_of(&edit.repo)?;
+        apply_choices(&mut s.spec, edit.on_finish, edit.agent);
+        Ok(())
+    })
+}
+
+/// Changes a schedule in place: `change` sees the file as it is now, under the
+/// lock, and whatever it leaves alone survives. Validated before saving.
+pub fn update_schedule(
+    home: &Home,
+    id: &str,
+    change: impl FnOnce(&mut Schedule) -> Result<()>,
+) -> Result<()> {
     let config = load_config(home)?;
     let _lock = home.lock()?;
     let path = schedule_path(home, id)?;
     let mut s = Schedule::load(&path)?;
-
-    let cron = edit.cron.trim().to_string();
-    if cron != s.cron {
+    let old_cron = s.cron.clone();
+    change(&mut s)?;
+    s.cron = s.cron.trim().to_string();
+    s.prompt = s.prompt.trim().to_string();
+    if s.cron != old_cron {
         // Otherwise a slot the new cron says has already passed would fire at
         // once, for a schedule the user only just changed.
         s.last_enqueued_at = Some(now());
     }
-    s.cron = cron;
-    s.prompt = edit.prompt.trim().to_string();
-    s.spec.repo = path_of(&edit.repo)?;
-    apply_choices(&mut s.spec, edit.on_finish, edit.agent);
     check_schedule(&s, &config, &path)?;
     s.save(&path)
 }
