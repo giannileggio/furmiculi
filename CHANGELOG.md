@@ -21,6 +21,21 @@ lists what changed between them.
   the runner pauses the changes too. Configure or turn it off under
   `[housekeeping]`.
 
+- `furmi restart` stops the dashboard and the runner and starts them again the
+  way they were started, so they run the installed binary. Running tasks keep
+  going in tmux, and under `furmi service` systemd or launchd does the restart.
+  The start flags are kept in the dashboard's lock file, never the token: a
+  dashboard started with `--token` is refused and left running.
+
+- `furmi update` now ends by naming a dashboard or runner still on the old
+  version instead of leaving them to be found out, and never restarts them
+  unasked; `furmi update --restart` does.
+
+- The running version is visible: in the dashboard header, beside other
+  machines in its sidebar, and in `furmi status` and `furmi node ls`, with
+  anything older than the installed binary flagged. A page left open across an
+  upgrade offers a reload.
+
 - `furmi schedule` manages schedules from the terminal: `ls`, `add` (the
   options of `furmi add`, plus `--cron` and `--allow-overlap`), `edit <id>`,
   `pause <id>`, `resume <id>` and `delete <id>`. It writes the files the

@@ -11,11 +11,14 @@
 use anyhow::Result;
 use axoupdater::{AxoUpdater, UpdateRequest};
 
+use crate::home::Home;
+use crate::version::{running, stale_summary};
+
 /// The name the release installer files its receipt under, and what the
 /// release assets are called.
 const APP_NAME: &str = "furmiculi";
 /// The version of the binary doing the updating: what `furmi --version` says.
-const CURRENT: &str = env!("CARGO_PKG_VERSION");
+const CURRENT: &str = crate::version::CURRENT;
 const RELEASES: &str = "https://github.com/giannileggio/furmiculi/releases";
 
 /// What the user asked `furmi update` to do.
@@ -25,6 +28,8 @@ pub struct UpdateArgs {
     /// Install this version instead of the latest, e.g. `0.4.2`. Explicit, so
     /// a downgrade works too.
     pub to: Option<String>,
+    /// Run `furmi restart` (with the new binary) once the install is done.
+    pub restart: bool,
 }
 
 /// A token for the GitHub API, when there is one to be had.
@@ -96,7 +101,7 @@ pub(crate) fn explain(error: axoupdater::AxoupdateError, signed_in: bool) -> any
     }
 }
 
-pub fn update(args: UpdateArgs) -> Result<()> {
+pub fn update(home: &Home, args: UpdateArgs) -> Result<()> {
     let mut updater = match receipt_loaded() {
         Ok(updater) => updater,
         Err(axoupdater::AxoupdateError::NoReceipt { .. }) => anyhow::bail!(
@@ -119,7 +124,8 @@ pub fn update(args: UpdateArgs) -> Result<()> {
     if args.check {
         return check(&mut updater);
     }
-    install(&mut updater)
+    let installed = install(&mut updater)?;
+    after_install(home, &installed, args.restart)
 }
 
 /// An updater that knows its install, or the reason it doesn't.
@@ -156,17 +162,57 @@ fn check(updater: &mut AxoUpdater) -> Result<()> {
 /// Downloads and runs the installer from the release, which replaces this
 /// binary where it is. The installer's own progress is left on screen: a
 /// download with nothing to show for it looks like nothing happening.
-fn install(updater: &mut AxoUpdater) -> Result<()> {
+fn install(updater: &mut AxoUpdater) -> Result<String> {
     let signed_in = github_token().is_some();
-    match updater.run_sync().map_err(|e| explain(e, signed_in))? {
-        Some(result) => println!(
-            "Updated furmiculi {} to {}.",
-            result
-                .old_version
-                .map_or_else(|| CURRENT.to_string(), |v| v.to_string()),
-            result.new_version
-        ),
-        None => println!("furmiculi {CURRENT} is the latest release."),
+    Ok(
+        match updater.run_sync().map_err(|e| explain(e, signed_in))? {
+            Some(result) => {
+                println!(
+                    "Updated furmiculi {} to {}.",
+                    result
+                        .old_version
+                        .map_or_else(|| CURRENT.to_string(), |v| v.to_string()),
+                    result.new_version
+                );
+                result.new_version.to_string()
+            }
+            None => {
+                println!("furmiculi {CURRENT} is the latest release.");
+                CURRENT.to_string()
+            }
+        },
+    )
+}
+
+/// The line `furmi update` ends with when something is still on the old release.
+fn warning(installed: &str, behind: &str) -> String {
+    format!(
+        "installed {installed}; {behind}, run `furmi restart` (or `furmi update --restart` next time)"
+    )
+}
+
+/// What a replaced binary doesn't change: a dashboard or runner already
+/// running keeps executing the old one. Says so, and restarts them only when
+/// asked: an update can run inside a task or a script, whose own runner a
+/// restart would stop.
+fn after_install(home: &Home, installed: &str, restart: bool) -> Result<()> {
+    let behind = stale_summary(&running(home), installed);
+    let Some(behind) = behind else {
+        return Ok(());
+    };
+    if !restart {
+        println!("{}", warning(installed, &behind));
+        return Ok(());
+    }
+    println!("Installed {installed}; {behind}. Restarting them.");
+    // The new binary does the restarting: this process is still the old one.
+    let status = std::process::Command::new(crate::exe::path()?)
+        .arg("--home")
+        .arg(home.root())
+        .arg("restart")
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("`furmi restart` failed ({status}); run it again by hand");
     }
     Ok(())
 }
@@ -180,6 +226,15 @@ mod tests {
         AxoupdateError::NoStableReleases {
             app_name: APP_NAME.to_string(),
         }
+    }
+
+    #[test]
+    fn the_update_ends_by_naming_what_still_runs_the_old_release() {
+        assert_eq!(
+            warning("0.5.0", "dashboard pid 7 and runner pid 9 still run 0.4.0"),
+            "installed 0.5.0; dashboard pid 7 and runner pid 9 still run 0.4.0, \
+             run `furmi restart` (or `furmi update --restart` next time)"
+        );
     }
 
     #[test]

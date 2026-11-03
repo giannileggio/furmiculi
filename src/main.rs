@@ -11,6 +11,7 @@ mod git;
 mod home;
 mod nodes;
 mod notify;
+mod restart;
 mod run;
 mod schedule;
 mod schedule_cmd;
@@ -20,6 +21,7 @@ mod task;
 mod tmux;
 mod update;
 mod update_check;
+mod version;
 mod watch;
 mod web;
 
@@ -137,6 +139,13 @@ enum Command {
     Pause,
     /// Undo `furmi pause`: the runner starts queued tasks and schedules again.
     Resume,
+    /// Stop the dashboard and the runner and start them again the way they
+    /// were started, so they run the installed binary (after `furmi update`).
+    ///
+    /// Tasks already running keep going in tmux and the new runner picks them
+    /// back up. Under `furmi service` the service manager restarts them
+    /// instead.
+    Restart,
     /// Show whether the runner is alive, the queue and failing schedules.
     Status,
     /// Install a new release over this one, keeping the same install.
@@ -152,6 +161,10 @@ enum Command {
         /// to an earlier one works too).
         #[arg(long, value_name = "VERSION")]
         to: Option<String>,
+        /// Then run `furmi restart`, so the dashboard and runner use the new
+        /// release. Without it they keep running the old one and `update` says so.
+        #[arg(long, conflicts_with = "check")]
+        restart: bool,
     },
     /// Check that tasks can run here: tools, config, agents, task files.
     Doctor,
@@ -275,7 +288,10 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 println!("Not paused.");
             }
         }
-        Command::Update { check, to } => update::update(update::UpdateArgs { check, to })?,
+        Command::Restart => restart::restart(&home)?,
+        Command::Update { check, to, restart } => {
+            update::update(&home, update::UpdateArgs { check, to, restart })?
+        }
         Command::Doctor => return doctor::doctor(&home),
         Command::Service { manager } => doctor::service(&home, manager)?,
         Command::Exec { id, status_file } => return run::exec(&home, &id, &status_file),

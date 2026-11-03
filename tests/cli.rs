@@ -1507,19 +1507,17 @@ fn start_runs_the_runner_and_the_dashboard_together() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let status = loop {
         let status = stdout(&ok(run(furmi(home.path()).arg("status"))));
-        if status.contains("running (pid") || std::time::Instant::now() > deadline {
+        // The runner's own line: the dashboard's says "running (pid" too.
+        if status.contains("runner     running (pid") || std::time::Instant::now() > deadline {
             break status;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
-    assert!(status.contains("running (pid"), "{status}");
+    assert!(status.contains("runner     running (pid"), "{status}");
     assert!(http_get(port, "/api/state").contains("\"alive\":true"));
 
     // Ctrl-C reaches both in a terminal; here, stop each by hand.
-    let state: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(home.path().join("runner.json")).unwrap())
-            .unwrap();
-    let runner_pid = state["pid"].as_u64().unwrap().to_string();
+    let runner_pid = status_pid(home.path(), "runner").unwrap();
     child.kill().unwrap();
     child.wait().unwrap();
     Command::new("kill").arg(runner_pid).status().unwrap();
@@ -1536,6 +1534,162 @@ fn wait_for_runner(home: &Path, up: bool) -> String {
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+}
+
+/// The pid `furmi status` gives on the line starting with `what`, if it says
+/// that one is running.
+fn status_pid(home: &Path, what: &str) -> Option<String> {
+    let status = stdout(&ok(run(furmi(home).arg("status"))));
+    let line = status.lines().find(|l| l.starts_with(what))?;
+    let (_, rest) = line.split_once("running (pid ")?;
+    Some(rest.split(')').next()?.to_string())
+}
+
+/// Waits for `furmi status` to report a `what` other than `old`, and returns it.
+fn wait_for_new_pid(home: &Path, what: &str, old: &str) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match status_pid(home, what) {
+            Some(pid) if pid != old => return pid,
+            _ if std::time::Instant::now() > deadline => {
+                panic!("no new {what} replaced pid {old}")
+            }
+            _ => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    }
+}
+
+#[test]
+fn restart_with_nothing_running_says_how_to_start() {
+    let home = tempfile::tempdir().unwrap();
+    init(home.path());
+
+    let out = stdout(&ok(run(furmi(home.path()).arg("restart"))));
+    assert!(out.contains("Nothing is running"), "{out}");
+    assert!(status_pid(home.path(), "dashboard").is_none());
+}
+
+#[test]
+fn restart_replaces_the_dashboard_and_the_runner_on_the_same_port() {
+    let home = tempfile::tempdir().unwrap();
+    init(home.path());
+
+    let port = 18351u16;
+    ok(run(furmi(home.path()).args([
+        "start",
+        "--detach",
+        "--port",
+        &port.to_string(),
+    ])));
+    let status = wait_for_runner(home.path(), true);
+    // Each says which version it is running, and it is this one.
+    let version = format!("[furmi {}]", env!("CARGO_PKG_VERSION"));
+    assert_eq!(status.matches(&version).count(), 2, "{status}");
+    let dashboard = status_pid(home.path(), "dashboard").unwrap();
+    let runner = wait_for_new_pid(home.path(), "runner", "");
+
+    let out = stdout(&ok(run(furmi(home.path()).arg("restart"))));
+    assert!(out.contains("Stopped the dashboard"), "{out}");
+
+    assert_ne!(
+        wait_for_new_pid(home.path(), "dashboard", &dashboard),
+        dashboard
+    );
+    assert_ne!(wait_for_new_pid(home.path(), "runner", &runner), runner);
+    let state = http_get(port, "/api/state");
+    assert!(
+        state.contains(&format!("\"version\":\"{}\"", env!("CARGO_PKG_VERSION"))),
+        "{state}"
+    );
+
+    ok(run(furmi(home.path()).arg("stop")));
+    assert!(wait_for_runner(home.path(), false).contains("NOT running"));
+}
+
+#[test]
+fn restart_keeps_the_start_flags_but_not_the_token() {
+    let home = tempfile::tempdir().unwrap();
+    init(home.path());
+    let token_file = write_token_file(home.path());
+
+    let port = 18352u16;
+    // `furmi web` began no runner, so a restart mustn't begin one either.
+    ok(run(furmi(home.path()).args([
+        "web",
+        "--detach",
+        "--listen",
+        &format!("0.0.0.0:{port}"),
+        "--token-file",
+        token_file.to_str().unwrap(),
+        "--allowed-host",
+        "toolnet.example",
+    ])));
+    let dashboard = status_pid(home.path(), "dashboard").unwrap();
+    let lock = std::fs::read_to_string(home.path().join(".web.lock")).unwrap();
+    assert!(lock.contains("toolnet.example"), "{lock}");
+    assert!(!lock.contains(TEST_TOKEN), "{lock}");
+
+    ok(run(furmi(home.path()).arg("restart")));
+    wait_for_new_pid(home.path(), "dashboard", &dashboard);
+
+    // Same address, same allowed host, same token.
+    let page = http_at(
+        "127.0.0.1",
+        port,
+        "GET",
+        "/api/state",
+        "toolnet.example",
+        &[("Authorization", &format!("Bearer {TEST_TOKEN}"))],
+        "",
+    );
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert!(status_pid(home.path(), "runner").is_none());
+
+    ok(run(furmi(home.path()).arg("stop")));
+}
+
+#[test]
+fn restart_refuses_a_dashboard_it_cant_start_again_and_leaves_it_serving() {
+    let home = tempfile::tempdir().unwrap();
+    init(home.path());
+
+    let port = 18353u16;
+    let mut child = furmi(home.path())
+        .args([
+            "web",
+            "--no-open",
+            "--listen",
+            &format!("0.0.0.0:{port}"),
+            "--token",
+            TEST_TOKEN,
+            "--allowed-host",
+            "toolnet.example",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let get = || {
+        http_at(
+            "127.0.0.1",
+            port,
+            "GET",
+            "/api/state",
+            "toolnet.example",
+            &[("Authorization", &format!("Bearer {TEST_TOKEN}"))],
+            "",
+        )
+    };
+    assert!(get().starts_with("HTTP/1.1 200"));
+
+    let err = stderr(&failed(run(furmi(home.path()).arg("restart"))));
+    assert!(err.contains("--token-file"), "{err}");
+    assert!(!err.contains(TEST_TOKEN), "{err}");
+    assert!(get().starts_with("HTTP/1.1 200"));
+    assert!(child.try_wait().unwrap().is_none(), "the dashboard stopped");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
 }
 
 #[test]
