@@ -78,5 +78,5 @@ npx playwright test tests/queue.spec.ts:6 --repeat-each=10 --workers=1
 ```
 
 A failure only under parallel load is usually a race in the test's assumptions
-(the dashboard polls every 2s) rather than in what it asserts. CI keeps the HTML
-report and traces of failures as artifacts.
+(the dashboard's state is pushed at most once a second) rather than in what it
+asserts. CI keeps the HTML report and traces of failures as artifacts.

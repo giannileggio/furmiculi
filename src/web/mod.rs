@@ -80,7 +80,7 @@ use crate::run;
 const INDEX_HTML: &str = include_str!("../web_dashboard.html");
 
 /// Requests are handled on this many threads, so one slow one (say, an
-/// action waiting for the lock) doesn't stall the dashboard's polling.
+/// action waiting for the lock) doesn't stall the dashboard's other requests.
 const WORKERS: usize = 4;
 
 /// Largest request body read; the only body anyone sends is a short reason.

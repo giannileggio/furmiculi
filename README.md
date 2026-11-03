@@ -166,7 +166,7 @@ furmi clean --archive --all --older-than 30d   # ...and their archived task file
 furmi update            # install a new release over this one (--check: just ask)
 furmi update --to 0.4.1 # ...a specific version, back to an earlier one included
 
-furmi status            # is the runner alive? queue, spend, failing schedules
+furmi status            # is the runner alive? queue, failing schedules
 furmi doctor            # check tmux/git/agents/config/task files; non-zero on problems
 furmi service systemd   # units that keep the runner and the dashboard up (or: launchd)
 
@@ -216,7 +216,7 @@ What `furmi` does so that a bad day doesn't lose work:
   `on_finish: pr` won't open a second PR for a branch that has one.
 
 `furmi web` serves a local dashboard (queue, running, archive and schedules,
-refreshed every couple of seconds) — a Sidekiq-style view of the same state
+pushed live over SSE as it changes) — a Sidekiq-style view of the same state
 `furmi ls` prints. **+ New task** queues work from a form (what to do, which
 project, when to start, what to do with the result), calling the same code as
 `furmi add`; `furmi start` is `furmi web` plus a runner that stops with it.

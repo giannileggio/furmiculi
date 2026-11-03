@@ -260,8 +260,8 @@ pub(super) fn json_log_with(log: &str, truncated: bool) -> String {
 /// anything was cut off.
 ///
 /// A live log is re-read while the modal is open, and a runaway agent's log runs
-/// to 64 MB — so the page asks for the tail of it rather than for the whole
-/// thing every couple of seconds.
+/// to 64 MB — so the stream asks for the tail of it rather than for the whole
+/// thing every second.
 pub(super) fn tail_of(text: &str, limit: usize) -> (String, bool) {
     if text.len() <= limit {
         return (text.to_string(), false);
@@ -294,8 +294,8 @@ pub(super) fn task_view_json(home: &Home, id: &str) -> Result<String> {
     let worktree = home.worktrees().join(&task.id);
     let (mut model, mut model_source) = task.model_in_use(&config);
     // A task that ran before `model_used` was kept still has its answer in the
-    // log. Only here, on demand: the tables are polled every couple of seconds
-    // and won't read a log per row for it.
+    // log. Only here, on demand: the tables are pushed over `/api/events` every
+    // second, and it won't read a log per row for it.
     if model_source == "none" {
         let log = home
             .logs()
