@@ -6,6 +6,10 @@ lists what changed between them.
 
 ## Unreleased
 
+- The dashboard has permalinks. An open task is `/tasks/<id>`, an open log
+  `/logs/<id>` and a list `/views/<id>`, with `?project=`, `?age=` and `?q=` for
+  the narrowing. Copy the address to share it; Back closes a task or log.
+
 ## 0.5.0
 
 - Nodes are reached over SSH instead of HTTP and a token:
