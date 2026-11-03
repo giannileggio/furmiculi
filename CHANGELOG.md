@@ -6,6 +6,8 @@ lists what changed between them.
 
 ## Unreleased
 
+## 0.5.0
+
 - Nodes are reached over SSH instead of HTTP and a token:
   `furmi node add box me@box`. The hub runs `furmi node call` on the other
   machine, so that machine needs no open port, no running dashboard and no
