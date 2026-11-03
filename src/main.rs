@@ -126,6 +126,12 @@ enum Command {
     /// `furmi web` and `furmi run` began them. Tasks already running keep
     /// going; start again to resume the queue.
     Stop,
+    /// Pause the runner without stopping it: nothing new starts and no
+    /// schedule fires. Running tasks carry on and are still finished. Lasts
+    /// across runner restarts, until `furmi resume`.
+    Pause,
+    /// Undo `furmi pause`: the runner starts queued tasks and schedules again.
+    Resume,
     /// Show whether the runner is alive, the queue and failing schedules.
     Status,
     /// Install a new release over this one, keeping the same install.
@@ -245,6 +251,22 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
             } else {
                 println!("The runner isn't running.");
+            }
+        }
+        Command::Pause => {
+            if home.set_paused(true)? {
+                println!(
+                    "Paused: nothing new starts. Running tasks carry on. `furmi resume` undoes it."
+                );
+            } else {
+                println!("Already paused.");
+            }
+        }
+        Command::Resume => {
+            if home.set_paused(false)? {
+                println!("Resumed.");
+            } else {
+                println!("Not paused.");
             }
         }
         Command::Update { check, to } => update::update(update::UpdateArgs { check, to })?,

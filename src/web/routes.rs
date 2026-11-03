@@ -145,6 +145,15 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 ),
                 Err(e) => json_reply(400, json_err(&e)),
             },
+            ["api", "runner", what @ ("pause" | "resume")] => {
+                match home.set_paused(*what == "pause") {
+                    Ok(changed) => json_reply(
+                        200,
+                        serde_json::json!({ "ok": true, "changed": changed }).to_string(),
+                    ),
+                    Err(e) => json_reply(400, json_err(&e)),
+                }
+            }
             ["api", "tasks", id, "edit"] => mutation_reply(perform_edit_task(home, id, body)),
             ["api", "schedules"] => {
                 match perform_create_schedule(home, ctx.cwd_repo.as_deref(), body) {

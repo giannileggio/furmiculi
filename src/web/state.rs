@@ -76,6 +76,7 @@ struct InvalidRow {
 #[derive(Serialize)]
 struct RunnerRow {
     alive: bool,
+    paused: bool,
     last_tick: Option<String>,
 }
 
@@ -291,6 +292,7 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
         invalid,
         runner: RunnerRow {
             alive: home.runner_alive(),
+            paused: home.is_paused(),
             last_tick: RunnerState::load(home)
                 .and_then(|s| s.last_tick_at)
                 .map(fmt_time),

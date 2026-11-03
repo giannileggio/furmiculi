@@ -1376,3 +1376,64 @@ fn two_tasks_without_a_worktree_never_share_a_checkout() {
     env.furmi_ok(&["cancel", "first"]);
     env.furmi_ok(&["cancel", "second"]);
 }
+
+#[test]
+fn a_paused_runner_starts_nothing_and_enqueues_nothing_but_still_finishes_work() {
+    let env = Env::new("");
+    env.add("already", "true", &[]);
+    env.tick(); // starts it (a tmux window)
+    assert_eq!(env.field("already", "status").as_deref(), Some("running"));
+
+    let out = env.furmi_ok(&["pause"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Paused"));
+    let status = String::from_utf8_lossy(&env.furmi_ok(&["status"]).stdout).into_owned();
+    assert!(status.contains("PAUSED"), "{status}");
+
+    env.add("waiting", "true", &[]);
+    due_schedule(&env, "");
+    // The running task is still reaped and archived while paused...
+    let mut finished = false;
+    for _ in 0..100 {
+        env.tick();
+        if env.archived("already") {
+            finished = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    assert!(finished, "a paused runner must still finish running tasks");
+    // ...but nothing else moved.
+    assert_eq!(env.field("waiting", "status").as_deref(), Some("pending"));
+    assert_eq!(scheduled_tasks(&env, "tick"), 0);
+
+    // (Without the schedule, so its task can't take the one repo slot.)
+    std::fs::remove_file(env.home.path().join("schedules/tick.md")).unwrap();
+    env.furmi_ok(&["resume"]);
+    assert!(!String::from_utf8_lossy(&env.furmi_ok(&["status"]).stdout).contains("PAUSED"));
+    env.tick();
+    assert_ne!(env.field("waiting", "status").as_deref(), Some("pending"));
+    due_schedule(&env, "");
+    env.tick();
+    assert_eq!(scheduled_tasks(&env, "tick"), 1);
+}
+
+#[test]
+fn pause_survives_a_runner_restart_and_needs_no_runner() {
+    let env = Env::new("");
+    env.furmi_ok(&["pause"]);
+    assert!(String::from_utf8_lossy(&env.furmi_ok(&["pause"]).stdout).contains("Already"));
+    env.add("held", "true", &[]);
+
+    let mut runner = env.runner();
+    wait_for("the runner to pass", Duration::from_secs(10), || {
+        env.home.path().join("runner.json").exists()
+    });
+    runner.kill().unwrap();
+    runner.wait().unwrap();
+
+    let mut runner = env.runner(); // a fresh process: still paused
+    std::thread::sleep(Duration::from_millis(2500));
+    runner.kill().unwrap();
+    runner.wait().unwrap();
+    assert_eq!(env.field("held", "status").as_deref(), Some("pending"));
+}

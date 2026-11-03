@@ -90,6 +90,30 @@ impl Home {
         self.root.join("runner.json")
     }
 
+    /// Marker file: while it exists the runner starts nothing and enqueues no
+    /// schedules (`furmi pause`). A file of its own, not a field of
+    /// `runner.json`, so it outlives the runner and works with none running.
+    pub fn paused_marker(&self) -> PathBuf {
+        self.root.join("paused")
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused_marker().exists()
+    }
+
+    /// Pauses or resumes the runner; returns whether the state changed.
+    pub fn set_paused(&self, paused: bool) -> Result<bool> {
+        let path = self.paused_marker();
+        let was = path.exists();
+        if paused && !was {
+            crate::fsutil::write_atomic(&path, "")
+                .with_context(|| format!("writing {}", path.display()))?;
+        } else if !paused && was {
+            std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+        }
+        Ok(paused != was)
+    }
+
     /// Where a backgrounded dashboard (`furmi start -d`, `furmi web -d`)
     /// appends its output: it has no terminal to print to.
     pub fn web_log(&self) -> PathBuf {

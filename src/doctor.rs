@@ -53,6 +53,10 @@ pub fn status(home: &Home) -> Result<()> {
         );
     }
 
+    if home.is_paused() {
+        println!("           PAUSED: nothing new starts and no schedule fires (`furmi resume`)");
+    }
+
     match home.dashboard() {
         Some((pid, addr)) => println!("dashboard  running (pid {pid}) on http://{addr}"),
         None => println!(
