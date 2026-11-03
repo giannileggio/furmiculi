@@ -76,3 +76,25 @@ test("a schedule can be created, edited, paused, resumed and deleted", async ({ 
   await expect(page.getByText("No repeating tasks yet.")).toBeVisible();
   expect(fs.existsSync(file)).toBe(false);
 });
+
+test("the search box is in the toolbar, says what it searches, and reads what the row says", async ({ page, forge }) => {
+  forge.add("fix-login", "Fix the redirect loop");
+  fs.mkdirSync(path.join(forge.home, "schedules"), { recursive: true });
+  fs.writeFileSync(
+    path.join(forge.home, "schedules", "nightly.md"),
+    `---\nid: nightly\ncron: "0 9 * * *"\nrepo: ${forge.repo}\n---\n\nRun the audit\n`,
+  );
+  await openDashboard(page, forge);
+  await expect(page.locator("#toolbar #search")).toBeVisible();
+  await expect(page.locator("#search")).toHaveAttribute("placeholder", "Search waiting tasks");
+
+  await tab(page, "schedules").click();
+  await expect(page.locator("#search")).toHaveAttribute("placeholder", "Search repeating tasks");
+  // What the row shows ("Active", "Every day at 9:00"), not just the raw cron.
+  await page.locator("#search").fill("active");
+  await expect(row(page, "nightly")).toBeVisible();
+  await expect(page.locator("#toolbar-count")).toHaveText("1 of 1");
+  await page.locator("#search").fill("paused");
+  await expect(page.locator("#panel-schedules")).toContainText("Nothing matches");
+  await expect(page.locator("#toolbar-count")).toHaveText("0 of 1");
+});

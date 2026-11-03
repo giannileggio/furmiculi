@@ -9,6 +9,9 @@ lists what changed between them.
 - The dashboard has permalinks. An open task is `/tasks/<id>`, an open log
   `/logs/<id>` and a list `/views/<id>`, with `?project=`, `?age=` and `?q=` for
   the narrowing. Copy the address to share it; Back closes a task or log.
+- The search box moved from the header into the toolbar, next to a new Project
+  filter. It says which list it searches, shows "3 of 12" while it narrows, and
+  on Repeating it matches what the row shows (Active, Paused, "Every day at 9:00").
 
 ## 0.5.0
 
