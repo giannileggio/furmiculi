@@ -105,6 +105,17 @@ offline, and `furmi node add` again is how you sign in (a plain `ssh box` doesn'
 kept in `~/.furmiculi/nodes.toml`; it holds no secrets. `FURMI_SSH` names a
 different `ssh` program.
 
+When furmi isn't just `furmi` on that machine's PATH, say how to start it with
+`--furmi`. The usual case is furmi running in a container there (your SSH login
+reaches the host, not the container):
+
+```sh
+furmi node add pod box --furmi 'docker exec -i pod furmi'
+```
+
+The remote shell runs that command as written, so it needs `-i` to pass the
+request through, and the login user must be allowed to run `docker`.
+
 The dashboard then lists every machine's tasks and schedules with a **Node**
 column, and the counts add up. A node that doesn't answer within 3 seconds is
 named in a notice and its rows drop out (a failure is remembered for 10 seconds,

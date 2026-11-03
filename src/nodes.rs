@@ -54,6 +54,11 @@ pub struct Node {
     /// What `ssh` is given: a host from `~/.ssh/config`, `user@host`, or
     /// `ssh://user@host:port`.
     pub ssh: String,
+    /// What starts furmi on that machine, as the remote shell reads it. The
+    /// default, `furmi`, is for a machine where it's installed; `docker exec -i
+    /// box furmi` reaches one running in a container there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub furmi: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -143,6 +148,11 @@ pub struct AddArgs {
     name: String,
     /// e.g. `box`, `me@box.tailnet.ts.net` or `ssh://me@box:2222`.
     ssh_target: String,
+    /// How to start furmi over there, if it isn't just `furmi` on the PATH:
+    /// e.g. 'docker exec -i forgepod furmi' for one inside a container. The
+    /// remote shell runs it as written, so it must read its input (`-i`).
+    #[arg(long)]
+    furmi: Option<String>,
 }
 
 pub fn run(home: &Home, cmd: NodeCmd) -> Result<()> {
@@ -173,6 +183,7 @@ fn add(home: &Home, args: AddArgs) -> Result<()> {
     let node = Node {
         name: args.name,
         ssh: args.ssh_target.trim().to_string(),
+        furmi: args.furmi.map(|f| f.trim().to_string()),
     };
     check(&node)?;
     // Like herdr: nothing is saved for a machine that can't be reached, so a
@@ -225,7 +236,15 @@ fn ls(home: &Home) -> Result<()> {
             .collect()
     });
     for (node, status) in nodes.iter().zip(statuses) {
-        println!("{:<16} {:<40} {status}", node.name, node.ssh);
+        let via = node
+            .furmi
+            .as_ref()
+            .map_or(String::new(), |f| format!(" ({f})"));
+        println!(
+            "{:<16} {:<40} {status}",
+            node.name,
+            format!("{}{via}", node.ssh)
+        );
     }
     Ok(())
 }
@@ -250,6 +269,11 @@ fn check(node: &Node) -> Result<()> {
              ssh://user@host:port",
             node.ssh
         );
+    }
+    if let Some(furmi) = &node.furmi
+        && (furmi.is_empty() || furmi.chars().any(char::is_control))
+    {
+        bail!("--furmi must be one line: the command that starts furmi on that machine");
     }
     Ok(())
 }
@@ -363,7 +387,8 @@ fn exchange(
         ssh.args(["-o", "BatchMode=yes"]);
     }
     let remote = format!(
-        "{REMOTE_PATH} furmi node call {} {}",
+        "{REMOTE_PATH} {} node call {} {}",
+        node.furmi.as_deref().unwrap_or("furmi"),
         if post { "POST" } else { "GET" },
         shell_quote(path)
     );
@@ -429,7 +454,9 @@ fn exchange(
     let hint = if status.code() == Some(255) {
         String::new()
     } else if status.code() == Some(127) || err.contains("not found") {
-        " (furmi isn't installed there, or isn't in ~/.cargo/bin or ~/.local/bin)".into()
+        " (furmi isn't installed there, or isn't in ~/.cargo/bin or ~/.local/bin; \
+           `furmi node add --furmi '<command>'` says how to start it)"
+            .into()
     } else if err.contains("unrecognized subcommand") || err.contains("unexpected argument") {
         " (its furmi is too old to be a node: update it with `furmi update`)".into()
     } else {
@@ -1000,6 +1027,7 @@ mod tests {
         let node = Node {
             name: "box".into(),
             ssh: "me@box".into(),
+            furmi: None,
         };
         save(&home, vec![node.clone()]).unwrap();
         assert_eq!(load(&home).unwrap(), vec![node]);
@@ -1017,6 +1045,7 @@ mod tests {
         let node = |name: &str| Node {
             name: name.into(),
             ssh: "box".into(),
+            furmi: None,
         };
         assert!(check(&node("box-2")).is_ok());
         assert!(check(&node("Box")).is_err());
@@ -1172,6 +1201,7 @@ mod tests {
         let node = Node {
             name: "auto".into(),
             ssh: "box".into(),
+            furmi: None,
         };
         assert!(check(&node).is_err());
     }
@@ -1214,11 +1244,13 @@ mod tests {
                 Node {
                     name: "box".into(),
                     ssh: url,
+                    furmi: None,
                 },
                 // Down: skipped, not an error.
                 Node {
                     name: "gone".into(),
                     ssh: down(),
+                    furmi: None,
                 },
             ],
         )
@@ -1254,15 +1286,18 @@ mod tests {
                 Node {
                     name: "up".into(),
                     ssh: up,
+                    furmi: None,
                 },
                 Node {
                     name: "refused".into(),
                     ssh: refused,
+                    furmi: None,
                 },
                 // Nothing listens on port 9 of loopback.
                 Node {
                     name: "gone".into(),
                     ssh: down(),
+                    furmi: None,
                 },
             ],
         )
@@ -1312,6 +1347,7 @@ mod tests {
         Node {
             name: name.into(),
             ssh: url,
+            furmi: None,
         }
     }
 
@@ -1355,6 +1391,29 @@ mod tests {
         assert!(pct.iter().any(|o| o.contains("100%%/ssh")), "{pct:?}");
         for bad in ["/a\"b/ssh", &format!("/{}/ssh", "x".repeat(60))] {
             assert_eq!(control_options(Path::new(bad)), ["-o", "ControlMaster=no"]);
+        }
+    }
+
+    #[test]
+    fn the_furmi_command_is_kept_and_must_be_one_line() {
+        let (_dir, home) = home();
+        let n = Node {
+            name: "pod".into(),
+            ssh: "box".into(),
+            furmi: Some("docker exec -i pod furmi".into()),
+        };
+        assert!(check(&n).is_ok());
+        save(&home, vec![n.clone(), node("plain", "box".into())]).unwrap();
+        let loaded = load(&home).unwrap();
+        assert_eq!(loaded[0], n);
+        assert_eq!(loaded[1].furmi, None);
+        // Left out of the file when it's the default.
+        let text = std::fs::read_to_string(path(&home)).unwrap();
+        assert_eq!(text.matches("furmi =").count(), 1, "{text}");
+        for bad in ["", "furmi\nrm -rf x"] {
+            let mut n = n.clone();
+            n.furmi = Some(bad.into());
+            assert!(check(&n).is_err(), "{bad:?}");
         }
     }
 
@@ -1416,6 +1475,7 @@ mod tests {
             vec![Node {
                 name: name.into(),
                 ssh: url,
+                furmi: None,
             }],
         )
         .unwrap();
