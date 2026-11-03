@@ -1106,6 +1106,52 @@ async function refresh() {
   draw(lastState);
 }
 
+// ---- Permalinks
+//
+// What is on screen is in the address, so a URL can be copied, shared or
+// bookmarked: `/tasks/<id>` and `/logs/<id>` for an open task or log,
+// `/views/<id>` for a list, and `?project=&age=&q=` for the narrowing. The
+// server hands out this page for all of them. Opening or closing a task or log
+// adds a history entry (Back closes it); changing a filter only rewrites the
+// current one.
+let pageOverlay = "";
+function syncUrl() {
+  const q = new URLSearchParams();
+  if (project) q.set("project", project);
+  if (age !== "any") q.set("age", age);
+  if (query) q.set("q", query);
+  const view = activeView();
+  let path = "/";
+  if (taskShown) path = `/tasks/${encodeURIComponent(taskShown)}`;
+  else if (logsId) path = `/logs/${encodeURIComponent(logsId)}`;
+  else if (view && view !== VIEWS[0]) path = `/views/${encodeURIComponent(view.id)}`;
+  const url = path + (q.size ? `?${q}` : "");
+  if (url === location.pathname + location.search) return;
+  const overlay = taskShown ? `task:${taskShown}` : logsId ? `logs:${logsId}` : "";
+  const open = overlay !== pageOverlay;
+  pageOverlay = overlay;
+  history[open ? "pushState" : "replaceState"](null, "", url);
+}
+
+function applyUrl() {
+  const [, kind, raw] = location.pathname.split("/");
+  const id = raw ? decodeURIComponent(raw) : null;
+  const q = new URLSearchParams(location.search);
+  const v = (kind === "views" && VIEWS.find(x => x.id === id)) || VIEWS[0];
+  filter = v.filter || null;
+  project = q.get("project") || null;
+  age = AGE_OPTIONS.some(o => o.value === q.get("age")) ? q.get("age") : "any";
+  query = q.get("q") || "";
+  ageEl.value = age;
+  searchEl.value = query;
+  showTab(v.tab);
+  const task = kind === "tasks" ? id : null, logs = kind === "logs" ? id : null;
+  if (task) { if (taskShown !== task) showTask(task); } else if (taskShown) closeTask();
+  if (logs) { if (logsId !== logs) showLogs(logs); } else if (logsId) closeLogs();
+  pageOverlay = task ? `task:${task}` : logs ? `logs:${logs}` : "";
+  if (lastState) draw(lastState);
+}
+
 // Everything on the page comes from one state object.
 function draw(state) {
   document.getElementById("home").textContent = state.home;
@@ -1174,6 +1220,7 @@ function draw(state) {
       `${query ? "" : ` A schedule is a Markdown file in <code>${escapeHtml(state.home)}/schedules</code>; see the README.`}` +
       `</div>`, false, "schedule");
   tickElapsed();
+  syncUrl();
 }
 
 // What a search looks through, per kind of row.
@@ -1355,6 +1402,7 @@ async function showLogs(id) {
   logsLoaded = false;
   logsOverlay.classList.add("active");
   openLogsStream(id);
+  syncUrl();
 }
 
 // Follows the end of the log. The server pushes a message when it changes and
@@ -1414,6 +1462,7 @@ function closeLogs() {
   logsOverlay.classList.remove("active");
   stopLogsStream();
   logsId = null;
+  syncUrl();
 }
 
 /// The readable view of an agent's transcript: what the assistant said and
@@ -1715,6 +1764,7 @@ async function showTask(id) {
   taskTitle.textContent = id;
   taskBody.innerHTML = "loading&hellip;";
   taskOverlay.classList.add("active");
+  syncUrl();
   try {
     const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/view`, { headers: AUTH() });
     const data = await res.json();
@@ -1731,6 +1781,7 @@ async function showTask(id) {
 function closeTask() {
   taskShown = null;
   taskOverlay.classList.remove("active");
+  syncUrl();
 }
 
 document.getElementById("task-close").addEventListener("click", closeTask);
@@ -2240,6 +2291,8 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) closeEvents();
   else { refresh(); openEvents(); }
 });
+addEventListener("popstate", applyUrl);
+applyUrl();
 openEvents();
 // The "running for" clock ticks on its own, so it stays right between refreshes.
 setInterval(tickElapsed, 1000);
