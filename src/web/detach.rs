@@ -20,6 +20,21 @@ use crate::home::{Home, contract_tilde};
 /// start -d` calls the spawn a failure.
 const DETACH_WAIT: Duration = Duration::from_secs(10);
 
+/// `--token` puts the secret on the command line, which `--detach` then copies
+/// into the backgrounded child's argv — where `ps` and `/proc` keep showing it
+/// for as long as the dashboard serves. Refuse the pair instead, so
+/// `--token-file` stays the one way to keep it out of argv.
+pub(super) fn refuse_token_with_detach(args: &WebArgs) -> Result<()> {
+    if args.detach && args.token.is_some() {
+        bail!(
+            "--token can't be combined with --detach: the dashboard this starts runs in the \
+             background, and its command line would carry the secret where `ps` and /proc show \
+             it. Write the token to a file only you can read (0600) and pass --token-file <file>"
+        );
+    }
+    Ok(())
+}
+
 /// Serves the dashboard (`with_runner`, for `furmi start`: the runner too) in
 /// its own process group with its output in `web.log`, then returns — so the
 /// shell that started it gets its prompt back and closing it changes nothing.
@@ -154,7 +169,9 @@ fn last_log_line(home: &Home) -> Option<String> {
 /// The command line the backgrounded child needs to serve where this process
 /// decided: its flags, minus `--detach` (it would fork again), `--setup` (the
 /// answers are in config.toml by now, and it has no terminal to ask on) and
-/// the browser (this process opens it: the child would see no tty).
+/// the browser (this process opens it: the child would see no tty). `--token`
+/// isn't here either: [`refuse_token_with_detach`] turns that pair away, so
+/// the secret only ever reaches the child through `--token-file`.
 fn child_args(args: &WebArgs) -> Vec<std::ffi::OsString> {
     let mut argv: Vec<std::ffi::OsString> = vec![
         "--port".into(),
@@ -169,10 +186,6 @@ fn child_args(args: &WebArgs) -> Vec<std::ffi::OsString> {
         argv.push("--token-file".into());
         argv.push(file.as_os_str().to_owned());
     }
-    if let Some(token) = &args.token {
-        argv.push("--token".into());
-        argv.push(token.into());
-    }
     for host in &args.allowed_hosts {
         argv.push("--allowed-host".into());
         argv.push(host.into());
@@ -186,7 +199,33 @@ fn child_args(args: &WebArgs) -> Vec<std::ffi::OsString> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::web::test_support;
     use std::path::PathBuf;
+
+    #[test]
+    fn detach_refuses_a_token_on_the_command_line() {
+        let mut args = WebArgs {
+            listen: Some("0.0.0.0:7500".into()),
+            token: Some("s3cret".into()),
+            allowed_hosts: vec!["box.ts.net".into()],
+            detach: true,
+            ..test_support::args(None, &[])
+        };
+        let err = refuse_token_with_detach(&args).unwrap_err().to_string();
+        assert!(err.contains("--token-file"), "{err}");
+        assert!(err.contains("--detach"), "{err}");
+        // The refusal names the way out, never the secret.
+        assert!(!err.contains("s3cret"), "{err}");
+
+        // In the foreground `--token` is still the operator's call.
+        args.detach = false;
+        assert!(refuse_token_with_detach(&args).is_ok());
+        // And `--token-file` in the background is the point of all this.
+        args.detach = true;
+        args.token = None;
+        args.token_file = Some(PathBuf::from("/tmp/tok"));
+        assert!(refuse_token_with_detach(&args).is_ok());
+    }
 
     #[test]
     fn a_backgrounded_child_gets_the_flags_minus_the_loops() {

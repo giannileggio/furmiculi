@@ -22,6 +22,10 @@ lists what changed between them.
 - The search box moved from the header into the toolbar, next to a new Project
   filter. It says which list it searches, shows "3 of 12" while it narrows, and
   on Repeating it matches what the row shows (Active, Paused, "Every day at 9:00").
+- `furmi web --token <value>` is refused together with `-d`/`--detach`: the
+  backgrounded dashboard's command line would carry the secret in `ps` and
+  /proc for as long as it serves. Use `--token-file` (the setup answer already
+  does), or run without `--detach`.
 
 ## 0.5.0
 

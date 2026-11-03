@@ -70,7 +70,7 @@ use self::auth::{
     random_token, same_token,
 };
 use self::bind::bind;
-use self::detach::detach;
+use self::detach::{detach, refuse_token_with_detach};
 use self::routes::route;
 use self::setup::{Serving, print_remote, setup};
 
@@ -125,6 +125,7 @@ fn json_reply(status: u16, body: String) -> Reply {
 
 pub fn serve(home: &Home, args: WebArgs) -> Result<()> {
     home.ensure_initialized()?;
+    refuse_token_with_detach(&args)?;
     let serving = setup(home, &args)?;
     if args.detach {
         return detach(home, false, args, &serving);
@@ -137,6 +138,7 @@ pub fn serve(home: &Home, args: WebArgs) -> Result<()> {
 /// stops when the dashboard does, so there's nothing to clean up.
 pub fn start(home: &Home, args: WebArgs) -> Result<()> {
     home.ensure_initialized()?;
+    refuse_token_with_detach(&args)?;
     let serving = setup(home, &args)?;
     if args.detach {
         return detach(home, true, args, &serving);

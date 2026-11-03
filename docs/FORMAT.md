@@ -241,7 +241,10 @@ when the answer is "this machine only", so it never asks twice; `furmi web
 With `-d`/`--detach` (`furmi start -d`, `furmi web -d`) the dashboard serves
 from its own process group, logging to `web.log` in the data folder, so the
 shell that started it can close: everything the foreground run would print is
-printed before the command returns. `furmi stop` stops it (and the runner,
+printed before the command returns. A token for a non-loopback bind has to
+come from `token_file`/`--token-file` here: `--token` is refused with
+`--detach`, since the backgrounded child would carry the secret in its
+command line. `furmi stop` stops it (and the runner,
 when `furmi start` began one), and `furmi status` says whether one is serving
 and where. For a dashboard that also survives reboots, `furmi service
 systemd|launchd` prints units that do that.
