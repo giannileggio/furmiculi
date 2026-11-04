@@ -96,6 +96,7 @@ pub(super) fn perform_create(home: &Home, cwd_repo: Option<&str>, body: &str) ->
         retries: None,
         retry_delay: None,
         timeout: None,
+        run: None,
     };
     let created = create_task(
         home,
@@ -296,7 +297,7 @@ pub(super) fn task_view_json(home: &Home, id: &str) -> Result<String> {
     // A task that ran before `model_used` was kept still has its answer in the
     // log. Only here, on demand: the tables are pushed over `/api/events` every
     // second, and it won't read a log per row for it.
-    if model_source == "none" {
+    if model_source == "none" && task.spec.run.is_none() {
         let log = home
             .logs()
             .join(format!("{}.{}.log", task.id, task.attempts.max(1)));
@@ -308,7 +309,8 @@ pub(super) fn task_view_json(home: &Home, id: &str) -> Result<String> {
     let view = serde_json::json!({
         "id": task.id,
         // The whole prompt: this is the one place the page shows it.
-        "prompt": task.prompt,
+        "prompt": task.spec.ask(&task.prompt),
+        "command": task.spec.run.is_some(),
         "status": task.status.as_str(),
         "repo": contract_tilde(&eff.repo),
         "branch": task.effective_branch(&config),

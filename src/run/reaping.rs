@@ -137,7 +137,9 @@ pub(super) fn poll_running(
         // same way. Temporary ones (a rate limit, an overloaded provider)
         // are. Only failed attempts are scanned: a successful run's output
         // may mention these phrases (e.g. while working on code that does).
+        // A command task has no provider: its output is only its own.
         if matches!(outcome, Outcome::Failed { .. })
+            && eff.run.is_none()
             && let Some((error, retry)) = provider_error(home, &task)
         {
             outcome = Outcome::Failed {

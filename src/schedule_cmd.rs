@@ -85,8 +85,15 @@ pub struct EditArgs {
 /// The task options a schedule shares with `furmi add`.
 #[derive(clap::Args)]
 struct SpecArgs {
+    /// Run this shell command instead of an agent: a command task, with no
+    /// prompt, agent, model or mode. Runs in the repo itself unless --worktree.
+    #[arg(long, conflicts_with_all = ["text", "prompt", "agent", "model", "mode"])]
+    run: Option<String>,
     #[arg(long)]
     branch: Option<String>,
+    /// Run in a dedicated worktree, for a task that wouldn't by default.
+    #[arg(long, conflicts_with = "no_worktree")]
+    worktree: bool,
     /// Run directly in the repo instead of a dedicated worktree.
     #[arg(long)]
     no_worktree: bool,
@@ -110,7 +117,9 @@ struct SpecArgs {
 
 impl SpecArgs {
     fn is_empty(&self) -> bool {
-        self.branch.is_none()
+        self.run.is_none()
+            && self.branch.is_none()
+            && !self.worktree
             && !self.no_worktree
             && self.agent.is_none()
             && self.model.is_none()
@@ -123,11 +132,14 @@ impl SpecArgs {
 
     /// Overwrites the fields that were given.
     fn apply(self, spec: &mut TaskSpec) {
+        if self.run.is_some() {
+            spec.run = self.run;
+        }
         if self.branch.is_some() {
             spec.branch = self.branch;
         }
-        if self.no_worktree {
-            spec.worktree = Some(false);
+        if let Some(worktree) = cmd::worktree_choice(self.worktree, self.no_worktree) {
+            spec.worktree = Some(worktree);
         }
         if self.agent.is_some() {
             spec.agent = self.agent;
@@ -178,7 +190,11 @@ pub fn run(home: &Home, command: ScheduleCmd) -> Result<()> {
 }
 
 fn add(home: &Home, args: AddArgs) -> Result<()> {
-    let prompt = cmd::read_prompt(args.text.or(args.prompt))?;
+    let prompt = if args.spec.run.is_some() {
+        String::new()
+    } else {
+        cmd::read_prompt(args.text.or(args.prompt))?
+    };
     let repo = match args.repo {
         Some(repo) => repo,
         None => cmd::current_repo()?,

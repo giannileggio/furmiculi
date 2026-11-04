@@ -8,7 +8,7 @@ All state lives under one folder: `$FURMI_HOME`, default `~/.furmiculi`.
   tasks/         queue: one <id>.md per task
   schedules/     recurring task templates: one <id>.md per schedule
   archive/       finished tasks, moved out of tasks/
-  logs/          <id>.<attempt>.log (the agent's output), .exit (exit status)
+  logs/          <id>.<attempt>.log (the task's output), .exit (exit status)
                  and .usage (token usage, if the agent reports it) per run
   worktrees/     <id>/: the git worktree a task runs in (kept until `furmi clean`)
   scratch/       <id>/: the empty folder of a task with no project (`furmi add
@@ -34,7 +34,8 @@ Agents can then queue tasks from inside any repo ("queue a task for this
 repo..."). Once linked, every `furmi init` keeps the links pointing here.
 
 Tasks and schedules are Markdown files with a YAML frontmatter block. The
-**body is the prompt** given to the agent. Unknown frontmatter keys are
+**body is the prompt** given to the agent (a [command task](#command-tasks) has
+no agent and no body). Unknown frontmatter keys are
 errors, so typos don't silently fall back to defaults. Run `furmi validate` after
 editing any file.
 
@@ -69,6 +70,7 @@ Add a regression test.
 | `retries`      | no       | `1`               | Extra attempts after a failure. |
 | `retry_delay`  | no       | `5m`              | Wait between attempts (`30s`, `5m`, `1h`...). |
 | `timeout`      | no       | `2h`              | Per attempt. |
+| `run`          | no       | —                 | A shell command to run instead of an agent — see [Command tasks](#command-tasks). |
 | `scheduled_at` | no       | now               | Don't start before this RFC 3339 time. |
 | `created_by`   | no       | —                 | Free text: `cli`, `agent`, `schedule:<id>`... |
 | `remote`       | no       | —                 | Written by furmi: the repo's `origin` as `host/owner/name` (`github.com/me/app`), so another machine can find its own clone. Absent without an `origin`. |
@@ -84,7 +86,7 @@ Don't edit these by hand. Use `furmi` commands to change the status.
 | `attempts`    | Attempts started so far. |
 | `interruptions` | Attempts cut short from outside (tmux or the machine went away). They are requeued at once and don't count against `retries`, up to 5 times. |
 | `started_at`, `finished_at` | RFC 3339. |
-| `exit_code`   | Headless mode only. |
+| `exit_code`   | Headless mode and command tasks only. |
 | `tmux_window` | Where the task is or was running. |
 | `error`       | Last failure reason. |
 | `tokens_in`, `tokens_out` | Token usage summed over attempts, if the agent's headless mode reports it (built in for `claude`). |
@@ -168,10 +170,50 @@ unattended tasks; the runner logs a warning and the paths it commits.
 
 The agent runs with `FURMI_HOME` and `FURMI_TASK_ID` set.
 
+### Command tasks
+
+A task with `run` runs that shell command instead of an agent. It has no body,
+and `agent`, `model` and `mode` are errors on it (`furmi validate` and `furmi add`
+check this):
+
+```markdown
+---
+id: nightly-backup
+repo: ~/Projects/myapp
+run: ./scripts/backup.sh && echo "backed up"
+timeout: 30m
+---
+```
+
+`furmi add --run "<command>"` writes one. It goes through `sh -c` in the task's
+folder, with `FURMI_HOME` and `FURMI_TASK_ID` set and stdin closed (nobody is
+there to answer, so a command that reads input gets EOF), and is otherwise an
+ordinary headless run: the same logs, `.exit` record, `timeout`, `retries`,
+`retry_delay` and `on_finish`. Exit status 0 is success. A retried attempt runs
+the whole command again, so make it safe to repeat or set `retries: 0`. `run`
+must stay under 100,000 bytes, like a prompt.
+
+What differs from an agent task:
+
+- `worktree` defaults to `false`, whatever `[defaults]` says: the command runs
+  in the `repo` folder itself, which needn't be a git repository, and no branch
+  is switched. As with any `worktree: false` task, only one runs per checkout
+  at a time. Set `worktree: true` (`--worktree`) for a checkout of its own.
+- `on_finish` defaults to `none`, whatever `[defaults]` says, so a default
+  meant for agents doesn't commit your checkout after a backup script. Set it on
+  the task and it applies, with the command as the commit message.
+- Its output is not read for token usage, a model or provider errors. A failed
+  command is always retried while `retries` allow.
+
+`furmi ls` and the dashboard show `command` where an agent's name would be, and
+the command where a prompt would be. The dashboard edits a waiting one's command
+but doesn't offer creating one; use `furmi add --run`.
+
 ## Schedule — `schedules/<id>.md`
 
 A schedule has `id` plus the same `repo`/`branch`/`worktree`/`agent`/`model`/
-`mode`/`on_finish`/`retries`/`retry_delay`/`timeout` fields as a task. It has
+`mode`/`on_finish`/`retries`/`retry_delay`/`timeout`/`run` fields as a task, so
+it can queue [command tasks](#command-tasks) too (no body, then). It has
 no `scheduled_at`, `created_by` or `created_at`: each firing sets those on
 the task it creates. It also adds:
 
@@ -191,6 +233,15 @@ on_finish: pr
 ---
 
 Update dependencies, run the test suite, and fix any breakage.
+```
+
+```markdown
+---
+id: nightly-backup
+cron: "0 3 * * *"
+repo: ~/Projects/myapp
+run: ./scripts/backup.sh
+---
 ```
 
 `furmi schedule add|edit|pause|resume|delete|ls` writes and changes these files

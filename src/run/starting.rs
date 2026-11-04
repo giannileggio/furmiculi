@@ -10,7 +10,7 @@ use chrono::{DateTime, FixedOffset};
 use crate::config::Config;
 use crate::git;
 use crate::home::{Home, contract_tilde};
-use crate::spec::{Effective, Mode};
+use crate::spec::{Effective, Mode, OnFinish};
 use crate::task::{Status, Task};
 use crate::tmux;
 
@@ -117,9 +117,12 @@ fn start(
             task.status = Status::Running;
             task.tmux_window = Some(format!("{session}:{}", task.id));
             task.save(path)?;
-            if !eff.worktree && !eff.repo.starts_with(home.scratch()) {
+            // Running in the checkout is what a command task does by default, so
+            // it only warrants a warning once `on_finish` would commit there.
+            let warn = eff.run.is_none() || eff.on_finish != OnFinish::None;
+            if warn && !eff.worktree && !eff.repo.starts_with(home.scratch()) {
                 log(&format!(
-                    "warning: {} runs directly in {} (worktree: false): the agent edits that \
+                    "warning: {} runs directly in {} (worktree: false): it edits that \
                      checkout and `on_finish` commits everything in it",
                     task.id,
                     contract_tilde(&eff.repo)

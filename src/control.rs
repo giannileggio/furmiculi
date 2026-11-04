@@ -377,6 +377,7 @@ mod tests {
             retries: None,
             retry_delay: None,
             timeout: None,
+            run: None,
         };
         let mut task = Task::new(id.into(), spec, "do it".into());
         task.status = status;

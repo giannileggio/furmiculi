@@ -90,7 +90,8 @@ pub fn task_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
     let eff = task.spec.resolve(&config.defaults);
     Ok(serde_json::json!({
         "id": task.id,
-        "prompt": task.prompt,
+        "prompt": task.spec.ask(&task.prompt),
+        "command": task.spec.run.is_some(),
         "repo": contract_tilde(&eff.repo),
         "on_finish": on_finish_str(eff.on_finish),
         "agent": eff.agent,
@@ -140,7 +141,7 @@ pub fn edit_task(home: &Home, id: &str, edit: TaskEdit) -> Result<()> {
     }
     task.spec.repo = repo;
     task.fill_remote();
-    task.prompt = edit.prompt.trim().to_string();
+    set_ask(&mut task.spec, &mut task.prompt, &edit.prompt);
     match edit.start {
         Start::Keep => {}
         Start::Asap => task.scheduled_at = None,
@@ -149,7 +150,7 @@ pub fn edit_task(home: &Home, id: &str, edit: TaskEdit) -> Result<()> {
     apply_choices(&mut task.spec, edit.on_finish, edit.agent);
 
     let mut problems = task.problems(&config, Some(&path));
-    if task.prompt.is_empty() {
+    if task.prompt.is_empty() && task.spec.run.is_none() {
         problems.push("the prompt is empty".into());
     }
     if !problems.is_empty() {
@@ -162,8 +163,18 @@ fn apply_choices(spec: &mut TaskSpec, on_finish: Option<OnFinish>, agent: Option
     if on_finish.is_some() {
         spec.on_finish = on_finish;
     }
-    if let Some(agent) = agent.filter(|a| !a.trim().is_empty()) {
+    if let Some(agent) = agent.filter(|a| !a.trim().is_empty() && spec.run.is_none()) {
         spec.agent = Some(agent);
+    }
+}
+
+/// Stores what the form's one text box says: a command task's command, else
+/// the prompt.
+fn set_ask(spec: &mut TaskSpec, prompt: &mut String, text: &str) {
+    let text = text.trim().to_string();
+    match &mut spec.run {
+        Some(run) => *run = text,
+        None => *prompt = text,
     }
 }
 
@@ -193,7 +204,8 @@ pub fn schedule_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
     let eff = s.spec.resolve(&config.defaults);
     Ok(serde_json::json!({
         "id": s.id,
-        "prompt": s.prompt,
+        "prompt": s.spec.ask(&s.prompt),
+        "command": s.spec.run.is_some(),
         "cron": s.cron,
         "enabled": s.enabled,
         "repo": contract_tilde(&eff.repo),
@@ -221,6 +233,7 @@ pub(crate) fn blank_spec(repo: PathBuf) -> TaskSpec {
         retries: None,
         retry_delay: None,
         timeout: None,
+        run: None,
     }
 }
 
@@ -238,7 +251,7 @@ pub fn add_schedule(
     let config = load_config(home)?;
     let _lock = home.lock()?;
     let prompt = prompt.trim().to_string();
-    if prompt.is_empty() {
+    if prompt.is_empty() && spec.run.is_none() {
         bail!("the prompt is empty");
     }
     let taken = |id: &str| home.schedules().join(format!("{id}.md")).exists();
@@ -251,7 +264,7 @@ pub fn add_schedule(
             id
         }
         None => {
-            let base = slugify(prompt.lines().next().unwrap_or_default(), 48);
+            let base = slugify(spec.ask(&prompt).lines().next().unwrap_or_default(), 48);
             (1..)
                 .map(|n| {
                     if n == 1 {
@@ -293,7 +306,7 @@ fn check_schedule(schedule: &Schedule, config: &Config, path: &std::path::Path) 
 pub fn edit_schedule(home: &Home, id: &str, edit: ScheduleEdit) -> Result<()> {
     update_schedule(home, id, |s| {
         s.cron = edit.cron.trim().to_string();
-        s.prompt = edit.prompt.trim().to_string();
+        set_ask(&mut s.spec, &mut s.prompt, &edit.prompt);
         s.spec.repo = path_of(&edit.repo)?;
         apply_choices(&mut s.spec, edit.on_finish, edit.agent);
         Ok(())
@@ -390,6 +403,7 @@ mod tests {
             retries: None,
             retry_delay: None,
             timeout: None,
+            run: None,
         }
     }
 
@@ -498,6 +512,42 @@ mod tests {
 
         let saved = Task::load(&home.tasks().join(format!("{}.md", task.id))).unwrap();
         assert_eq!(saved.remote.as_deref(), Some("github.com/me/b"));
+    }
+
+    #[test]
+    fn the_form_edits_a_command_tasks_command_and_gives_it_no_agent() {
+        let (_dir, repo, home, config) = setup();
+        let (task, path) = create_task(
+            &home,
+            &config,
+            NewTask {
+                prompt: String::new(),
+                id: None,
+                spec: TaskSpec {
+                    run: Some("make backup".into()),
+                    ..blank_spec(repo.path().into())
+                },
+                scheduled_at: None,
+                created_by: "test".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(task.id, "make-backup");
+        let detail = task_detail(&home, &task.id).unwrap();
+        assert_eq!(detail["prompt"], "make backup");
+        assert_eq!(detail["command"], true);
+
+        let mut change = edit(repo.path(), " make full ");
+        change.agent = Some("claude".into());
+        edit_task(&home, &task.id, change).unwrap();
+        let saved = Task::load(&path).unwrap();
+        assert_eq!(saved.spec.run.as_deref(), Some("make full"));
+        assert_eq!(saved.prompt, "");
+        assert_eq!(saved.spec.agent, None);
+
+        // Blank is no more a command than it is a prompt.
+        let err = edit_task(&home, &task.id, edit(repo.path(), "  ")).unwrap_err();
+        assert!(err.to_string().contains("`run` is empty"), "{err}");
     }
 
     #[test]

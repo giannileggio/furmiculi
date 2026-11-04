@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{Config, Defaults};
 use crate::git;
 use crate::home::expand_tilde;
+use crate::task::MAX_PROMPT_BYTES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -58,6 +59,10 @@ pub struct TaskSpec {
         skip_serializing_if = "Option::is_none"
     )]
     pub timeout: Option<Duration>,
+    /// A shell command to run instead of an agent, which makes this a command
+    /// task: it has no prompt, agent, model or mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
 }
 
 pub const SPEC_KEYS: &[&str] = &[
@@ -71,6 +76,7 @@ pub const SPEC_KEYS: &[&str] = &[
     "retries",
     "retry_delay",
     "timeout",
+    "run",
 ];
 
 /// A spec with all defaults applied.
@@ -87,21 +93,56 @@ pub struct Effective {
     pub retries: u32,
     pub retry_delay: Duration,
     pub timeout: Duration,
+    /// The shell command of a command task.
+    pub run: Option<String>,
+}
+
+impl Effective {
+    /// What carries the task out, for listings: `command`, else its agent.
+    pub fn runner(&self) -> &str {
+        match (&self.run, &self.agent) {
+            (Some(_), _) => "command",
+            (None, Some(agent)) => agent,
+            (None, None) => "-",
+        }
+    }
 }
 
 impl TaskSpec {
+    /// What the task asks for, given its body: its command, else its prompt.
+    pub fn ask<'a>(&'a self, prompt: &'a str) -> &'a str {
+        self.run.as_deref().unwrap_or(prompt)
+    }
+
+    /// The `[defaults]` that describe an agent's work don't reach a command
+    /// task: it has no agent, and a default `on_finish` would commit whatever
+    /// is in the checkout it runs in by default. Set here, they apply.
     pub fn resolve(&self, defaults: &Defaults) -> Effective {
+        let command = self.run.is_some();
         Effective {
             repo: expand_tilde(&self.repo),
             branch: self.branch.clone(),
-            worktree: self.worktree.unwrap_or(defaults.worktree),
-            agent: self.agent.clone().or_else(|| defaults.agent.clone()),
+            worktree: self.worktree.unwrap_or(!command && defaults.worktree),
+            agent: self
+                .agent
+                .clone()
+                .or_else(|| defaults.agent.clone())
+                .filter(|_| !command),
             model: self.model.clone(),
-            mode: self.mode.unwrap_or(defaults.mode),
-            on_finish: self.on_finish.unwrap_or(defaults.on_finish),
+            mode: if command {
+                Mode::Headless
+            } else {
+                self.mode.unwrap_or(defaults.mode)
+            },
+            on_finish: self.on_finish.unwrap_or(if command {
+                OnFinish::None
+            } else {
+                defaults.on_finish
+            }),
             retries: self.retries.unwrap_or(defaults.retries),
             retry_delay: self.retry_delay.unwrap_or(defaults.retry_delay),
             timeout: self.timeout.unwrap_or(defaults.timeout),
+            run: self.run.clone(),
         }
     }
 
@@ -122,6 +163,11 @@ impl TaskSpec {
                 "repo `{}` is not a git repository, but a branch/worktree was requested",
                 eff.repo.display()
             ));
+        }
+        if let Some(run) = &self.run {
+            out.extend(self.command_problems(run));
+            self.push_common_problems(&eff, &mut out);
+            return out;
         }
         let known = || {
             let names: Vec<_> = config.agents.keys().map(String::as_str).collect();
@@ -145,6 +191,11 @@ impl TaskSpec {
                 }
             }
         }
+        self.push_common_problems(&eff, &mut out);
+        out
+    }
+
+    fn push_common_problems(&self, eff: &Effective, out: &mut Vec<String>) {
         if let Some(b) = &self.branch
             && !git::valid_branch_name(b)
         {
@@ -152,6 +203,30 @@ impl TaskSpec {
         }
         if eff.on_finish == OnFinish::Pr && eff.branch.is_none() && !eff.worktree {
             out.push("on_finish: pr needs a branch or a worktree".into());
+        }
+    }
+
+    fn command_problems(&self, run: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        if run.trim().is_empty() {
+            out.push("`run` is empty: give it the command to run".into());
+        } else if run.len() > MAX_PROMPT_BYTES {
+            out.push(format!(
+                "`run` is {} bytes, over the {MAX_PROMPT_BYTES} a shell can be given as an \
+                 argument: put the commands in a script and run that",
+                run.len()
+            ));
+        }
+        for (field, set) in [
+            ("agent", self.agent.is_some()),
+            ("model", self.model.is_some()),
+            ("mode", self.mode.is_some()),
+        ] {
+            if set {
+                out.push(format!(
+                    "`{field}` can't be set with `run`: a command task runs no agent"
+                ));
+            }
         }
         out
     }
@@ -233,6 +308,7 @@ mod tests {
             retries: Some(5),
             retry_delay: None,
             timeout: None,
+            run: None,
         };
         let d = Defaults {
             agent: Some("codex".into()),
@@ -258,6 +334,7 @@ mod tests {
             retries: None,
             retry_delay: None,
             timeout: None,
+            run: None,
         };
         let mut config = Config::default();
         assert!(spec.problems(&config)[0].starts_with("no agent"));
@@ -276,6 +353,79 @@ mod tests {
         assert!(spec.problems(&config)[0].starts_with("unknown agent"));
     }
 
+    fn command_spec(run: &str) -> TaskSpec {
+        TaskSpec {
+            run: Some(run.into()),
+            ..crate::edit::blank_spec("/tmp".into())
+        }
+    }
+
+    #[test]
+    fn a_command_task_takes_no_agent_defaults_and_stays_in_the_checkout() {
+        let defaults = Defaults {
+            agent: Some("codex".into()),
+            mode: Mode::Interactive,
+            on_finish: OnFinish::Pr,
+            retries: 4,
+            ..Defaults::default()
+        };
+        let eff = command_spec("make").resolve(&defaults);
+        assert_eq!(eff.agent, None);
+        assert_eq!(eff.runner(), "command");
+        assert_eq!(eff.mode, Mode::Headless);
+        assert!(!eff.worktree);
+        assert_eq!(eff.on_finish, OnFinish::None);
+        // What isn't about an agent still falls back.
+        assert_eq!(eff.retries, 4);
+
+        // Asked for by name, they apply.
+        let spec = TaskSpec {
+            worktree: Some(true),
+            on_finish: Some(OnFinish::Commit),
+            ..command_spec("make")
+        };
+        let eff = spec.resolve(&defaults);
+        assert!(eff.worktree);
+        assert_eq!(eff.on_finish, OnFinish::Commit);
+    }
+
+    #[test]
+    fn a_command_task_needs_no_agent_and_rejects_one() {
+        let mut config = Config::default();
+        config.defaults.agent = None;
+        assert_eq!(command_spec("make").problems(&config), Vec::<String>::new());
+
+        for (spec, field) in [
+            (
+                TaskSpec {
+                    agent: Some("codex".into()),
+                    ..command_spec("make")
+                },
+                "`agent`",
+            ),
+            (
+                TaskSpec {
+                    model: Some("m".into()),
+                    ..command_spec("make")
+                },
+                "`model`",
+            ),
+            (
+                TaskSpec {
+                    mode: Some(Mode::Headless),
+                    ..command_spec("make")
+                },
+                "`mode`",
+            ),
+        ] {
+            let problems = spec.problems(&config);
+            assert!(problems.iter().any(|p| p.contains(field)), "{problems:?}");
+        }
+        assert!(command_spec("  ").problems(&config)[0].contains("empty"));
+        let long = "x".repeat(MAX_PROMPT_BYTES + 1);
+        assert!(command_spec(&long).problems(&config)[0].contains("bytes"));
+    }
+
     #[test]
     fn rejects_branch_names_git_would_refuse() {
         let dir = tempfile::tempdir().unwrap();
@@ -291,6 +441,7 @@ mod tests {
             retries: None,
             retry_delay: None,
             timeout: None,
+            run: None,
         };
         let config = Config::default();
         assert!(

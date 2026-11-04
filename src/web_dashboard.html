@@ -564,10 +564,10 @@
       <button id="new-close" aria-label="Close">&times;</button>
     </header>
     <form class="new-task" id="new-form">
-      <label>What should the agent do?
+      <label><span id="f-prompt-label">What should the agent do?</span>
         <textarea id="f-prompt" required autofocus
           placeholder="e.g. Fix the redirect loop after login, and add a test for it"></textarea>
-        <small>Write it like a message to a teammate. Include anything it can't guess.</small>
+        <small id="f-prompt-hint">Write it like a message to a teammate. Include anything it can't guess.</small>
       </label>
       <label id="f-node-wrap" hidden>Which machine?
         <select id="f-node"></select>
@@ -990,7 +990,7 @@ const TASK_COLS = [
   { key: "id", label: "Task", render: idCell },
   { key: "repo", label: "Project", render: r =>
       `<div title="${escapeHtml(r.repo)}">${escapeHtml(baseName(r.repo))}</div><div class="sub mono" title="${escapeHtml(r.branch)}">${escapeHtml(r.branch)}</div>` },
-  { key: "agent", label: "Agent · model", render: r => marked(r.agent) + `<div class="sub">${modelCell(r)}</div>` },
+  { key: "agent", label: "Agent · model", render: r => r.command ? "command" : marked(r.agent) + `<div class="sub">${modelCell(r)}</div>` },
   { key: "when", label: "When", render: whenCell },
   { key: "actions", label: "", render: r => `<div class="actions">${actionButtons(r)}</div>` },
 ];
@@ -1791,12 +1791,15 @@ function renderTaskView(t) {
     t.branch ? ["Branch", `<span class="mono">${escapeHtml(t.branch)}</span>`] : null,
     ["Workspace", t.worktree
       ? `<span class="mono">${escapeHtml(t.worktree)}</span>`
+      : t.command && t.worktree_off
+        ? "the project folder itself (no separate worktree)" +
+          (t.on_finish === "none" ? "" : " — the commit at the end takes everything in it")
       : t.worktree_off
         ? "the project folder itself (no separate worktree) — the agent edits it, " +
           "and the commit at the end takes everything in it"
         : "the project folder itself (no separate worktree)"],
-    ["Agent", t.agent ? marked(t.agent) : "-"],
-    ["Model", t.model === "-"
+    ["Agent", t.command ? "command" : t.agent ? marked(t.agent) : "-"],
+    t.command ? null : ["Model", t.model === "-"
       ? `<span title="${escapeHtml(MODEL_SOURCE_HELP.none)}">-</span>`
       : marked(t.model, { note: inferred(t.model_source) ? MODEL_SOURCE_HELP[t.model_source] : "" })],
     ["When it's done", ON_FINISH_HELP[t.on_finish] || t.on_finish],
@@ -1812,7 +1815,7 @@ function renderTaskView(t) {
   ].filter(Boolean);
 
   taskBody.innerHTML =
-    `<h3>What it asks for</h3>` +
+    `<h3>${t.command ? "The command it runs" : "What it asks for"}</h3>` +
     `<pre class="prompt">${escapeHtml(t.prompt.trim())}</pre>` +
     `<h3>The run</h3>` +
     `<dl>${facts.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${v}</dd>`).join("")}</dl>` +
@@ -2102,12 +2105,18 @@ function openForm(kind, v) {
   $("new-title").textContent = kind === "task" ? `Edit ${v.id}`
     : kind === "schedule" ? "Edit schedule" : "New task";
 
+  // A command task's one text box holds its command, and it has no agent.
+  const command = !!(v && v.command);
+  $("f-prompt-label").textContent = command ? "What command should it run?" : "What should the agent do?";
+  $("f-prompt-hint").textContent = command
+    ? "Run with sh -c in the project's folder."
+    : "Write it like a message to a teammate. Include anything it can't guess.";
   $("f-prompt").value = v ? v.prompt : draftPrompt;
   $("f-repo").value = v ? v.repo : (info.repos[0] || "");
   $("f-repos").innerHTML = info.repos.map(r => `<option value="${escapeHtml(r)}"></option>`).join("");
   $("f-finish").value = v ? v.on_finish : info.on_finish;
 
-  setAgents(info.agents, v && v.agent ? v.agent : info.agent);
+  setAgents(command ? [] : info.agents, v && v.agent ? v.agent : info.agent);
 
   // A new task or schedule can go to another machine, if any are merged in.
   const online = ((lastState && lastState.nodes) || []).filter(n => n.online && n.writable !== false);

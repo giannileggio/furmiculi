@@ -201,6 +201,120 @@ fn add_rejects_an_empty_prompt() {
 }
 
 #[test]
+fn add_run_queues_a_command_task_without_asking_for_a_prompt() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+
+    // Not a git repo, and stdin is closed: neither is a command task's concern.
+    ok(run(furmi(home.path()).args([
+        "add",
+        "--repo",
+        repo.path().to_str().unwrap(),
+        "--run",
+        "make backup && echo done",
+    ])));
+    let file = home.path().join("tasks/make-backup-echo-done.md");
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("run: make backup && echo done"), "{text}");
+    assert!(!text.contains("agent:"), "{text}");
+    assert!(text.trim_end().ends_with("---"), "no body: {text}");
+
+    ok(run(furmi(home.path()).args(["validate"])));
+    let ls = stdout(&ok(run(furmi(home.path()).args(["ls"]))));
+    assert!(ls.lines().nth(1).unwrap().contains("command"), "{ls}");
+}
+
+#[test]
+fn run_refuses_what_only_an_agent_task_has() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    let repo = repo.path().to_str().unwrap();
+
+    for extra in [
+        &["--prompt", "do it"][..],
+        &["a prompt"],
+        &["--agent", "claude"],
+        &["--model", "m"],
+        &["--mode", "headless"],
+    ] {
+        let out = failed(run(furmi(home.path())
+            .args(["add", "--repo", repo, "--run", "make"])
+            .args(extra)));
+        assert!(stderr(&out).contains("cannot be used with"), "{extra:?}");
+    }
+}
+
+#[test]
+fn validate_rejects_a_command_task_with_an_agent_model_mode_or_prompt() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    let write = |extra: &str, body: &str| {
+        let path = home.path().join("tasks/cmd.md");
+        std::fs::write(
+            &path,
+            format!(
+                "---\nid: cmd\nrepo: {}\nrun: make\n{extra}---\n\n{body}\n",
+                repo.path().display()
+            ),
+        )
+        .unwrap();
+    };
+
+    write("", "");
+    ok(run(furmi(home.path()).args(["validate"])));
+    for (extra, body, says) in [
+        ("agent: claude\n", "", "`agent` can't be set"),
+        ("model: m\n", "", "`model` can't be set"),
+        ("mode: headless\n", "", "`mode` can't be set"),
+        ("", "Also a prompt", "has no prompt"),
+    ] {
+        write(extra, body);
+        let out = failed(run(furmi(home.path()).args(["validate"])));
+        assert!(stdout(&out).contains(says), "{}", stdout(&out));
+    }
+}
+
+#[test]
+fn schedule_add_and_edit_take_a_command() {
+    let home = tempfile::tempdir().unwrap();
+    // A git repo: the edit below asks for a worktree.
+    let repo = git_repo();
+    init(home.path());
+
+    ok(run(furmi(home.path()).args([
+        "schedule",
+        "add",
+        "--repo",
+        repo.path().to_str().unwrap(),
+        "--cron",
+        "0 3 * * *",
+        "--id",
+        "backup",
+        "--run",
+        "make backup",
+    ])));
+    let path = home.path().join("schedules/backup.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("run: make backup"), "{text}");
+    ok(run(furmi(home.path()).args(["validate"])));
+
+    ok(run(furmi(home.path()).args([
+        "schedule",
+        "edit",
+        "backup",
+        "--run",
+        "make full",
+        "--worktree",
+    ])));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("run: make full"), "{text}");
+    assert!(text.contains("worktree: true"), "{text}");
+}
+
+#[test]
 fn add_rejects_a_missing_repo() {
     let home = tempfile::tempdir().unwrap();
     init(home.path());

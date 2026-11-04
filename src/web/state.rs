@@ -36,7 +36,11 @@ struct Row {
     when_at: Option<String>,
     repo: String,
     branch: String,
+    /// The agent's name, or `command` for a command task.
     agent: String,
+    /// Whether this is a command task, so the page doesn't mistake `agent` for
+    /// an agent's name (one can be called `command`) or look for a model.
+    command: bool,
     /// The model this task is about: what it actually ran with once it has
     /// run (its own `model_used`, from the agent's output), else the model it
     /// pins, else the one its agent is configured with. `"-"` when nothing
@@ -275,7 +279,13 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
                 };
                 ScheduleRow {
                     id: s.id.clone(),
-                    summary: s.prompt.lines().next().unwrap_or_default().to_string(),
+                    summary: s
+                        .spec
+                        .ask(&s.prompt)
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string(),
                     enabled: s.enabled,
                     cron: s.cron.clone(),
                     next,
@@ -470,8 +480,9 @@ fn to_row(t: &Task, config: &Config) -> Row {
         when_at: at.map(|at| at.to_rfc3339()),
         repo: contract_tilde(&eff.repo),
         branch: t.effective_branch(config).unwrap_or_else(|| "-".into()),
-        agent: eff.agent.clone().unwrap_or_else(|| "-".into()),
-        summary: summary_of(&t.prompt),
+        agent: eff.runner().to_string(),
+        command: eff.run.is_some(),
+        summary: summary_of(t.spec.ask(&t.prompt)),
         model,
         model_source,
         error: t.error.clone().filter(|e| !e.trim().is_empty()),
@@ -554,6 +565,7 @@ mod tests {
             retries: None,
             retry_delay: None,
             timeout: None,
+            run: None,
         };
         Task::new(id.into(), spec, "do it".into())
     }
@@ -620,6 +632,7 @@ mod tests {
             retries: None,
             retry_delay: None,
             timeout: None,
+            run: None,
         };
         let mut task = Task::new("t".into(), spec, "do it".into());
         let config = Config::default();
@@ -643,6 +656,23 @@ mod tests {
     }
 
     #[test]
+    fn a_command_task_shows_as_a_command() {
+        let spec = TaskSpec {
+            run: Some("make backup\nmake clean".into()),
+            ..crate::edit::blank_spec("/tmp".into())
+        };
+        let task = Task::new("t".into(), spec, String::new());
+        let mut config = Config::default();
+        config.defaults.agent = Some("pi".into());
+
+        let row = to_row(&task, &config);
+        assert_eq!(row.agent, "command");
+        assert!(row.command);
+        assert_eq!(row.model, "-");
+        assert_eq!(row.summary, "make backup");
+    }
+
+    #[test]
     fn a_row_carries_the_time_the_page_sorts_on() {
         let spec = TaskSpec {
             repo: "/tmp".into(),
@@ -655,6 +685,7 @@ mod tests {
             retries: None,
             retry_delay: None,
             timeout: None,
+            run: None,
         };
         let mut task = Task::new("t".into(), spec, "do it".into());
         let config = Config::default();
@@ -692,6 +723,7 @@ mod tests {
             retries: None,
             retry_delay: None,
             timeout: None,
+            run: None,
         };
         let mut task = Task::new("t".into(), spec, "do it".into());
         let mut config = Config::default();

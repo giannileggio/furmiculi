@@ -174,7 +174,7 @@ enum Command {
         #[arg(value_enum)]
         manager: doctor::Manager,
     },
-    /// Launch a task's agent in the current process (used by `furmi run`).
+    /// Launch a task's agent or command in the current process (used by `furmi run`).
     #[command(hide = true)]
     Exec {
         id: String,
