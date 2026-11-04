@@ -1582,7 +1582,7 @@ fn web_lists_agents_and_sets_the_default() {
 
     let agents = http_get(port, "/api/agents");
     assert!(agents.starts_with("HTTP/1.1 200"), "{agents}");
-    for name in ["claude", "codex", "gemini", "opencode", "pi"] {
+    for name in ["claude", "codex", "gemini", "hermes", "opencode", "pi"] {
         assert!(agents.contains(&format!("\"name\":\"{name}\"")), "{agents}");
     }
     assert!(agents.contains("npm install -g @openai/codex"), "{agents}");

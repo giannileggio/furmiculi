@@ -23,7 +23,8 @@ task, getting the job done while you're away.
   moves finished tasks to `archive/`.
 
 It works with any CLI coding agent: presets for Claude Code, Codex, Gemini
-CLI, opencode and Pi are built in, and others are a few lines of config.
+CLI, Hermes Agent, opencode and Pi are built in, and others are a few lines of
+config.
 
 <p align="center">
   <picture>
@@ -228,8 +229,9 @@ after you close the dashboard; `furmi stop` or the **stop** link next to
 "runner: on" ends it), and **Setup** lists the coding agents (installed or not,
 with the install command to copy, and **Use this one** to make one the default)
 above what `furmi doctor` finds (tmux, git, task files), with a banner when
-something needs attention. furmi doesn't run the installs for you: they're global
-`npm install -g` commands and each agent needs you to sign in once.
+something needs attention. furmi doesn't run the installs for you: they're
+`npm install -g` (or, for hermes, its own installer) commands and each agent
+needs you to sign in once.
 
 ### Serving your other machines (a tailnet)
 
