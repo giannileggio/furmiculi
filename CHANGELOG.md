@@ -6,6 +6,8 @@ lists what changed between them.
 
 ## Unreleased
 
+## 0.6.0
+
 - The dashboard has a Stats view: how many tasks finished, the success rate,
   the median run time and the tokens agents reported, tasks finished over time,
   and the same numbers per project, agent and model. It follows the Project,
@@ -76,8 +78,6 @@ lists what changed between them.
   session cookie (`Secure` behind an `X-Forwarded-Proto: https` proxy) that
   slides while the page is open and ends on restart, so a rotated token or a
   stolen cookie doesn't outlive its welcome.
-
-## 0.5.1
 
 - `furmi node add <name> <ssh-target> --furmi '<command>'` says how to start
   furmi on a node that isn't plain `furmi` on the PATH, e.g.
