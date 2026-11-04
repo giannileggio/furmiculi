@@ -669,11 +669,10 @@
 <div class="toast" id="toast"></div>
 
 <script>
-// The token: embedded at startup (loopback mode) or taken from `?token=` on
-// the first load of a remote dashboard, so it stays in memory only — never
-// localStorage or a cookie — and is then stripped from the address bar. The
-// server sets its own HttpOnly cookie at the same time, so a reload of the
-// stripped URL still gets the page; from then on the meta tag has the token.
+// The token: embedded at startup (loopback mode) or, on a remote dashboard, the
+// session's own token, filled in per page load. The server has already traded a
+// `?token=` for an HttpOnly session cookie and redirected without it, so it is
+// never in the address bar here; the strip below is only a safety net.
 const TOKEN = (() => {
   const given = new URLSearchParams(location.search).get("token");
   if (given) {
@@ -2347,6 +2346,8 @@ applyUrl();
 openEvents();
 // The "running for" clock ticks on its own, so it stays right between pushes.
 setInterval(tickElapsed, 1000);
+// Keeps a remote dashboard's session cookie alive while the tab sits open.
+setInterval(() => fetch("/logo.png", { cache: "no-store" }).catch(() => {}), 5 * 60 * 1000);
 </script>
 </body>
 </html>

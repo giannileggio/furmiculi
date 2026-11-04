@@ -36,15 +36,29 @@ Open the URL it prints once, with the token in the query string:
 http://box.tailnet.ts.net:7433/?token=<the token in ~/.furmiculi/web-token>
 ```
 
-The server answers with an `HttpOnly`, `SameSite=Strict` cookie holding the
-token, and the page keeps it in memory only (never localStorage) and strips it
-from the URL, then sends it with every request. The cookie is what makes a
-reload — or a bookmark — work after the token is gone from the address bar;
-without it every refresh would be a 401. The per-run token and Origin checks
-POSTs already had stay in place on top of that, so the cookie alone can't
-change anything. It lasts 30 days, re-set on each page load. (The URL with the
-token in it is printed only on a terminal; a unit's journal gets
-`?token=<the token>` instead, so the secret doesn't sit in logs.)
+The server trades the token for a session: it answers with a redirect to the
+same page without `?token=` (so the secret never stays in the address bar, the
+history or a bookmark) and an `HttpOnly`, `SameSite=Strict` cookie,
+`furmi_session`, holding a random session id, not the token. The page is
+served its session's own token to send with every request, not the master one.
+
+A session lasts 15 minutes past its last request; every request, and a
+keepalive the open page sends every 5 minutes, pushes it out again. Close the
+tab and it is gone a quarter of an hour later; open the URL with the token
+again for a new one. Sessions live in the server's memory, so restarting
+`furmi web` ends them all, and that is also how a rotated token file takes
+effect: the old token and every session made with it stop working.
+
+The cookie gets `Secure` when the request arrives over TLS, which the server
+itself doesn't speak: put a TLS-terminating proxy in front (`tailscale serve`,
+Caddy, nginx) that sends `X-Forwarded-Proto: https`. A plain-HTTP bind, which is
+what a LAN or tailnet address without a proxy is, can't have `Secure`; the
+session is still short-lived and `HttpOnly`, but anyone who can watch the
+network can read it. The per-run token and Origin checks POSTs already had stay
+in place on top of that. (Older versions kept the token itself in a 30-day
+cookie; the first page load after upgrading tells the browser to delete it.)
+The URL with the token in it is printed only on a terminal; a unit's journal
+gets `?token=<the token>` instead, so the secret doesn't sit in logs.
 
 Everything stays overridable by hand, and a flag always beats the saved value:
 

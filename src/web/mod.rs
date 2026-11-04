@@ -22,10 +22,10 @@
 //!   For a headless box reached from browsers on other machines (a tailnet).
 //!   Every request — not just POSTs — must carry a shared bearer token
 //!   (`Authorization: Bearer …`). The first page load may pass it as
-//!   `?token=` instead; the server then sets an `HttpOnly` cookie for it, so
-//!   a refresh or a bookmark doesn't have to carry the token in the URL (the
-//!   page itself keeps it in memory only and strips it from the address
-//!   bar). Every `Host` must match one exact `--allowed-host` entry (defeats
+//!   `?token=` instead; the server trades it for a short-lived `HttpOnly`
+//!   session cookie and redirects to the address without it, so the token
+//!   never stays in the history or the bar (and a refresh still works).
+//!   Every `Host` must match one exact `--allowed-host` entry (defeats
 //!   DNS rebinding over the wide bind). The per-run POST token and Origin
 //!   checks stay on top of the bearer gate. A non-loopback bind refuses to
 //!   start without a token and an allowlist.
@@ -66,8 +66,8 @@ use anyhow::{Context, Result};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 use self::auth::{
-    TOKEN_COOKIE, TOKEN_COOKIE_MAX_AGE, TOKEN_HEADER, bearer_ok, hosts_ok, origins_ok,
-    random_token, same_token,
+    Access, SESSION_TTL, Sessions, TOKEN_HEADER, authenticate, forwarded_https, hosts_ok,
+    legacy_cookie_expiry, origins_ok, random_token, same_token, session_cookie, stripped_location,
 };
 use self::bind::bind;
 use self::detach::{detach, refuse_token_with_detach};
@@ -177,7 +177,12 @@ fn run_server(home: &Home, server: Server, serving: &Serving, args: &WebArgs) ->
         .map(|root| contract_tilde(&root));
     let ctx = Ctx {
         home,
-        index: INDEX_HTML.replace("__FURMI_TOKEN__", &token),
+        // A remote page gets its own session's token, filled in per request.
+        index: if serving.remote {
+            INDEX_HTML.to_string()
+        } else {
+            INDEX_HTML.replace("__FURMI_TOKEN__", &token)
+        },
         token,
         cwd_repo,
         remote: serving.remote,
@@ -210,13 +215,14 @@ fn run_server(home: &Home, server: Server, serving: &Serving, args: &WebArgs) ->
         })
     };
     let ctx = &ctx;
+    let sessions = &Sessions::new(SESSION_TTL);
 
     std::thread::scope(|scope| {
         for _ in 0..WORKERS {
             let server = Arc::clone(&server);
             scope.spawn(move || {
                 for request in server.incoming_requests() {
-                    handle(ctx, request, scope);
+                    handle(ctx, sessions, request, scope);
                 }
             });
         }
@@ -317,6 +323,7 @@ pub fn call(home: &Home, method: &str, url: &str, body: &str) -> Result<(u16, St
 
 fn handle<'scope, 'env>(
     ctx: &'env Ctx<'env>,
+    sessions: &Sessions,
     mut request: Request,
     scope: &'scope std::thread::Scope<'scope, 'env>,
 ) {
@@ -333,29 +340,59 @@ fn handle<'scope, 'env>(
     let token = header(TOKEN_HEADER);
     let authorization = header("Authorization");
     let cookie = header("Cookie");
+    let https = forwarded_https(header("X-Forwarded-Proto").as_deref());
     let is_post = *request.method() == Method::Post;
 
+    let access = if host.as_deref().is_some_and(|h| hosts_ok(ctx, h)) {
+        authenticate(
+            ctx,
+            sessions,
+            request.method(),
+            &url,
+            authorization.as_deref(),
+            cookie.as_deref(),
+            Instant::now(),
+        )
+    } else {
+        Access::Denied
+    };
+    // What the browser's cookie jar gets out of this response.
+    let mut set_cookies: Vec<String> = Vec::new();
+    let mut location = None;
+    // The token a POST must carry: the page's own, if it has a session.
+    let page_token = match &access {
+        Access::Session { page_token, .. } => Some(page_token.as_str()),
+        _ => None,
+    };
     let result = if !host.as_deref().is_some_and(|h| hosts_ok(ctx, h)) {
         if ctx.remote {
             reply(403, "text/plain", "forbidden: not an allowed host")
         } else {
             reply(403, "text/plain", "forbidden: not a loopback host")
         }
-    } else if !bearer_ok(
-        ctx,
-        request.method(),
-        &url,
-        authorization.as_deref(),
-        cookie.as_deref(),
-    ) {
+    } else if access == Access::Denied {
         reply(
             401,
             "text/plain",
             "unauthorized: missing or wrong bearer token",
         )
+    } else if access == Access::Exchange {
+        // The token in the address is traded for a session cookie, and the
+        // browser sent on to the same page without it, so it never stays in
+        // the history or the bar.
+        match sessions.open(Instant::now()) {
+            Ok((id, _)) => {
+                set_cookies.push(session_cookie(&id, https));
+                location = Some(stripped_location(&url));
+                reply(303, "text/plain", "")
+            }
+            Err(e) => reply(500, "text/plain", format!("{e:#}")),
+        }
     } else if is_post
         && !(origin.as_deref().is_none_or(|o| origins_ok(ctx, o))
-            && token.as_deref().is_some_and(|t| same_token(t, &ctx.token)))
+            && token.as_deref().is_some_and(|t| {
+                same_token(t, &ctx.token) || page_token.is_some_and(|p| same_token(t, p))
+            }))
     {
         reply(403, "text/plain", "forbidden: missing or wrong token")
     } else if let Some(kind) = (!is_post).then(|| events::kind_of(&url)).flatten() {
@@ -378,7 +415,18 @@ fn handle<'scope, 'env>(
         }
         route(ctx, request.method(), &url, &body)
     };
+    let mut result = result;
     let is_index = result.content_type.starts_with("text/html");
+    if let Access::Session { id, page_token } = &access {
+        // Sliding: every answer re-arms the browser's copy of the cookie.
+        set_cookies.push(session_cookie(id, https));
+        if is_index {
+            result.body = result.body.replace("__FURMI_TOKEN__", page_token);
+        }
+    } else if is_index && ctx.remote {
+        // A bearer-authenticated page load: the master token it already has.
+        result.body = result.body.replace("__FURMI_TOKEN__", &ctx.token);
+    }
     let mut response = match result.asset {
         Some(bytes) => Response::from_data(bytes).with_status_code(result.status),
         None => Response::from_string(result.body).with_status_code(result.status),
@@ -407,20 +455,17 @@ fn handle<'scope, 'env>(
             "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
              img-src 'self'; connect-src 'self'; frame-ancestors 'none'",
         );
-        // Remote bind: the page has the token in memory from `?token=` and
-        // strips it from the address bar, so hand the browser a cookie of its
-        // own — otherwise every reload would be a 401. HttpOnly (the page
-        // never needs it) and Strict (a link from another site doesn't carry
-        // it; a bookmark or a reload does).
+        // The 30-day cookie older versions set held the master token; it
+        // is never read now, so tell the browser to drop it.
         if ctx.remote {
-            add(
-                "Set-Cookie",
-                &format!(
-                    "{TOKEN_COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={TOKEN_COOKIE_MAX_AGE}",
-                    ctx.token
-                ),
-            );
+            set_cookies.push(legacy_cookie_expiry());
         }
+    }
+    for cookie in &set_cookies {
+        add("Set-Cookie", cookie);
+    }
+    if let Some(location) = &location {
+        add("Location", location);
     }
     let _ = request.respond(response);
 }

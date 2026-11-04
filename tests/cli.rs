@@ -745,7 +745,8 @@ fn web_follows_the_web_section_in_config() {
         &[],
         "",
     );
-    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    // The token is traded for a session and the browser sent on without it.
+    assert!(page.starts_with("HTTP/1.1 303"), "{page}");
     let denied = http_at(
         "127.0.0.1",
         port,
@@ -941,44 +942,132 @@ fn web_remote_mode_gates_every_route_on_the_bearer_token() {
         .spawn()
         .unwrap();
 
-    // First load: the token in the URL opens the page, and the page embeds it.
-    let page = http_at(
+    // First load: the token in the URL is traded for a session cookie and a
+    // redirect to the same page without it.
+    let exchange = http_at(
+        "127.0.0.1",
+        port,
+        "GET",
+        &format!("/tasks/w1?x=1&token={TEST_TOKEN}"),
+        "toolnet.example",
+        &[],
+        "",
+    );
+    assert!(exchange.starts_with("HTTP/1.1 303"), "{exchange}");
+    assert!(exchange.ends_with("\r\n\r\n"), "bodyless: {exchange}");
+    assert!(
+        exchange.contains("Location: /tasks/w1?x=1\r\n"),
+        "{exchange}"
+    );
+    assert!(
+        !exchange.contains(&format!("furmi_token={TEST_TOKEN}")),
+        "{exchange}"
+    );
+    assert!(exchange.contains("HttpOnly"), "{exchange}");
+    assert!(exchange.contains("SameSite=Strict"), "{exchange}");
+    assert!(exchange.contains("Max-Age=900"), "{exchange}");
+    assert!(!exchange.contains("Secure"), "{exchange}");
+    let session = exchange
+        .lines()
+        .find_map(|l| l.strip_prefix("Set-Cookie: furmi_session="))
+        .and_then(|v| v.split(';').next())
+        .unwrap_or_else(|| panic!("no session cookie: {exchange}"))
+        .to_string();
+    assert_ne!(session, TEST_TOKEN);
+    let cookie = format!("other=1; furmi_session={session}");
+    // Behind a TLS proxy the cookie is Secure.
+    let proxied = http_at(
         "127.0.0.1",
         port,
         "GET",
         &format!("/?token={TEST_TOKEN}"),
         "toolnet.example",
-        &[],
+        &[("X-Forwarded-Proto", "https")],
+        "",
+    );
+    assert!(proxied.contains("; Secure"), "{proxied}");
+
+    // The redirect target loads on the cookie alone; the page carries the
+    // session's own token, never the master one.
+    let page = http_at(
+        "127.0.0.1",
+        port,
+        "GET",
+        "/tasks/w1?x=1",
+        "toolnet.example",
+        &[("Cookie", &cookie)],
         "",
     );
     assert!(page.starts_with("HTTP/1.1 200"), "{page}");
-    assert!(page.contains(TEST_TOKEN), "{page}");
     assert!(page.contains("Furmiculi"));
-    // ...and the browser is handed a cookie of its own, so a reload of the
-    // now-stripped URL (or a bookmark) gets the page instead of a 401.
+    assert!(!page.contains(TEST_TOKEN), "{page}");
+    // ...which re-arms the cookie, and retires the old 30-day one.
+    assert!(page.contains("Set-Cookie: furmi_session="), "{page}");
     assert!(
-        page.contains(&format!("Set-Cookie: furmi_token={TEST_TOKEN}")),
+        page.contains("furmi_token=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"),
         "{page}"
     );
-    assert!(page.contains("HttpOnly"), "{page}");
-    assert!(page.contains("SameSite=Strict"), "{page}");
-    let reloaded = http_at(
+    let page_token = page
+        .lines()
+        .find_map(|l| l.split("name=\"furmi-token\" content=\"").nth(1))
+        .and_then(|r| r.split('"').next())
+        .unwrap_or_else(|| panic!("no page token: {page}"))
+        .to_string();
+    assert_ne!(page_token, TEST_TOKEN);
+    // The page token authorizes a POST made with the cookie...
+    let origin = format!("http://toolnet.example:{port}");
+    let post = http_at(
+        "127.0.0.1",
+        port,
+        "POST",
+        "/api/runner/stop",
+        "toolnet.example",
+        &[
+            ("Cookie", &cookie),
+            ("Origin", &origin),
+            ("X-Furmi-Token", &page_token),
+        ],
+        "",
+    );
+    assert!(!post.starts_with("HTTP/1.1 40"), "{post}");
+    // ...but not without it, nor with a made-up one.
+    for headers in [
+        vec![("Cookie", cookie.as_str()), ("Origin", origin.as_str())],
+        vec![
+            ("Cookie", cookie.as_str()),
+            ("Origin", origin.as_str()),
+            ("X-Furmi-Token", "made-up"),
+        ],
+    ] {
+        let post = http_at(
+            "127.0.0.1",
+            port,
+            "POST",
+            "/api/runner/stop",
+            "toolnet.example",
+            &headers,
+            "",
+        );
+        assert!(post.starts_with("HTTP/1.1 403"), "{post}");
+    }
+    // The old cookie, holding the master token, opens nothing now.
+    let legacy = http_at(
         "127.0.0.1",
         port,
         "GET",
         "/",
         "toolnet.example",
-        &[("Cookie", &format!("other=1; furmi_token={TEST_TOKEN}"))],
+        &[("Cookie", &format!("furmi_token={TEST_TOKEN}"))],
         "",
     );
-    assert!(reloaded.starts_with("HTTP/1.1 200"), "{reloaded}");
+    assert!(legacy.starts_with("HTTP/1.1 401"), "{legacy}");
     let wrong_cookie = http_at(
         "127.0.0.1",
         port,
         "GET",
         "/",
         "toolnet.example",
-        &[("Cookie", "furmi_token=not-the-token")],
+        &[("Cookie", "furmi_session=not-a-session")],
         "",
     );
     assert!(wrong_cookie.starts_with("HTTP/1.1 401"), "{wrong_cookie}");

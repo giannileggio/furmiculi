@@ -42,6 +42,12 @@ lists what changed between them.
   kept, and `furmi clean --remove-broken` removes those worktrees instead. The
   dry run and the real run agree.
 
+- A remote dashboard no longer keeps the token in a 30-day cookie. Opening
+  `?token=` now redirects to the plain address and sets a 15-minute `HttpOnly`
+  session cookie (`Secure` behind an `X-Forwarded-Proto: https` proxy) that
+  slides while the page is open and ends on restart, so a rotated token or a
+  stolen cookie doesn't outlive its welcome.
+
 ## 0.5.1
 
 - `furmi node add <name> <ssh-target> --furmi '<command>'` says how to start
