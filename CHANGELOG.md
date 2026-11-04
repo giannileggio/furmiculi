@@ -6,6 +6,11 @@ lists what changed between them.
 
 ## Unreleased
 
+- The dashboard has a Stats view: how many tasks finished, the success rate,
+  the median run time and the tokens agents reported, tasks finished over time,
+  and the same numbers per project, agent and model. It follows the Project,
+  Time and search filters, and covers every node.
+
 - Notifications when a task ends, by ntfy and Telegram: `[notify]` in
   `config.toml` picks the endings (`finished`, `failed`, `needs_review`) and the
   services, and nothing is sent unless it's set. Sending runs in a detached

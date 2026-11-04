@@ -24,6 +24,8 @@
     --failed: #b3261e;
     --cancelled: #7a7a7d;
     --review: #9a5b00;
+    --chart-done: #2a78d6;
+    --chart-failed: #b3261e;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -41,6 +43,8 @@
       --failed: #f2877f;
       --cancelled: #98989b;
       --review: #e0a85a;
+      --chart-done: #3987e5;
+      --chart-failed: #e5645b;
     }
   }
   /* A choice made on the page overrules the system. Same palette as the media
@@ -60,6 +64,8 @@
     --failed: #f2877f;
     --cancelled: #98989b;
     --review: #e0a85a;
+    --chart-done: #3987e5;
+    --chart-failed: #e5645b;
   }
   * { box-sizing: border-box; }
   body {
@@ -413,6 +419,52 @@
   ul.keys { list-style: none; margin: 0; padding: 12px 16px; display: grid; grid-template-columns: max-content 1fr; gap: 9px 18px; font-size: 13px; }
   ul.keys .k { display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
 
+  /* ---- The Stats view ---- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .tile { border: 1px solid var(--border); padding: 14px 16px; min-width: 0; }
+  .tile .name { color: var(--muted); font-size: 13px; }
+  .tile .value { font-size: 30px; line-height: 1.2; font-weight: 600; margin-top: 2px; }
+  .tile .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .stat-block { margin-top: 28px; }
+  .stat-block h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 12px; color: var(--muted); font-size: 12.5px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+  .s-done { background: var(--chart-done); }
+  .s-failed { background: var(--chart-failed); }
+  .s-other { background: var(--cancelled); }
+  /* The left margin is where the y-axis numbers sit. */
+  .plot { position: relative; height: 200px; margin-left: 34px; }
+  .plot .tick {
+    position: absolute; left: 0; right: 0; border-top: 1px solid rgba(127,127,127,.18);
+  }
+  .plot .tick span {
+    position: absolute; right: 100%; top: -9px; padding-right: 8px;
+    color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums;
+  }
+  .cols { position: absolute; inset: 0; display: flex; gap: 2px; }
+  /* The whole height of its slot, so a short bar is as easy to hover as a tall one. */
+  .col { flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end; justify-content: center; }
+  .col:hover, .col:focus-visible { background: rgba(127,127,127,.12); outline: none; }
+  .stack {
+    width: 100%; max-width: 24px; display: flex; flex-direction: column-reverse; gap: 2px;
+    border-radius: 4px 4px 0 0; overflow: hidden;
+  }
+  .stack i { display: block; min-height: 2px; flex-basis: 0; }
+  .axis { display: flex; justify-content: space-between; margin: 6px 0 0 34px; color: var(--muted); font-size: 11.5px; }
+  #stats-tip {
+    position: fixed; z-index: 30; pointer-events: none; white-space: pre-line;
+    padding: 6px 10px; font-size: 12.5px; background: var(--surface); color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .stat-table .col-count { width: 26%; }
+  .stat-table .col-num { width: 13%; }
+  .stat-table .num { font-variant-numeric: tabular-nums; }
+  .stat-table td.who { white-space: nowrap; text-overflow: ellipsis; }
+  .share { display: flex; align-items: center; gap: 10px; }
+  .share .track { flex: 1; height: 8px; min-width: 30px; }
+  .share .track i { display: block; height: 100%; background: var(--chart-done); border-radius: 0 4px 4px 0; }
+  .share .num { min-width: 3ch; text-align: right; }
+
   /* Narrow screens: a table is a card per task, each cell labelled where the
      header would have been. A dashboard gets read on a phone, in bed. */
   @media (max-width: 1100px) {
@@ -537,9 +589,11 @@
   <section class="panel" id="panel-running"></section>
   <section class="panel" id="panel-archive"></section>
   <section class="panel" id="panel-schedules"></section>
+  <section class="panel" id="panel-stats"></section>
 </main>
 </div>
 </div>
+<div id="stats-tip" role="tooltip" hidden></div>
 
 <div class="overlay" id="logs-overlay">
   <div class="modal">
@@ -662,7 +716,7 @@
     </header>
     <ul class="keys">
       <li class="k"><kbd>/</kbd></li><li>Search the tables</li>
-      <li class="k"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd></li><li>Waiting, Working, Finished, Repeating</li>
+      <li class="k"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd></li><li>Waiting, Working, Finished, Repeating, Stats</li>
       <li class="k"><kbd>k</kbd><kbd>j</kbd></li><li>Move up and down the table</li>
       <li class="k"><kbd>Enter</kbd></li><li>Open the highlighted task</li>
       <li class="k"><kbd>o</kbd></li><li>Show what the agent printed</li>
@@ -759,6 +813,8 @@ const VIEWS = [
     desc: "Done, failed and cancelled tasks." },
   { id: "repeating", tab: "schedules", label: "Repeating", count: s => s.schedules.length,
     desc: "Schedules that queue a task again each time they come round." },
+  { id: "stats", tab: "stats", label: "Stats",
+    desc: "How the finished tasks went." },
 ];
 // The status the tables are narrowed to (a clicked view), or null for
 // "everything".
@@ -1262,16 +1318,202 @@ function draw(state) {
     `<div class="empty">${query ? `Nothing matches “${escapeHtml(query)}”.` : "No repeating tasks yet."}` +
       `${query ? "" : ` A schedule is a Markdown file in <code>${escapeHtml(state.home)}/schedules</code>; see the README.`}` +
       `</div>`, false, "schedule");
+  // The Stats view answers to the same toolbar as the finished list.
+  const statRows = state.archive.filter(inWindow)
+    .filter(r => !project || r.repo === project)
+    .filter(r => matches(r, TASK_SEARCH_FIELDS));
+  document.getElementById("stats-tip").hidden = true; // what it pointed at is about to be redrawn
+  // Only while it's open: a state push shouldn't add this up for nobody.
+  document.getElementById("panel-stats").innerHTML = activeTab() !== "stats" ? ""
+    : statRows.length > 0 ? statsPanel(statRows)
+    : emptyFor(`<div class="empty">Nothing has finished yet.</div>`);
   // Say what the box is searching, and how much of it is left.
   const tab = activeTab();
-  const noun = { queue: "waiting tasks", running: "tasks at work", archive: "finished tasks", schedules: "repeating tasks" }[tab];
+  const noun = { queue: "waiting tasks", running: "tasks at work", archive: "finished tasks", schedules: "repeating tasks", stats: "finished tasks" }[tab];
   searchEl.placeholder = `Search ${noun}`;
   searchEl.setAttribute("aria-label", searchEl.placeholder);
-  const total = state[tab === "schedules" ? "schedules" : tab].length;
-  const left = document.querySelectorAll(`#panel-${tab} tbody tr[data-kind]`).length;
+  const total = state[tab === "stats" ? "archive" : tab].length;
+  const left = tab === "stats" ? statRows.length
+    : document.querySelectorAll(`#panel-${tab} tbody tr[data-kind]`).length;
   document.getElementById("toolbar-count").textContent = query ? `${left} of ${total}` : "";
   tickElapsed();
   syncUrl();
+}
+
+// ---- The Stats view
+//
+// Worked out here from the rows `/api/state` already sends, which is what makes
+// it cover every node and follow the toolbar and live updates like the lists do.
+
+// What a set of finished tasks adds up to.
+function tally(rows) {
+  const done = rows.filter(r => r.status === "done").length;
+  const failed = rows.filter(r => r.status === "failed").length;
+  const runs = rows.map(r => r.ran_secs).filter(n => n != null).sort((a, b) => a - b);
+  const mid = runs.length >> 1;
+  const reported = rows.filter(r => r.tokens_in != null || r.tokens_out != null);
+  const tokensIn = reported.reduce((sum, r) => sum + (r.tokens_in || 0), 0);
+  const tokensOut = reported.reduce((sum, r) => sum + (r.tokens_out || 0), 0);
+  return {
+    n: rows.length, done, failed, other: rows.length - done - failed,
+    // The middle one, not the mean: one forgotten interactive session would
+    // otherwise be most of the answer.
+    medianSecs: runs.length === 0 ? null : runs.length % 2 ? runs[mid] : (runs[mid - 1] + runs[mid]) / 2,
+    tokensIn, tokensOut, reported: reported.length,
+  };
+}
+
+function fmtCompact(n) {
+  if (n < 1_000) return String(n);
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(n < 10_000 ? 1 : 0)}K`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
+  return `${(n / 1_000_000_000).toFixed(1)}B`;
+}
+
+function fmtTaskCount(n) {
+  return `${n} task${n === 1 ? "" : "s"}`;
+}
+
+function statTile(name, value, sub) {
+  return `<div class="tile"><div class="name">${escapeHtml(name)}</div>` +
+    `<div class="value">${escapeHtml(value)}</div><div class="sub">${escapeHtml(sub)}</div></div>`;
+}
+
+// Bar widths that keep any window to a readable number of bars.
+const MINUTE = 60_000, HOUR = 3_600_000, DAY = 86_400_000;
+function bucketStarts(rows) {
+  const now = Date.now();
+  const times = rows.map(r => Date.parse(r.when_at || "")).filter(t => !Number.isNaN(t));
+  const ms = agePreset(age).ms;
+  const from = ms ? now - ms : times.reduce((a, b) => Math.min(a, b), now);
+  const span = now - from;
+  const starts = [];
+  // Minutes and hours are steps of real time. Days and weeks go by the calendar
+  // instead, so a daylight-saving change doesn't shift the bars.
+  if (span <= 2 * DAY) {
+    const step = span <= 2 * HOUR ? 5 * MINUTE : HOUR;
+    const first = new Date(from);
+    if (step === HOUR) first.setMinutes(0, 0, 0);
+    else first.setMinutes(first.getMinutes() - first.getMinutes() % 5, 0, 0);
+    for (let t = first.getTime(); t <= now; t += step) starts.push(t);
+    return { starts, label: { hour: "2-digit", minute: "2-digit" }, unit: step === HOUR ? "hour" : "5 minutes" };
+  }
+  const weeks = span > 62 * DAY;
+  const first = new Date(from);
+  const back = weeks ? (first.getDay() + 6) % 7 : 0; // weeks start on Monday
+  for (let d = new Date(first.getFullYear(), first.getMonth(), first.getDate() - back);
+       d.getTime() <= now;
+       d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + (weeks ? 7 : 1))) {
+    starts.push(d.getTime());
+  }
+  return { starts, label: { month: "short", day: "numeric" }, unit: weeks ? "week" : "day" };
+}
+
+// The top of the y axis and the lines up to it: round numbers, at most four.
+function axisTicks(max) {
+  const size = 10 ** Math.floor(Math.log10(Math.max(max, 1)));
+  const step = [1, 2, 5, 10].map(m => m * size).find(s => s >= max / 4 && s >= 1);
+  const ticks = [];
+  for (let t = 0; t < max; t += step) ticks.push(t);
+  ticks.push(ticks[ticks.length - 1] + step);
+  return ticks;
+}
+
+function statsChart(rows) {
+  const { starts, label, unit } = bucketStarts(rows);
+  const groups = starts.map(() => []);
+  for (const r of rows) {
+    const at = Date.parse(r.when_at || "");
+    const i = Number.isNaN(at) ? -1 : starts.findLastIndex(s => s <= at);
+    if (i >= 0) groups[i].push(r);
+  }
+  const ticks = axisTicks(Math.max(...groups.map(g => g.length)));
+  const top = ticks[ticks.length - 1];
+  const fmt = t => new Date(t).toLocaleString(undefined, label);
+  const cols = groups.map((g, i) => {
+    const t = tally(g);
+    const parts = [["done", t.done], ["failed", t.failed], ["other", t.other]].filter(([, n]) => n > 0);
+    const tip = [fmt(starts[i]) + (unit === "week" ? " (week)" : ""), fmtTaskCount(t.n),
+      ...parts.map(([name, n]) => `${n} ${name}`)].join("\n");
+    return `<div class="col" tabindex="0" data-tip="${escapeHtml(tip)}" aria-label="${escapeHtml(tip.replaceAll("\n", ", "))}">` +
+      (t.n === 0 ? "" : `<div class="stack" style="height:${t.n / top * 100}%">` +
+        parts.map(([name, n]) => `<i class="s-${name}" style="flex-grow:${n}"></i>`).join("") + "</div>") + "</div>";
+  }).join("");
+  const anyOther = rows.some(r => r.status !== "done" && r.status !== "failed");
+  return `<div class="legend"><span><i class="s-done"></i>Done</span><span><i class="s-failed"></i>Failed</span>` +
+    `${anyOther ? `<span><i class="s-other"></i>Cancelled or needs review</span>` : ""}</div>` +
+    `<div class="plot" role="group" aria-label="Tasks finished per ${unit}">` +
+    ticks.map(t => `<div class="tick" style="bottom:${t / top * 100}%"><span>${t}</span></div>`).join("") +
+    `<div class="cols">${cols}</div></div>` +
+    `<div class="axis"><span>${escapeHtml(fmt(starts[0]))}</span><span>${escapeHtml(fmt(starts[starts.length - 1]))}</span></div>`;
+}
+
+// One table of how each project, agent or model did, the busiest first.
+function statsTable(title, heading, rows, keyOf, nameOf = k => k) {
+  const groups = new Map();
+  for (const r of rows) {
+    const key = keyOf(r);
+    groups.set(key, [...(groups.get(key) || []), r]);
+  }
+  const tallies = [...groups].map(([key, g]) => [key, tally(g)])
+    .sort((a, b) => b[1].n - a[1].n || String(a[0]).localeCompare(String(b[0])));
+  const most = tallies[0][1].n;
+  return `<div class="stat-block"><h2>${escapeHtml(title)}</h2><table class="stat-table"><thead><tr>` +
+    `<th>${escapeHtml(heading)}</th><th class="col-count">Tasks</th><th class="col-num">Failed</th>` +
+    `<th class="col-num">Median time</th><th class="col-num">Tokens</th></tr></thead><tbody>` +
+    tallies.map(([key, t]) => `<tr><td class="who" data-label="${escapeHtml(heading)}" title="${escapeHtml(key)}"><span>${escapeHtml(nameOf(key))}</span></td>` +
+      `<td data-label="Tasks"><div class="share"><span class="num">${t.n}</span>` +
+      `<span class="track"><i style="width:${t.n / most * 100}%"></i></span></div></td>` +
+      `<td class="num" data-label="Failed"><span>${t.failed}</span></td>` +
+      `<td class="num" data-label="Median time"><span>${t.medianSecs === null ? "-" : escapeHtml(fmtElapsed(t.medianSecs * 1000))}</span></td>` +
+      `<td class="num" data-label="Tokens"><span>${t.reported ? fmtCompact(t.tokensIn + t.tokensOut) : "-"}</span></td></tr>`).join("") +
+    "</tbody></table></div>";
+}
+
+function statsPanel(rows) {
+  const t = tally(rows);
+  const rated = t.done + t.failed;
+  const otherNote = t.other ? `, ${t.other} other` : "";
+  const tiles = [
+    statTile("Finished", String(t.n), `${t.done} done, ${t.failed} failed${otherNote}`),
+    statTile("Success rate", rated ? `${Math.round(t.done / rated * 100)}%` : "-",
+      "Done out of done and failed"),
+    statTile("Median run time", t.medianSecs === null ? "-" : fmtElapsed(t.medianSecs * 1000),
+      "Each task's latest attempt"),
+    statTile("Tokens", t.reported ? fmtCompact(t.tokensIn + t.tokensOut) : "-",
+      t.reported ? `${fmtCompact(t.tokensIn)} in, ${fmtCompact(t.tokensOut)} out. Reported by ${t.reported} of ${t.n}`
+        : "No agent reported any"),
+  ].join("");
+  // Only a model the agent named or the task pinned counts: the agent's
+  // configured default today says nothing about what an old task ran with.
+  const modelOf = r => (r.model_source === "used" || r.model_source === "task") ? r.model : "Not reported";
+  const agentOf = r => (r.agent && r.agent !== "-") ? r.agent : "Not set";
+  const models = rows.filter(r => !r.command); // a command task has no model to report
+  return `<div class="tiles">${tiles}</div>` +
+    `<div class="stat-block"><h2>Finished over time</h2>${statsChart(rows)}</div>` +
+    (project ? "" : statsTable("By project", "Project", rows, r => r.repo, baseName)) +
+    statsTable("By agent", "Agent", rows, agentOf) +
+    (models.length ? statsTable("By model", "Model", models, modelOf) : "");
+}
+
+// A bar's numbers, on hover, focus or tap.
+{
+  const panel = document.getElementById("panel-stats");
+  const tip = document.getElementById("stats-tip");
+  const show = (e) => {
+    const col = e.target.closest("[data-tip]");
+    tip.hidden = !col;
+    if (!col) return;
+    tip.textContent = col.dataset.tip;
+    const box = col.getBoundingClientRect();
+    const left = Math.min(box.left + box.width / 2, window.innerWidth - tip.offsetWidth - 8);
+    tip.style.left = `${Math.max(8, left)}px`;
+    tip.style.top = `${Math.max(8, box.bottom - col.offsetHeight / 2 - tip.offsetHeight)}px`;
+  };
+  panel.addEventListener("pointerover", show);
+  panel.addEventListener("focusin", show);
+  panel.addEventListener("pointerleave", () => { tip.hidden = true; });
+  panel.addEventListener("focusout", () => { tip.hidden = true; });
 }
 
 // What a search looks through, per kind of row.
@@ -1318,10 +1560,10 @@ function drawSide(state) {
     archive: inProject(state.archive), schedules: inProject(state.schedules),
   };
   document.getElementById("views").innerHTML = VIEWS.map(v => {
-    const n = v.count(scoped);
+    const n = v.count ? v.count(scoped) : null; // Stats is not a list of anything
     return `<button data-view="${v.id}" class="${v === view ? "active" : ""}${v.alert && n ? " alert" : ""}"
       aria-pressed="${v === view}"><span class="label">${escapeHtml(v.label)}</span>` +
-      `<span class="count">${n}</span></button>`;
+      `${n === null ? "" : `<span class="count">${n}</span>`}</button>`;
   }).join("");
   document.getElementById("view-title").textContent = view.label;
   document.getElementById("view-desc").textContent = view.desc + (project ? ` Showing ${baseName(project)}.` : "");
@@ -1652,10 +1894,15 @@ function allTasks(state) {
   return [...state.queue, ...state.running, ...state.archive];
 }
 
+// Only a list of tasks has rows to tick.
+function hasTicks() {
+  return !["schedules", "stats"].includes(activeTab());
+}
+
 function drawBulk(state) {
   const toggle = document.getElementById("select-toggle");
   const tasks = allTasks(state);
-  toggle.hidden = activeTab() === "schedules" || tasks.length === 0;
+  toggle.hidden = !hasTicks() || tasks.length === 0;
   toggle.classList.toggle("on", selecting);
   toggle.textContent = selecting ? "Done selecting" : "Select";
   toggle.setAttribute("aria-pressed", selecting);
@@ -1664,7 +1911,7 @@ function drawBulk(state) {
   for (const id of picked) if (!ids.has(id)) picked.delete(id); // it moved on, or is gone
 
   const bar = document.getElementById("bulk");
-  bar.hidden = !selecting || activeTab() === "schedules";
+  bar.hidden = !selecting || !hasTicks();
   if (bar.hidden) return;
   const rows = tasks.filter(r => picked.has(r.id));
   const common = BULK_ACTIONS.filter(a => rows.length > 0
@@ -2198,7 +2445,7 @@ newOverlay.addEventListener("click", (e) => { if (e.target === newOverlay) close
 // where those keys are just letters.
 
 const keysOverlay = document.getElementById("keys-overlay");
-const KEYS_TABS = ["queue", "running", "archive", "schedules"];
+const KEYS_TABS = ["queue", "running", "archive", "schedules", "stats"];
 
 function typing() {
   const el = document.activeElement;
@@ -2258,7 +2505,7 @@ document.addEventListener("keydown", (e) => {
     keysOverlay.classList.toggle("active");
   } else if (e.key === "n") {
     openForm("new");
-  } else if (e.key === "x" && activeTab() !== "schedules") {
+  } else if (e.key === "x" && hasTicks()) {
     setSelecting(!selecting);
   } else if (tab) {
     filter = null;

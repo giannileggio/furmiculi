@@ -291,7 +291,7 @@ export function tab(page: Page, name: Tab) {
 }
 
 /** A sidebar entry by its own name, for the ones that narrow a tab to a status. */
-export function view(page: Page, name: "waiting" | "working" | "review" | "failed" | "finished" | "repeating") {
+export function view(page: Page, name: "waiting" | "working" | "review" | "failed" | "finished" | "repeating" | "stats") {
   return page.locator(`#views button[data-view="${name}"]`);
 }
 

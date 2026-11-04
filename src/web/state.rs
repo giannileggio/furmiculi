@@ -28,12 +28,16 @@ struct Row {
     /// "as soon as possible"). The page sorts and time-filters on this and
     /// ticks the "running for" clock from it, since the printed form has
     /// minute precision and its own idea of "asap".
-    ///
-    /// Token usage deliberately isn't here: it only exists for completed
-    /// headless runs of agents that print JSON, so a column of it would be
-    /// mostly dashes and easy to mistake for accounting. `furmi ls` and the task
-    /// files still have it.
     when_at: Option<String>,
+    /// How long its latest attempt ran, for the Stats view. `started_at` moves
+    /// with each attempt, so this leaves out earlier attempts and retry delays.
+    ran_secs: Option<i64>,
+    /// Token usage, for the Stats view's totals, which say how many tasks
+    /// reported any. It only exists for completed headless runs of agents that
+    /// print JSON, so no table has a column of it: that would be mostly dashes
+    /// and easy to mistake for accounting.
+    tokens_in: Option<u64>,
+    tokens_out: Option<u64>,
     repo: String,
     branch: String,
     /// The agent's name, or `command` for a command task.
@@ -478,6 +482,13 @@ fn to_row(t: &Task, config: &Config) -> Row {
         status: t.status.as_str(),
         when: at.map(fmt_time).unwrap_or_else(|| "asap".into()),
         when_at: at.map(|at| at.to_rfc3339()),
+        ran_secs: t
+            .started_at
+            .zip(t.finished_at)
+            .map(|(start, end)| (end - start).num_seconds())
+            .filter(|secs| *secs >= 0),
+        tokens_in: t.tokens_in,
+        tokens_out: t.tokens_out,
         repo: contract_tilde(&eff.repo),
         branch: t.effective_branch(config).unwrap_or_else(|| "-".into()),
         agent: eff.runner().to_string(),
@@ -617,6 +628,31 @@ mod tests {
         let state: serde_json::Value =
             serde_json::from_str(&state_json(&home, None).unwrap()).unwrap();
         assert_eq!(state["version"], crate::version::CURRENT);
+    }
+
+    #[test]
+    fn a_row_says_how_long_its_task_ran_and_what_it_used() {
+        let spec = crate::edit::blank_spec("/tmp".into());
+        let config = Config::default();
+        let mut task = Task::new("t".into(), spec, "do it".into());
+        let row = to_row(&task, &config);
+        assert_eq!(
+            (row.ran_secs, row.tokens_in, row.tokens_out),
+            (None, None, None)
+        );
+
+        let at = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap();
+        task.started_at = Some(at("2026-11-04T10:00:00+01:00"));
+        task.finished_at = Some(at("2026-11-04T10:01:30+01:00"));
+        task.tokens_in = Some(1200);
+        task.tokens_out = Some(340);
+        let row = to_row(&task, &config);
+        assert_eq!(row.ran_secs, Some(90));
+        assert_eq!((row.tokens_in, row.tokens_out), (Some(1200), Some(340)));
+
+        // A clock that jumped back says nothing about how long it ran.
+        task.finished_at = Some(at("2026-11-04T09:59:00+01:00"));
+        assert_eq!(to_row(&task, &config).ran_secs, None);
     }
 
     #[test]
