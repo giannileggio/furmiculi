@@ -6,6 +6,9 @@ lists what changed between them.
 
 ## Unreleased
 
+- A `hermes` agent preset (`hermes -z {prompt}` headless), alongside the other
+  built-in agents. It ships without an auto-approve flag, like the rest.
+
 ## 0.5.1
 
 - `furmi node add <name> <ssh-target> --furmi '<command>'` says how to start
