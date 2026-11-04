@@ -506,7 +506,7 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
 
 /// The given prompt, else the one piped on stdin, else (on a terminal) the
 /// one the user types.
-fn read_prompt(given: Option<String>) -> Result<String> {
+pub(crate) fn read_prompt(given: Option<String>) -> Result<String> {
     if let Some(prompt) = given {
         return Ok(prompt);
     }
@@ -523,7 +523,7 @@ fn read_prompt(given: Option<String>) -> Result<String> {
 }
 
 /// The git repo the user is standing in, for `furmi add` without `--repo`.
-fn current_repo() -> Result<PathBuf> {
+pub(crate) fn current_repo() -> Result<PathBuf> {
     let cwd = std::env::current_dir().context("finding the current folder")?;
     crate::git::repo_root(&cwd).map_err(|_| {
         anyhow::anyhow!(

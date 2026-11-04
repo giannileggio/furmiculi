@@ -6,6 +6,12 @@ lists what changed between them.
 
 ## Unreleased
 
+- `furmi schedule` manages schedules from the terminal: `ls`, `add` (the
+  options of `furmi add`, plus `--cron` and `--allow-overlap`), `edit <id>`,
+  `pause <id>`, `resume <id>` and `delete <id>`. It writes the files the
+  dashboard does, and the furmi-tasks skill now uses it instead of hand-written
+  schedule files.
+
 - `furmi pause` holds the runner without stopping it: nothing new starts and no
   schedule fires, while running tasks carry on and are still finished.
   `furmi resume` undoes it. It lasts across runner restarts, shows in

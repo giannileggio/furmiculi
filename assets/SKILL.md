@@ -100,37 +100,35 @@ again.
 
 ## 4. Recurring work: schedules
 
-For "every night", "each Monday" and the like, write
-`{home}/schedules/<id>.md` yourself. Use `id` plus the fields from step 1
-(`repo`, `branch`, `agent`, `model`, ...), plus a quoted 5-field `cron` in
-local time. Schedules have no `created_by`/`created_at`/`scheduled_at`: each
-firing sets those on the task it creates. The body is the prompt, written as
-in step 2.
+For "every night", "each Monday" and the like, create a schedule with
+`{furmi} schedule add`. It takes the same options as `{furmi} add` (`--repo`,
+`--branch`, `--no-worktree`, `--agent`, `--model`, `--mode`, `--on-finish`,
+`--retries`, `--retry-delay`, `--timeout`, `--id`, `--prompt` or the prompt on
+stdin) plus a required `--cron`, a 5-field expression in local time, and
+`--allow-overlap`. Schedules have no `--created-by`, `--at`, `--in` or
+`--scratch`: each firing sets those on the task it creates. The prompt is
+written as in step 2.
 
-```markdown
----
-id: weekly-deps
-cron: "0 6 * * 1"
-repo: ~/Projects/myapp
-on_finish: pr
----
-
+```sh
+{furmi} schedule add --repo ~/Projects/myapp --cron "0 6 * * 1" --on-finish pr <<'EOF'
 Update dependencies to their latest compatible versions...
+EOF
 ```
 
-Then run `{furmi} validate {home}/schedules/<id>.md` and fix anything it
-reports. Use an id that doesn't already exist in `{home}/schedules/`. The
-schedule first fires at the next matching time after the runner sees it
-(`{furmi} run` or `{furmi} start`). A firing is skipped while the previous
-task from the same schedule is still queued or running; add
-`allow_overlap: true` only if the user wants runs to pile up.
+It validates like `{furmi} validate`, refuses an id that is taken, and prints the
+path of the new file. The schedule first fires at the next matching time after
+the runner sees it (`{furmi} run` or `{furmi} start`). A firing is skipped while the
+previous task from the same schedule is still queued or running; add
+`--allow-overlap` only if the user wants runs to pile up. Don't write files in
+`{home}/schedules/` by hand.
 
 ## 5. Changing or dropping queued work
 
 - Check the current state with `{furmi} ls` (or read the file) first.
-- **Pending tasks** and **schedules**: you may edit the prompt and the fields
-  from step 1, then run `{furmi} validate <file>`. To pause a schedule, set
-  `enabled: false`.
+- **Pending tasks**: edit the file and run
+  `{furmi} validate <file>`. For a schedule use `{furmi} schedule edit <id>` with
+  just the options to change (`--cron`, `--prompt`, ...), `{furmi} schedule pause <id>`,
+  `resume <id>` and `delete <id>`; `{furmi} schedule ls` lists them.
 - Change a status only with these commands, and confirm with the user first:
   `{furmi} cancel <id>` (pending or running), `{furmi} retry <id>` (failed,
   cancelled or needs_review: requeues it), `{furmi} done <id>` (running,

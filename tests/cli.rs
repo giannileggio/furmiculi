@@ -1935,3 +1935,110 @@ fn a_node_is_reached_over_ssh_and_only_saved_when_it_answers() {
     let out = ok(run(via(hub.path(), &ssh).args(["node", "ls"])));
     assert!(!stdout(&out).contains("old"), "{}", stdout(&out));
 }
+
+fn schedule(home: &Path, args: &[&str]) -> Output {
+    run(furmi(home).arg("schedule").args(args))
+}
+
+#[test]
+fn schedule_lifecycle() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let repo = repo.path().display().to_string();
+    init(home.path());
+
+    let out = ok(schedule(
+        home.path(),
+        &[
+            "add",
+            "--cron",
+            "0 2 * * *",
+            "--repo",
+            &repo,
+            "--id",
+            "nightly",
+            "--no-worktree",
+            "--model",
+            "m1",
+            "--allow-overlap",
+            "--prompt",
+            "update deps",
+        ],
+    ));
+    let file = home.path().join("schedules/nightly.md");
+    assert!(stdout(&out).trim_end().ends_with("nightly.md"));
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("allow_overlap: true") && text.contains("model: m1"));
+
+    // A second one with the same id, or an invalid cron, is refused.
+    let out = failed(schedule(
+        home.path(),
+        &[
+            "add",
+            "--cron",
+            "0 3 * * *",
+            "--repo",
+            &repo,
+            "--id",
+            "nightly",
+            "x",
+        ],
+    ));
+    assert!(stderr(&out).contains("already exists"), "{}", stderr(&out));
+    let out = failed(schedule(
+        home.path(),
+        &[
+            "add",
+            "--cron",
+            "every night",
+            "--repo",
+            &repo,
+            "--no-worktree",
+            "x",
+        ],
+    ));
+    assert!(stderr(&out).contains("invalid cron"), "{}", stderr(&out));
+
+    assert!(stdout(&ok(schedule(home.path(), &["ls"]))).contains("nightly"));
+
+    // Edit changes only what was given; the model stays.
+    ok(schedule(
+        home.path(),
+        &[
+            "edit",
+            "nightly",
+            "--cron",
+            "0 4 * * *",
+            "--no-allow-overlap",
+        ],
+    ));
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("0 4 * * *") && text.contains("model: m1"));
+    assert!(!text.contains("allow_overlap"));
+    assert!(text.contains("update deps"));
+    failed(schedule(home.path(), &["edit", "nightly"]));
+    failed(schedule(
+        home.path(),
+        &["edit", "nightly", "--cron", "nope"],
+    ));
+
+    ok(schedule(home.path(), &["pause", "nightly"]));
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("enabled: false")
+    );
+    ok(schedule(home.path(), &["resume", "nightly"]));
+    assert!(
+        !std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("enabled: false")
+    );
+    assert!(stdout(&ok(run(furmi(home.path()).arg("validate")))).contains("0 with errors"));
+
+    ok(schedule(home.path(), &["delete", "nightly"]));
+    assert!(!file.exists());
+    let out = failed(schedule(home.path(), &["pause", "nightly"]));
+    assert!(stderr(&out).contains("no schedule `nightly`"));
+    failed(schedule(home.path(), &["delete", "../x"]));
+}
