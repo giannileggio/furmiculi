@@ -105,6 +105,9 @@ struct FormInfo {
 
 #[derive(Serialize)]
 struct State {
+    /// The furmi version serving this state, so a page (or a hub) can tell
+    /// when the server behind it has been replaced.
+    version: &'static str,
     home: String,
     generated_at: String,
     counts: Counts,
@@ -284,6 +287,7 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
     counts.invalid = invalid.len();
 
     let state = State {
+        version: crate::version::CURRENT,
         home: contract_tilde(home.root()),
         generated_at: fmt_time(now()),
         counts,
@@ -589,6 +593,18 @@ mod tests {
         t.status = Status::Failed;
         t.save(&home.tasks().join("fresh.md")).unwrap();
         assert_ne!(state_json(&home, None).unwrap(), after);
+    }
+
+    #[test]
+    fn the_state_says_which_version_serves_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        for d in home.dirs() {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let state: serde_json::Value =
+            serde_json::from_str(&state_json(&home, None).unwrap()).unwrap();
+        assert_eq!(state["version"], crate::version::CURRENT);
     }
 
     #[test]

@@ -138,6 +138,7 @@ furmi add --scratch "Compare the three queue libraries and write up a summary"  
 furmi start             # the runner and the dashboard together (--no-open: no browser)
 furmi start -d          # ...in the background: prints the URL and returns
 furmi stop              # stop the dashboard and the runner (work already underway keeps going in tmux)
+furmi restart           # stop them and start them again the way they were started, on the installed binary
 furmi agents            # which coding agents are installed, and how to install the rest
 furmi agents use codex   # make one the default for new tasks
 
@@ -173,6 +174,7 @@ furmi clean --all --remove-broken   # ...and worktrees whose repo moved or was d
 
 furmi update            # install a new release over this one (--check: just ask)
 furmi update --to 0.4.1 # ...a specific version, back to an earlier one included
+furmi update --restart  # ...and furmi restart once it is in (never done unasked)
 
 furmi pause             # hold the runner: nothing new starts, no schedule fires; running tasks carry on and finish (kept across restarts)
 furmi resume            # undo furmi pause
@@ -212,6 +214,19 @@ no schedule fires, while running tasks are still reaped and finished (their
 `on_finish` included). It is a `paused` file in the home folder, so it
 survives a runner restart; `furmi status` and the dashboard header show it, and
 `furmi resume` (or the header's **Resume** button) lifts it.
+
+`furmi update` replaces the binary on disk, but a dashboard or runner already
+running keeps executing the old one. Each records its version in its lock file,
+so `furmi status` shows it and flags one older than the installed binary, and
+`furmi update` ends by naming what is still behind instead of restarting it: an
+update can run inside a task or a script. `furmi restart` (or
+`furmi update --restart`) stops both and starts them again with the flags they
+were started with; a token file is recorded by path, the token itself never is,
+so a dashboard started with `--token` has to be restarted by hand. Running tasks
+keep going in tmux and the new runner picks them back up. Under `furmi service`
+it asks systemd or launchd to restart them instead. The dashboard header shows
+the version serving the page, with each online machine's beside its name in the
+sidebar, and a page left open across an upgrade offers a reload.
 
 The runner also tidies up after itself, when it starts and then every hour:
 

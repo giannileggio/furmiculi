@@ -4,6 +4,74 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+
+/// How a dashboard was started, kept in its lock file so `furmi restart` can
+/// start it again the same way. Never the bearer token: only where to find it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Launch {
+    /// Started by `furmi start` (the runner with it) rather than `furmi web`.
+    #[serde(default)]
+    pub with_runner: bool,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub listen: Option<String>,
+    #[serde(default)]
+    pub token_file: Option<PathBuf>,
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
+    /// The token was given as `--token` on the command line, so it isn't
+    /// recorded anywhere and a restart can't supply it.
+    #[serde(default)]
+    pub inline_token: bool,
+}
+
+/// The dashboard serving a home, as its lock file records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dashboard {
+    pub pid: u32,
+    pub addr: String,
+    /// The furmi version it runs; None for a lock file from before versions.
+    pub version: Option<String>,
+    /// How it was started; None likewise.
+    pub launch: Option<Launch>,
+}
+
+/// A lock file's contents: the first line is what every furmi has always
+/// written (`pid` for the runner, `pid addr` for the dashboard), then one
+/// `key value` line per extra. Extras are only ever added, so a file from an
+/// older furmi parses as having none.
+fn write_record(
+    file: &mut std::fs::File,
+    head: &str,
+    extras: &[(&str, String)],
+) -> std::io::Result<()> {
+    let mut text = head.to_string();
+    for (key, value) in extras {
+        text.push_str(&format!("\n{key} {value}"));
+    }
+    file.set_len(0)?;
+    write!(file, "{text}")
+}
+
+fn read_record(path: &Path) -> Option<(String, Vec<(String, String)>)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut lines = text.lines();
+    let head = lines.next()?.trim().to_string();
+    let extras = lines
+        .filter_map(|l| l.split_once(' '))
+        .map(|(k, v)| (k.to_string(), v.trim().to_string()))
+        .collect();
+    Some((head, extras))
+}
+
+fn extra<'a>(extras: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    extras
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+}
 
 /// How long a command waits for another `furmi` process to release the lock
 /// before giving up, instead of hanging behind a stuck one.
@@ -135,7 +203,7 @@ impl Home {
     /// holds the record until the returned file is dropped (or the process
     /// dies). Used to offer taking the address over: see
     /// [`dashboard`](Self::dashboard).
-    pub fn claim_dashboard(&self, addr: &str) -> Result<std::fs::File> {
+    pub fn claim_dashboard(&self, addr: &str, launch: &Launch) -> Result<std::fs::File> {
         let path = self.web_lock();
         // Like the runner's lock: not `File::create`, which would wipe the
         // running dashboard's entry just by trying to take the lock.
@@ -147,9 +215,15 @@ impl Home {
             .with_context(|| format!("opening {}", path.display()))?;
         file.try_lock()
             .map_err(|e| anyhow::anyhow!("locking {}: {e}", path.display()))?;
-        file.set_len(0)
-            .and_then(|()| write!(file, "{} {addr}", std::process::id()))
-            .with_context(|| format!("writing {}", path.display()))?;
+        write_record(
+            &mut file,
+            &format!("{} {addr}", std::process::id()),
+            &[
+                ("version", crate::version::CURRENT.to_string()),
+                ("launch", serde_json::to_string(launch)?),
+            ],
+        )
+        .with_context(|| format!("writing {}", path.display()))?;
         Ok(file)
     }
 
@@ -157,13 +231,24 @@ impl Home {
     /// holding the lock now. A stale file from a crashed dashboard is never
     /// trusted: without the lock, its pid may long since have been reused.
     pub fn dashboard(&self) -> Option<(u32, String)> {
+        self.dashboard_info().map(|d| (d.pid, d.addr))
+    }
+
+    /// [`dashboard`](Self::dashboard) with the version and start flags it
+    /// recorded, when it recorded them.
+    pub fn dashboard_info(&self) -> Option<Dashboard> {
         let file = std::fs::File::open(self.web_lock()).ok()?;
         if !matches!(file.try_lock_shared(), Err(TryLockError::WouldBlock)) {
             return None;
         }
-        let text = std::fs::read_to_string(self.web_lock()).ok()?;
-        let (pid, addr) = text.trim().split_once(' ')?;
-        Some((pid.parse().ok()?, addr.to_string()))
+        let (head, extras) = read_record(&self.web_lock())?;
+        let (pid, addr) = head.split_once(' ')?;
+        Some(Dashboard {
+            pid: pid.parse().ok()?,
+            addr: addr.to_string(),
+            version: extra(&extras, "version").map(String::from),
+            launch: extra(&extras, "launch").and_then(|l| serde_json::from_str(l).ok()),
+        })
     }
 
     /// Waits until no other `furmi` process is changing task files, and holds
@@ -209,9 +294,12 @@ impl Home {
             .with_context(|| format!("opening {}", path.display()))?;
         match file.try_lock() {
             Ok(()) => {
-                file.set_len(0)
-                    .and_then(|()| write!(file, "{}", std::process::id()))
-                    .with_context(|| format!("writing {}", path.display()))?;
+                write_record(
+                    &mut file,
+                    &std::process::id().to_string(),
+                    &[("version", crate::version::CURRENT.to_string())],
+                )
+                .with_context(|| format!("writing {}", path.display()))?;
                 Ok(file)
             }
             Err(TryLockError::WouldBlock) => {
@@ -241,11 +329,16 @@ impl Home {
         if !self.runner_alive() {
             return None;
         }
-        std::fs::read_to_string(self.root.join(".runner.lock"))
-            .ok()?
-            .trim()
-            .parse()
-            .ok()
+        read_record(&self.root.join(".runner.lock"))?.0.parse().ok()
+    }
+
+    /// The furmi version the running runner recorded, if it recorded one.
+    pub fn runner_version(&self) -> Option<String> {
+        if !self.runner_alive() {
+            return None;
+        }
+        let (_, extras) = read_record(&self.root.join(".runner.lock"))?;
+        extra(&extras, "version").map(String::from)
     }
 
     /// Fails with a helpful message if `furmi init` has not been run.
@@ -301,18 +394,77 @@ mod tests {
         let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
         assert_eq!(home.dashboard(), None);
 
-        let claim = home.claim_dashboard("0.0.0.0:7433").unwrap();
+        let claim = home
+            .claim_dashboard("0.0.0.0:7433", &Launch::default())
+            .unwrap();
         assert_eq!(
             home.dashboard(),
             Some((std::process::id(), "0.0.0.0:7433".to_string()))
         );
         // Only the dashboard serving may hold the record.
-        assert!(home.claim_dashboard("127.0.0.1:7433").is_err());
+        assert!(
+            home.claim_dashboard("127.0.0.1:7433", &Launch::default())
+                .is_err()
+        );
 
         // Once it's gone, the file is ignored: a crashed dashboard's pid may
         // have been reused by now.
         drop(claim);
         assert_eq!(home.dashboard(), None);
+    }
+
+    #[test]
+    fn a_dashboard_records_its_version_and_how_it_was_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        let launch = Launch {
+            with_runner: true,
+            port: 7500,
+            listen: Some("0.0.0.0:7500".into()),
+            token_file: Some(PathBuf::from("/tmp/tok")),
+            allowed_hosts: vec!["box.ts.net".into()],
+            inline_token: false,
+        };
+        let _claim = home.claim_dashboard("0.0.0.0:7500", &launch).unwrap();
+        let info = home.dashboard_info().unwrap();
+        assert_eq!(info.pid, std::process::id());
+        assert_eq!(info.addr, "0.0.0.0:7500");
+        assert_eq!(info.version.as_deref(), Some(crate::version::CURRENT));
+        assert_eq!(info.launch, Some(launch));
+        // The file never holds a token: it has no field for one.
+        let text = std::fs::read_to_string(home.web_lock()).unwrap();
+        assert!(!text.contains("token\":\""), "{text}");
+    }
+
+    #[test]
+    fn a_lock_file_from_before_versions_still_parses() {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        // Written the old way, and held the way a live dashboard holds it.
+        let mut old = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o644)
+            .open(home.web_lock())
+            .unwrap();
+        old.try_lock().unwrap();
+        write!(old, "4242 127.0.0.1:7433").unwrap();
+        assert_eq!(home.dashboard(), Some((4242, "127.0.0.1:7433".to_string())));
+        let info = home.dashboard_info().unwrap();
+        assert_eq!((info.version, info.launch), (None, None));
+
+        let mut runner = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.path().join(".runner.lock"))
+            .unwrap();
+        runner.try_lock().unwrap();
+        write!(runner, "4343").unwrap();
+        assert_eq!(home.runner_pid(), Some(4343));
+        assert_eq!(home.runner_version(), None);
     }
 
     #[test]
@@ -366,6 +518,10 @@ mod tests {
 
         let claim = home.claim_runner().unwrap();
         assert_eq!(home.runner_pid(), Some(std::process::id()));
+        assert_eq!(
+            home.runner_version().as_deref(),
+            Some(crate::version::CURRENT)
+        );
 
         // A second runner is refused, and doesn't disturb the first's pid.
         assert!(home.claim_runner().is_err());

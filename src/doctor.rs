@@ -13,6 +13,7 @@ use crate::home::Home;
 use crate::run::{self, RunnerState};
 use crate::schedule::Schedule;
 use crate::task::{Status, Task, fmt_tokens, now};
+use crate::version::CURRENT;
 
 /// A pass this many poll intervals late means the runner is wedged.
 const STALE_AFTER_POLLS: u32 = 4;
@@ -29,7 +30,10 @@ pub fn status(home: &Home) -> Result<()> {
             .as_ref()
             .map(|s| s.pid.to_string())
             .unwrap_or_default();
-        println!("runner     running (pid {pid})");
+        println!(
+            "runner     running (pid {pid}){}",
+            version_note(home.runner_version().as_deref())
+        );
         if let Some(last) = state.as_ref().and_then(|s| s.last_tick_at) {
             let age = (now() - last).to_std().unwrap_or_default();
             println!(
@@ -58,10 +62,20 @@ pub fn status(home: &Home) -> Result<()> {
     }
 
     match home.dashboard() {
-        Some((pid, addr)) => println!("dashboard  running (pid {pid}) on http://{addr}"),
+        Some((pid, addr)) => println!(
+            "dashboard  running (pid {pid}) on http://{addr}{}",
+            version_note(home.dashboard_info().and_then(|d| d.version).as_deref())
+        ),
         None => println!(
             "dashboard  not running: `furmi start` serves it, or `furmi start -d` in the background"
         ),
+    }
+
+    if let Some(summary) = crate::version::stale_summary(&crate::version::running(home), CURRENT) {
+        println!(
+            "version    furmi {CURRENT} is installed; {summary}: `furmi restart` starts them \
+             again on it (running tasks keep going)"
+        );
     }
 
     let load = |dir: std::path::PathBuf| -> Vec<Task> {
@@ -119,6 +133,19 @@ pub fn status(home: &Home) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// ` [0.5.0]`, with a flag when it isn't the installed version.
+fn version_note(running: Option<&str>) -> String {
+    let flag = if crate::version::is_stale(running, CURRENT) {
+        ", OLDER than the installed one"
+    } else {
+        ""
+    };
+    format!(
+        " [{}{flag}]",
+        running.map_or("version not recorded".to_string(), |v| format!("furmi {v}"))
+    )
 }
 
 pub enum Check {

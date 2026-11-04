@@ -82,6 +82,9 @@
   /* The README's ant, cropped to the mark: it is the whole of the branding, so
      the name stays text and the picture stays decorative. */
   header .brand { display: flex; align-items: center; gap: 9px; color: inherit; text-decoration: none; }
+  header .ver { font-size: 12px; color: var(--muted); }
+  #node-versions { font-size: 12px; color: var(--muted); }
+  #node-versions[hidden] { display: none; }
   header .brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   header .logo { height: 24px; width: auto; display: block; }
   header .spacer { flex: 1; }
@@ -479,6 +482,7 @@
 <body>
 <header>
   <h1><a class="brand" href="/" title="furmiculi: ants in Sicilian. Back to the start"><img class="logo" id="logo" src="/logo.png" alt="" width="30" height="24"><span class="name">furmiculi</span></a></h1>
+  <span class="ver mono" id="version" title="The furmiculi version serving this page"></span>
   <div class="runner-pill" id="runner"></div>
   <span class="spacer"></span>
   <button class="ghost" id="setup-open" title="Pick and install your coding agent, and check that tmux and git are set up">Setup</button>
@@ -494,6 +498,11 @@
 </div>
 <div class="notice bad" id="setup-notice" hidden></div>
 <div class="notice" id="health" hidden></div>
+<div class="notice" id="reload-notice" hidden>
+  <strong>furmiculi was updated.</strong>
+  <span id="reload-detail"></span>
+  <button class="btn" id="reload-page">Reload</button>
+</div>
 
 <div class="layout">
 <aside id="side">
@@ -501,6 +510,7 @@
   <div id="projects-wrap" hidden><h2>Projects</h2><nav id="projects"></nav></div>
   <div class="side-note">
     <span class="mono" id="home"></span>
+    <span id="node-versions" hidden></span>
     <span><span class="dot"></span>as of <span id="updated">-</span></span>
   </div>
 </aside>
@@ -1157,8 +1167,30 @@ function applyUrl() {
   if (lastState) draw(lastState);
 }
 
+// The version of the server that sent this page. A server replaced by an
+// upgrade answers newer states to a page that is still the old one.
+const PAGE_VERSION = "__FURMI_VERSION__";
+document.getElementById("version").textContent = PAGE_VERSION.startsWith("__") ? "" : "v" + PAGE_VERSION;
+document.getElementById("reload-page").addEventListener("click", () => location.reload());
+
+function drawVersions(state) {
+  const stale = !!state.version && !PAGE_VERSION.startsWith("__") && state.version !== PAGE_VERSION;
+  document.getElementById("reload-notice").hidden = !stale;
+  if (stale) {
+    document.getElementById("reload-detail").textContent =
+      `This page is from ${PAGE_VERSION}; the server is now ${state.version}. Reload to use it.`;
+  }
+  // Other machines' versions, beside their names: a node from before
+  // versions says nothing rather than something wrong.
+  const remote = (state.nodes || []).filter(n => n.ssh && n.online);
+  const el = document.getElementById("node-versions");
+  el.hidden = remote.length === 0;
+  el.textContent = remote.map(n => `${n.name} ${n.version ? "v" + n.version : "(version unknown)"}`).join(" · ");
+}
+
 // Everything on the page comes from one state object.
 function draw(state) {
+  drawVersions(state);
   document.getElementById("home").textContent = state.home;
   document.getElementById("updated").textContent = state.generated_at;
 

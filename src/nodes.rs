@@ -225,7 +225,7 @@ fn ls(home: &Home) -> Result<()> {
             .iter()
             .map(|n| {
                 s.spawn(|| match fetch(home, n, "/api/state?local=1") {
-                    Ok(_) => "online".to_string(),
+                    Ok(body) => online_status(&body),
                     Err(e) => format!("offline: {e:#}"),
                 })
             })
@@ -247,6 +247,27 @@ fn ls(home: &Home) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// "online 0.5.0" for `node ls`, flagging a node behind this machine's furmi;
+/// a node from before versions says so rather than nothing.
+fn online_status(body: &str) -> String {
+    let version = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v["version"].as_str().map(String::from));
+    let Some(version) = version else {
+        return "online (version unknown: an older furmi)".to_string();
+    };
+    let behind = crate::version::compare(&version, crate::version::CURRENT)
+        == Some(std::cmp::Ordering::Less);
+    if behind {
+        format!(
+            "online {version} (older than this machine's {}: `furmi update` and `furmi restart` there)",
+            crate::version::CURRENT
+        )
+    } else {
+        format!("online {version}")
+    }
 }
 
 fn check(node: &Node) -> Result<()> {
@@ -925,7 +946,10 @@ pub fn merge_state(home: &Home, local: String) -> String {
             .map(|h| h.join().unwrap_or_else(|_| Err("crashed".into())))
             .collect()
     });
-    let mut summary = vec![json!({ "name": LOCAL, "ssh": null, "online": true, "writable": true })];
+    let mut summary = vec![json!({
+        "name": LOCAL, "ssh": null, "online": true, "writable": true,
+        "version": crate::version::CURRENT,
+    })];
     for (node, answer) in nodes.iter().zip(answers) {
         match answer {
             Ok(mut theirs) => {
@@ -938,9 +962,11 @@ pub fn merge_state(home: &Home, local: String) -> String {
                     }
                 }
                 add_counts(&mut state["counts"], &theirs["counts"]);
-                summary.push(
-                    json!({ "name": node.name, "ssh": node.ssh, "online": true, "writable": true }),
-                );
+                // A node from before versions doesn't say: null, not a guess.
+                summary.push(json!({
+                    "name": node.name, "ssh": node.ssh, "online": true, "writable": true,
+                    "version": theirs["version"].as_str(),
+                }));
             }
             Err(error) => summary.push(
                 json!({ "name": node.name, "ssh": node.ssh, "online": false, "error": error }),
@@ -1356,6 +1382,52 @@ mod tests {
                 .unwrap()
                 .contains("401")
         );
+    }
+
+    #[test]
+    fn a_nodes_version_rides_along_and_an_older_node_has_none() {
+        let (_dir, home) = home();
+        let new = serve(
+            r#"{"version":"0.4.0","counts":{},"queue":[],"running":[],"archive":[],"schedules":[]}"#,
+            "200 OK",
+        );
+        let old = serve(
+            r#"{"counts":{},"queue":[],"running":[],"archive":[],"schedules":[]}"#,
+            "200 OK",
+        );
+        save(
+            &home,
+            vec![
+                Node {
+                    name: "new".into(),
+                    ssh: new,
+                    furmi: None,
+                },
+                Node {
+                    name: "old".into(),
+                    ssh: old,
+                    furmi: None,
+                },
+            ],
+        )
+        .unwrap();
+        let local = r#"{"counts":{},"queue":[],"running":[],"archive":[],"schedules":[]}"#;
+        let merged: Value = serde_json::from_str(&merge_state(&home, local.into())).unwrap();
+        let nodes = &merged["nodes"];
+        assert_eq!(nodes[0]["version"], crate::version::CURRENT);
+        assert_eq!(nodes[1]["version"], "0.4.0");
+        assert_eq!(nodes[2]["version"], Value::Null);
+    }
+
+    #[test]
+    fn node_ls_shows_the_version_and_flags_an_older_node() {
+        assert_eq!(
+            online_status(&format!(r#"{{"version":"{}"}}"#, crate::version::CURRENT)),
+            format!("online {}", crate::version::CURRENT)
+        );
+        assert!(online_status(r#"{"version":"0.0.1"}"#).contains("older than this machine's"));
+        assert!(online_status("{}").contains("version unknown"));
+        assert!(online_status("not json").contains("version unknown"));
     }
 
     /// A node whose every request fails.

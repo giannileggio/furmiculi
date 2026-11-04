@@ -74,7 +74,7 @@ use self::detach::{detach, refuse_token_with_detach};
 use self::routes::route;
 use self::setup::{Serving, print_remote, setup};
 
-use crate::home::{Home, contract_tilde};
+use crate::home::{Home, Launch, contract_tilde};
 use crate::run;
 
 const INDEX_HTML: &str = include_str!("../web_dashboard.html");
@@ -131,7 +131,7 @@ pub fn serve(home: &Home, args: WebArgs) -> Result<()> {
         return detach(home, false, args, &serving);
     }
     let (server, serving) = bind(home, &serving, args.replace)?;
-    run_server(home, server, &serving, &args)
+    run_server(home, server, &serving, &args, false)
 }
 
 /// `furmi start`: the runner and the dashboard in one command. The runner
@@ -150,15 +150,23 @@ pub fn start(home: &Home, args: WebArgs) -> Result<()> {
     } else {
         Some(spawn_runner(home)?)
     };
-    run_server(home, server, &serving, &args)
+    run_server(home, server, &serving, &args, true)
 }
 
-fn run_server(home: &Home, server: Server, serving: &Serving, args: &WebArgs) -> Result<()> {
+fn run_server(
+    home: &Home,
+    server: Server,
+    serving: &Serving,
+    args: &WebArgs,
+    with_runner: bool,
+) -> Result<()> {
     // Record this dashboard (pid and address) for as long as it serves, so a
     // second `furmi web` on the same address can offer to take over instead of
     // just failing. Best-effort: a dashboard deliberately on another address
     // doesn't need the record, and must not fail over it.
-    let _record = home.claim_dashboard(&serving.addr).ok();
+    let _record = home
+        .claim_dashboard(&serving.addr, &launch_of(args, with_runner))
+        .ok();
     // Ctrl-C / SIGTERM request a clean stop: the signal handler only sets a
     // flag, so the request loop is unblocked below instead of dying in the
     // middle of a request.
@@ -178,10 +186,13 @@ fn run_server(home: &Home, server: Server, serving: &Serving, args: &WebArgs) ->
     let ctx = Ctx {
         home,
         // A remote page gets its own session's token, filled in per request.
-        index: if serving.remote {
-            INDEX_HTML.to_string()
-        } else {
-            INDEX_HTML.replace("__FURMI_TOKEN__", &token)
+        index: {
+            let page = INDEX_HTML.replace("__FURMI_VERSION__", crate::version::CURRENT);
+            if serving.remote {
+                page
+            } else {
+                page.replace("__FURMI_TOKEN__", &token)
+            }
         },
         token,
         cwd_repo,
@@ -230,6 +241,41 @@ fn run_server(home: &Home, server: Server, serving: &Serving, args: &WebArgs) ->
     let _ = unblocker.join();
     println!("Stopping the dashboard (running tasks keep going in their tmux windows).");
     Ok(())
+}
+
+/// How this dashboard was started, as its lock file records it for `furmi
+/// restart`. The token itself is never part of it: a token file is recorded by
+/// path, and a `--token` only as the fact that there was one.
+fn launch_of(args: &WebArgs, with_runner: bool) -> Launch {
+    Launch {
+        with_runner,
+        port: args.port,
+        listen: args.listen.clone(),
+        token_file: args
+            .token_file
+            .as_ref()
+            .map(|f| std::path::absolute(f).unwrap_or_else(|_| f.clone())),
+        allowed_hosts: args.allowed_hosts.clone(),
+        inline_token: args.token.is_some(),
+    }
+}
+
+/// Starts a dashboard in the background the way `launch` records one was
+/// started (`furmi restart`). The caller has already stopped the old one.
+pub fn relaunch(home: &Home, launch: &Launch) -> Result<()> {
+    let args = WebArgs {
+        port: launch.port,
+        listen: launch.listen.clone(),
+        token_file: launch.token_file.clone(),
+        token: None,
+        allowed_hosts: launch.allowed_hosts.clone(),
+        setup: false,
+        replace: false,
+        no_open: true,
+        detach: true,
+    };
+    let serving = setup(home, &args)?;
+    detach(home, launch.with_runner, args, &serving)
 }
 
 /// A background `furmi run`, stopped when dropped. It's asked to stop
