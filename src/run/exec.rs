@@ -1,6 +1,6 @@
-//! `furmi exec`: what a task's tmux window runs. Starts the agent, streams
-//! and parses its headless output, and records how it ended for the runner to
-//! reap.
+//! `furmi exec`: what a task's tmux window runs. Starts the agent (or a command
+//! task's shell), streams and parses its headless output, and records how it
+//! ended for the runner to reap.
 
 use std::io::{Read, Write};
 use std::os::unix::process::ExitStatusExt;
@@ -32,13 +32,18 @@ pub fn exec(home: &Home, id: &str, status_file: &Path) -> Result<ExitCode> {
         let config = Config::load(&home.config_path())?;
         let task = Task::load(&home.tasks().join(format!("{id}.md")))?;
         let eff = task.spec.resolve(&config.defaults);
-        let name = eff.agent.as_deref().context("no agent set")?;
-        let agent = config
-            .agents
-            .get(name)
-            .with_context(|| format!("unknown agent `{name}`"))?;
-        let model = eff.model.as_deref().or(agent.model.as_deref());
-        let argv = agent_argv(agent, eff.mode, &task.prompt, model, &task.id);
+        let argv = match &eff.run {
+            Some(command) => shell_argv(command),
+            None => {
+                let name = eff.agent.as_deref().context("no agent set")?;
+                let agent = config
+                    .agents
+                    .get(name)
+                    .with_context(|| format!("unknown agent `{name}`"))?;
+                let model = eff.model.as_deref().or(agent.model.as_deref());
+                agent_argv(agent, eff.mode, &task.prompt, model, &task.id)
+            }
+        };
         let mut cmd = Command::new(&argv[0]);
         cmd.args(&argv[1..])
             .env("FURMI_HOME", home.root())
@@ -50,13 +55,18 @@ pub fn exec(home: &Home, id: &str, status_file: &Path) -> Result<ExitCode> {
         if eff.mode == Mode::Headless {
             cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         }
+        // Nobody is there to answer: a command that reads its input gets EOF
+        // instead of sitting out its timeout.
+        if eff.run.is_some() {
+            cmd.stdin(Stdio::null());
+        }
         let child = cmd
             .spawn()
             .with_context(|| format!("starting `{}`", argv[0]))?;
-        Ok::<_, anyhow::Error>((child, eff.mode))
+        Ok::<_, anyhow::Error>((child, eff.mode, eff.run.is_none()))
     })();
     let (exit, usage) = match spawned {
-        Ok((mut child, mode)) => {
+        Ok((mut child, mode, is_agent)) => {
             // Ctrl-C / Ctrl-\ in the window are meant for the agent; this
             // process must outlive it to record the status. Ignoring them
             // only after the spawn keeps the child's handlers default.
@@ -86,7 +96,12 @@ pub fn exec(home: &Home, id: &str, status_file: &Path) -> Result<ExitCode> {
                 (None, Some(sig)) => Exit::Signal(sig),
                 (None, None) => Exit::Code(1),
             };
-            let stream = captured.map(|out| Stream::parse(&out)).unwrap_or_default();
+            // A command's output is its own business: JSON it happens to print
+            // is neither token usage nor a report of failure.
+            let stream = captured
+                .filter(|_| is_agent)
+                .map(|out| Stream::parse(&out))
+                .unwrap_or_default();
             let exit = recorded_exit(exit, &stream);
             (exit, stream.usage)
         }
@@ -279,6 +294,12 @@ pub(super) fn read_exit(path: &Path) -> Result<Option<Exit>> {
 /// The usage file next to a given `status_file` path (same id and attempt).
 fn usage_file_for(status_file: &Path) -> PathBuf {
     status_file.with_extension("usage")
+}
+
+/// The argv that runs a command task's `run`. The one place that knows which
+/// shell that is.
+fn shell_argv(command: &str) -> Vec<String> {
+    vec!["sh".into(), "-c".into(), command.into()]
 }
 
 /// The agent's argv for `mode`, with `model_args` appended if there's a

@@ -26,6 +26,34 @@ test("with the runner off, a banner offers to start it, and it can be stopped ag
   expect(forge.furmi("status")).toContain("runner     NOT running");
 });
 
+test("a command task shows as a command, and its command can be edited", async ({ page, forge }) => {
+  forge.furmi("add", "--repo", forge.repo, "--id", "chore", "--run", "echo first");
+  await openDashboard(page, forge);
+
+  const chore = row(page, "chore");
+  await expect(chore).toContainText("command");
+  await expect(chore).toContainText("echo first");
+
+  await chore.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#f-prompt-label")).toHaveText("What command should it run?");
+  await expect(page.locator("#f-prompt")).toHaveValue("echo first");
+  await expect(page.locator("#f-agent-wrap")).toBeHidden();
+  await page.locator("#f-prompt").fill("echo second");
+  await page.locator("#f-submit").click();
+  await expect(page.locator("#toast")).toHaveText("Saved chore");
+
+  const file = fs.readFileSync(`${forge.home}/tasks/chore.md`, "utf8");
+  expect(file).toContain("run: echo second");
+  expect(file).not.toContain("agent:");
+  await expect(chore).toContainText("echo second");
+
+  // The task's own view names the command, not an agent and a model.
+  await chore.locator(".summary").click();
+  await expect(page.locator("#task-body")).toContainText("The command it runs");
+  await expect(page.locator("#task-body")).toContainText("echo second");
+  await expect(page.locator("#task-body dt", { hasText: "Model" })).toHaveCount(0);
+});
+
 test("a waiting task can be edited, then cancelled and tried again", async ({ page, forge }) => {
   await openDashboard(page, forge);
   await page.locator("#new-task-open").click();

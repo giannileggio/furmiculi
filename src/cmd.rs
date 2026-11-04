@@ -292,10 +292,10 @@ pub fn task_rows(config: &Config, tasks: &[Task]) -> Vec<Vec<String>> {
             when,
             contract_tilde(&eff.repo),
             t.effective_branch(config).unwrap_or_else(|| "-".into()),
-            match (eff.agent, t.model_in_use(config).0) {
-                (Some(a), m) if m != "-" => format!("{a}/{m}"),
-                (Some(a), _) => a,
-                (None, _) => "-".into(),
+            match (eff.runner(), t.model_in_use(config).0) {
+                ("-", _) => "-".into(),
+                (r, m) if m != "-" => format!("{r}/{m}"),
+                (r, _) => r.into(),
             },
             fmt_tokens(t.tokens_in, t.tokens_out),
         ]);
@@ -349,8 +349,15 @@ pub struct AddArgs {
     /// The prompt, as an option instead of the positional argument.
     #[arg(long, short)]
     prompt: Option<String>,
+    /// Run this shell command instead of an agent: a command task, with no
+    /// prompt, agent, model or mode. Runs in the repo itself unless --worktree.
+    #[arg(long, conflicts_with_all = ["text", "prompt", "agent", "model", "mode"])]
+    run: Option<String>,
     #[arg(long)]
     branch: Option<String>,
+    /// Run in a dedicated worktree, for a task that wouldn't by default.
+    #[arg(long, conflicts_with_all = ["no_worktree", "scratch"])]
+    worktree: bool,
     /// Run directly in the repo instead of a dedicated worktree.
     #[arg(long)]
     no_worktree: bool,
@@ -394,7 +401,7 @@ pub struct NewTask {
 /// Validates `new` and writes its task file into the queue.
 pub fn create_task(home: &Home, config: &Config, new: NewTask) -> Result<(Task, PathBuf)> {
     let prompt = new.prompt.trim().to_string();
-    if prompt.is_empty() {
+    if prompt.is_empty() && new.spec.run.is_none() {
         bail!("the prompt is empty");
     }
 
@@ -408,7 +415,7 @@ pub fn create_task(home: &Home, config: &Config, new: NewTask) -> Result<(Task, 
         }
         None => unique_id(
             home,
-            &slugify(prompt.lines().next().unwrap_or_default(), 48),
+            &slugify(new.spec.ask(&prompt).lines().next().unwrap_or_default(), 48),
         ),
     };
 
@@ -460,7 +467,11 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
     home.ensure_initialized()?;
     let config = Config::load(&home.config_path())?;
 
-    let prompt = read_prompt(args.text.or(args.prompt))?;
+    let prompt = if args.run.is_some() {
+        String::new()
+    } else {
+        read_prompt(args.text.or(args.prompt))?
+    };
     let repo = match args.repo {
         _ if args.scratch => PathBuf::new(),
         Some(repo) => repo,
@@ -469,7 +480,7 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
     let spec = TaskSpec {
         repo,
         branch: args.branch,
-        worktree: args.no_worktree.then_some(false),
+        worktree: worktree_choice(args.worktree, args.no_worktree),
         agent: args.agent,
         model: args.model,
         mode: args.mode,
@@ -477,6 +488,7 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
         retries: args.retries,
         retry_delay: args.retry_delay,
         timeout: args.timeout,
+        run: args.run,
     };
     let scheduled_at = match (args.at, args.delay) {
         (Some(at), _) => Some(at),
@@ -502,6 +514,11 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
         println!("{}", path.display());
     }
     Ok(())
+}
+
+/// What `--worktree` and `--no-worktree` ask for, if either was given.
+pub(crate) fn worktree_choice(worktree: bool, no_worktree: bool) -> Option<bool> {
+    (worktree || no_worktree).then_some(worktree)
 }
 
 /// The given prompt, else the one piped on stdin, else (on a terminal) the
@@ -539,7 +556,10 @@ fn print_queued(home: &Home, config: &Config, task: &Task) {
     let eff = task.spec.resolve(&config.defaults);
     println!("Queued `{}`", task.id);
     println!("  repo       {}", contract_tilde(&eff.repo));
-    println!("  agent      {}", eff.agent.as_deref().unwrap_or("-"));
+    match &eff.run {
+        Some(run) => println!("  command    {run}"),
+        None => println!("  agent      {}", eff.runner()),
+    }
     match task.scheduled_at {
         Some(at) => println!("  starts     {}", fmt_time(at)),
         None => println!("  starts     as soon as the runner picks it up"),

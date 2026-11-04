@@ -139,7 +139,7 @@ fn run_on_finish(home: &Home, config: &Config, task: &Task) -> Result<()> {
     if eff.on_finish != OnFinish::None {
         log_finish_changes(&task.id, &dir);
     }
-    git::on_finish(eff.on_finish, &dir, &task.id, &task.prompt)
+    git::on_finish(eff.on_finish, &dir, &task.id, task.spec.ask(&task.prompt))
 }
 
 /// Says which paths `on_finish` is about to commit, before it commits

@@ -489,6 +489,7 @@ mod tests {
             retries: None,
             retry_delay: None,
             timeout: None,
+            run: None,
         }
     }
 

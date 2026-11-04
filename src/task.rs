@@ -288,7 +288,7 @@ impl Task {
                 self.id
             ));
         }
-        out.extend(prompt_problems(&self.prompt));
+        out.extend(prompt_problems(&self.spec, &self.prompt));
         out.extend(self.spec.problems(config));
         out
     }
@@ -298,9 +298,16 @@ impl Task {
 /// Linux caps at 128 KiB (and fails to exec beyond that).
 pub const MAX_PROMPT_BYTES: usize = 100_000;
 
-/// Problems with a task or schedule prompt.
-pub fn prompt_problems(prompt: &str) -> Option<String> {
-    if prompt.is_empty() {
+/// Problems with a task or schedule body: the prompt, or for a command task
+/// (which has none) anything written there.
+pub fn prompt_problems(spec: &TaskSpec, prompt: &str) -> Option<String> {
+    if spec.run.is_some() {
+        (!prompt.trim().is_empty()).then(|| {
+            "a command task has no prompt: it runs `run`, so remove the text below the \
+             frontmatter"
+                .into()
+        })
+    } else if prompt.is_empty() {
         Some("empty prompt: write the instructions below the frontmatter".into())
     } else if prompt.len() > MAX_PROMPT_BYTES {
         Some(format!(
@@ -460,6 +467,25 @@ Fix the redirect loop.
         let again = Task::parse(&t.to_markdown().unwrap()).unwrap();
         assert_eq!(again.model_used, t.model_used);
         assert_eq!(again.spec.model.as_deref(), Some("pinned"));
+    }
+
+    #[test]
+    fn a_command_task_round_trips_and_rejects_a_prompt() {
+        let text = "---\nid: backup\nrepo: /tmp\nrun: 'tar czf \"a b.tgz\" . && echo ok'\n---\n";
+        let mut t = Task::parse(text).unwrap();
+        assert_eq!(
+            t.spec.run.as_deref(),
+            Some("tar czf \"a b.tgz\" . && echo ok")
+        );
+        assert_eq!(t.prompt, "");
+        assert_eq!(t.problems(&Config::default(), None), Vec::<String>::new());
+        assert_eq!(Task::parse(&t.to_markdown().unwrap()).unwrap(), t);
+        assert_eq!(t.spec.ask(&t.prompt), "tar czf \"a b.tgz\" . && echo ok");
+        assert_eq!(t.model_in_use(&Config::default()).1, "none");
+
+        t.prompt = "Also do this".into();
+        let problems = t.problems(&Config::default(), None);
+        assert!(problems[0].contains("has no prompt"), "{problems:?}");
     }
 
     #[test]

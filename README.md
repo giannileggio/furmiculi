@@ -134,6 +134,7 @@ furmi add --repo ~/Projects/myapp --on-finish pr --in 2h \
        "Fix the redirect loop after login"
 echo "Update deps and run tests" | furmi add --repo ~/Projects/myapp --agent codex
 furmi add --scratch "Compare the three queue libraries and write up a summary"   # no project
+furmi add --repo ~/Projects/myapp --run "./scripts/backup.sh"   # a shell command, no agent (see below)
 
 furmi start             # the runner and the dashboard together (--no-open: no browser)
 furmi start -d          # ...in the background: prints the URL and returns
@@ -151,6 +152,7 @@ furmi ls --watch        # ...live, every --interval (default 2s); in a terminal 
 furmi validate          # check every task and schedule file
 
 furmi schedule add --cron "0 2 * * *" "update deps"   # same options as add, plus --allow-overlap
+furmi schedule add --cron "0 3 * * *" --run "./scripts/backup.sh"   # ...a command, on a schedule
 furmi schedule ls       # same as ls --schedules
 furmi schedule edit <id> --cron "0 3 * * *"   # changes only the options you give
 furmi schedule pause <id>    # stop firing, keep the file (resume <id> undoes it)
@@ -199,6 +201,12 @@ session ends with a plain `furmi done`, run by you or by the agent.
 after `retry_delay`, kills attempts that exceed `timeout`, runs `on_finish`
 on success, and moves finished tasks to `archive/`. Each attempt's output is
 saved to `logs/<id>.<attempt>.log`.
+
+`--run` (`run:` in the file) queues a plain shell command instead of an agent,
+for the chores around the agents' work: it goes through `sh -c` with no prompt,
+agent or model, and gets the same logs, `timeout`, `retries` and `on_finish`. It
+runs in the repo folder itself unless you add `--worktree`, and commits nothing
+unless you set `--on-finish`. See [docs/FORMAT.md](docs/FORMAT.md#command-tasks).
 
 ## Keeping it running
 

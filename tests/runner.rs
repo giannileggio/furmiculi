@@ -287,6 +287,170 @@ fn a_failing_task_is_retried_then_archived_as_failed() {
     }
 }
 
+/// Queues a command task in the test repo.
+fn add_command(env: &Env, id: &str, command: &str, extra: &[&str]) {
+    let repo = env.repo.path().display().to_string();
+    let mut args = vec!["add", "--repo", &repo, "--id", id, "--run", command];
+    args.extend(extra);
+    env.furmi_ok(&args);
+}
+
+#[test]
+fn a_failing_command_is_retried_then_archived_as_failed() {
+    let env = Env::new("");
+    add_command(
+        &env,
+        "flaky-cmd",
+        // Words that would mark an agent's failure as not worth retrying.
+        "echo run >> runs.txt; echo 'model not found' >&2; exit 3",
+        &["--retries", "1"],
+    );
+
+    assert_eq!(env.run_until_archived("flaky-cmd"), "failed");
+    assert_eq!(env.field("flaky-cmd", "attempts").as_deref(), Some("2"));
+    assert_eq!(env.field("flaky-cmd", "exit_code").as_deref(), Some("3"));
+    assert!(
+        env.field("flaky-cmd", "error")
+            .unwrap()
+            .contains("status 3")
+    );
+    // It ran twice, in the repo itself rather than a worktree.
+    let runs = std::fs::read_to_string(env.repo.path().join("runs.txt")).unwrap();
+    assert_eq!(runs.lines().count(), 2, "{runs}");
+    assert!(!env.worktree("flaky-cmd").exists());
+    for attempt in [1, 2] {
+        let log = env
+            .home
+            .path()
+            .join(format!("logs/flaky-cmd.{attempt}.log"));
+        let log = std::fs::read_to_string(log).unwrap();
+        assert!(log.contains("model not found"), "stderr is logged: {log}");
+        let exit = env
+            .home
+            .path()
+            .join(format!("logs/flaky-cmd.{attempt}.exit"));
+        assert_eq!(std::fs::read_to_string(exit).unwrap(), "exit 3");
+    }
+}
+
+#[test]
+fn a_command_timeout_stops_it_and_everything_it_started() {
+    let env = Env::new("");
+    add_command(
+        &env,
+        "slow-cmd",
+        "sleep 300 & echo $! > pid.txt; wait",
+        &["--timeout", "2s", "--retries", "0"],
+    );
+
+    assert_eq!(env.run_until_archived("slow-cmd"), "failed");
+    assert!(
+        env.field("slow-cmd", "error")
+            .unwrap()
+            .contains("timed out")
+    );
+    let pid = std::fs::read_to_string(env.repo.path().join("pid.txt")).unwrap();
+    wait_for("the sleep to be killed", Duration::from_secs(10), || {
+        !alive(pid.trim())
+    });
+}
+
+#[test]
+fn a_command_runs_with_no_agent_or_input_and_its_output_is_only_output() {
+    // Stdin is closed, so `cat` ends, and the JSON it prints isn't an agent's
+    // report of usage or failure.
+    let env = Env::new("");
+    add_command(
+        &env,
+        "chore",
+        r#"cat; echo "id=$FURMI_TASK_ID"; echo '{"usage":{"input_tokens":5,"output_tokens":5}}'; echo '{"type":"agent_settled","aborted":true}'"#,
+        &[],
+    );
+
+    assert_eq!(env.run_until_archived("chore"), "done");
+    assert_eq!(env.field("chore", "exit_code").as_deref(), Some("0"));
+    assert_eq!(env.field("chore", "tokens_in"), None);
+    assert_eq!(env.field("chore", "agent"), None);
+    let log = std::fs::read_to_string(env.home.path().join("logs/chore.1.log")).unwrap();
+    assert!(log.contains("id=chore"), "{log}");
+    // It's the default for a command, so nothing to warn about.
+    let runner_log = std::fs::read_to_string(env.home.path().join("runner.log")).unwrap();
+    assert!(!runner_log.contains("warning: chore"), "{runner_log}");
+
+    let ls = String::from_utf8(env.furmi_ok(&["ls", "--archive"]).stdout).unwrap();
+    let row = ls.lines().find(|l| l.starts_with("chore")).unwrap();
+    assert!(row.contains("command"), "{ls}");
+}
+
+#[test]
+fn a_command_in_a_worktree_has_its_work_committed() {
+    let env = Env::new("");
+    add_command(
+        &env,
+        "wt-cmd",
+        "echo data > out.txt",
+        &["--worktree", "--on-finish", "commit"],
+    );
+
+    assert_eq!(env.run_until_archived("wt-cmd"), "done");
+    let wt = env.worktree("wt-cmd");
+    assert_eq!(
+        git(&wt, &["show", "--name-only", "--format=", "HEAD"]),
+        "out.txt"
+    );
+    assert_eq!(git(&wt, &["branch", "--show-current"]), "furmi/wt-cmd");
+    // The commit is named after what ran, there being no prompt.
+    assert!(git(&wt, &["log", "-1", "--format=%B"]).contains("echo data > out.txt"),);
+    assert!(!env.repo.path().join("out.txt").exists());
+}
+
+#[test]
+fn a_schedule_queues_a_command_task() {
+    let env = Env::new("");
+    let long_ago = chrono::Local::now().fixed_offset() - chrono::Duration::hours(3);
+    std::fs::write(
+        env.home.path().join("schedules/backup.md"),
+        format!(
+            "---\nid: backup\ncron: \"* * * * *\"\nrepo: {}\nrun: echo fired > fired.txt\n\
+             last_enqueued_at: {}\n---\n",
+            env.repo.path().display(),
+            long_ago.to_rfc3339()
+        ),
+    )
+    .unwrap();
+
+    let fired = env.repo.path().join("fired.txt");
+    wait_for("the command to run", Duration::from_secs(60), || {
+        env.tick();
+        fired.exists()
+    });
+    let archive: Vec<_> = wait_for_archive(&env);
+    assert!(
+        archive[0].contains("created_by: schedule:backup"),
+        "{archive:?}"
+    );
+    assert!(
+        archive[0].contains("run: echo fired > fired.txt"),
+        "{archive:?}"
+    );
+}
+
+/// The archived task files, once there is one.
+fn wait_for_archive(env: &Env) -> Vec<String> {
+    let dir = env.home.path().join("archive");
+    let read = || -> Vec<String> {
+        std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .collect()
+    };
+    wait_for("a task to be archived", Duration::from_secs(60), || {
+        env.tick();
+        !read().is_empty()
+    });
+    read()
+}
+
 #[test]
 fn a_timeout_stops_the_agent_and_everything_it_started() {
     let env = Env::new("");

@@ -98,6 +98,24 @@ On success it prints the new file's path (a person at a terminal sees a short
 summary instead). On failure it lists the problems; fix them and run it
 again.
 
+### Commands, not agents
+
+When the work is a known shell command, with nothing to work out ("run the
+backup script tonight", "run `make release-notes` every Friday"), queue the
+command itself instead of asking an agent to run it. No prompt and no agent:
+
+```sh
+furmi add --repo ~/Projects/myapp --created-by agent --run "./scripts/backup.sh" --in 2h
+```
+
+`--run <command>` goes through `sh -c` in the repo folder itself, with stdin
+closed, and exit status 0 means success. It can't be combined with a prompt,
+`--agent`, `--model` or `--mode`. `--timeout`, `--retries`, `--retry-delay`, `--at`
+and `--in` work as usual, but a retry runs the whole command again: pass
+`--retries 0` unless it's safe to repeat. Add `--worktree` for a checkout of its
+own, and `--on-finish` only if it's asked for: unlike an agent task, `[defaults]`
+don't choose either for a command, so by default nothing is committed.
+
 ## 4. Recurring work: schedules
 
 For "every night", "each Monday" and the like, create a schedule with
@@ -107,7 +125,7 @@ For "every night", "each Monday" and the like, create a schedule with
 stdin) plus a required `--cron`, a 5-field expression in local time, and
 `--allow-overlap`. Schedules have no `--created-by`, `--at`, `--in` or
 `--scratch`: each firing sets those on the task it creates. The prompt is
-written as in step 2.
+written as in step 2. `--run <command>` works here too, in place of the prompt.
 
 ```sh
 furmi schedule add --repo ~/Projects/myapp --cron "0 6 * * 1" --on-finish pr <<'EOF'
@@ -127,7 +145,7 @@ previous task from the same schedule is still queued or running; add
 - Check the current state with `furmi ls` (or read the file) first.
 - **Pending tasks**: edit the file and run
   `furmi validate <file>`. For a schedule use `furmi schedule edit <id>` with
-  just the options to change (`--cron`, `--prompt`, ...), `furmi schedule pause <id>`,
+  just the options to change (`--cron`, `--prompt`, `--run`, ...), `furmi schedule pause <id>`,
   `resume <id>` and `delete <id>`; `furmi schedule ls` lists them.
 - Change a status only with these commands, and confirm with the user first:
   `furmi cancel <id>` (pending or running), `furmi retry <id>` (failed,

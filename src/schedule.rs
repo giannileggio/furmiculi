@@ -100,7 +100,7 @@ impl Schedule {
         if let Err(e) = self.cron() {
             out.push(e.to_string());
         }
-        out.extend(prompt_problems(&self.prompt));
+        out.extend(prompt_problems(&self.spec, &self.prompt));
         out.extend(self.spec.problems(config));
         out
     }

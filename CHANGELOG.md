@@ -36,6 +36,15 @@ lists what changed between them.
   anything older than the installed binary flagged. A page left open across an
   upgrade offers a reload.
 
+- Tasks can run a plain shell command instead of an agent: `furmi add --run
+  "<command>"`, or `run:` in a task or schedule file. It goes through `sh -c` with
+  no prompt, agent or model and shares the logs, `timeout`, `retries` and
+  `on_finish` of any other run. It runs in the repo folder unless you add
+  `--worktree`, and `[defaults]` don't make it commit. `furmi schedule` takes
+  `--run` too, `furmi validate` rejects one that also sets an agent, model, mode
+  or prompt, and `furmi ls` and the dashboard show it as `command`. `furmi add` and
+  `furmi schedule` also gain `--worktree`, the opposite of `--no-worktree`.
+
 - `furmi schedule` manages schedules from the terminal: `ls`, `add` (the
   options of `furmi add`, plus `--cron` and `--allow-overlap`), `edit <id>`,
   `pause <id>`, `resume <id>` and `delete <id>`. It writes the files the
