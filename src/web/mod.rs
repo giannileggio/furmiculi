@@ -8,7 +8,7 @@
 //! use, `POST /api/tasks` to queue a new task (the "New task" form),
 //! `POST /api/tasks/<id>/edit` for a task that hasn't started, schedule
 //! create/edit/pause/resume/delete under `/api/schedules`, `POST
-//! /api/runner/{start,stop}`, and `GET /api/doctor` and `/api/agents` (plus
+//! /api/runner/{start,stop,pause,resume}`, and `GET /api/doctor` and `/api/agents` (plus
 //! `POST /api/agents/default`) for the setup views.
 //!
 //! Two ways to listen, both guarded:

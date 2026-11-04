@@ -168,6 +168,8 @@ furmi clean --all --remove-broken   # ...and worktrees whose repo moved or was d
 furmi update            # install a new release over this one (--check: just ask)
 furmi update --to 0.4.1 # ...a specific version, back to an earlier one included
 
+furmi pause             # hold the runner: nothing new starts, no schedule fires; running tasks carry on and finish (kept across restarts)
+furmi resume            # undo furmi pause
 furmi status            # is the runner alive? queue, failing schedules
 furmi doctor            # check tmux/git/agents/config/task files; non-zero on problems
 furmi service systemd   # units that keep the runner and the dashboard up (or: launchd)
@@ -198,6 +200,12 @@ that start the runner and the dashboard at login and restart them if they
 die. Only one runner per home is allowed. `furmi status` shows whether it's
 alive and when its last pass was (it warns if the runner looks stuck), and
 `furmi run` also appends to `runner.log` in the home folder.
+
+`furmi pause` holds the runner without stopping it: no queued task starts and
+no schedule fires, while running tasks are still reaped and finished (their
+`on_finish` included). It is a `paused` file in the home folder, so it
+survives a runner restart; `furmi status` and the dashboard header show it, and
+`furmi resume` (or the header's **Resume** button) lifts it.
 
 What `furmi` does so that a bad day doesn't lose work:
 

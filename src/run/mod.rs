@@ -181,9 +181,16 @@ fn tick(home: &Home, config: &Config) -> Result<()> {
     let succeeded = {
         let _lock = home.lock()?;
         let now = now();
-        enqueue_schedules(home, config, now)?;
+        // Paused (`furmi pause`): reaping and finishing carry on, but no
+        // schedule fires and nothing new starts.
+        let paused = home.is_paused();
+        if !paused {
+            enqueue_schedules(home, config, now)?;
+        }
         let succeeded = poll_running(home, config, now)?;
-        start_pending(home, config, now)?;
+        if !paused {
+            start_pending(home, config, now)?;
+        }
         succeeded
     };
     for (path, task) in succeeded {

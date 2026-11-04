@@ -6,6 +6,11 @@ lists what changed between them.
 
 ## Unreleased
 
+- `furmi pause` holds the runner without stopping it: nothing new starts and no
+  schedule fires, while running tasks carry on and are still finished.
+  `furmi resume` undoes it. It lasts across runner restarts, shows in
+  `furmi status`, and the dashboard header has a toggle.
+
 - A `hermes` agent preset (`hermes -z {prompt}` headless), alongside the other
   built-in agents. It ships without an auto-approve flag, like the rest.
 

@@ -1161,8 +1161,9 @@ function draw(state) {
 
   const runner = document.getElementById("runner");
   runner.innerHTML = state.runner.alive
-    ? `<span class="dot" title="The runner is on"></span><span>Runner on</span>` +
+    ? `<span class="dot" title="The runner is on"></span><span>${state.runner.paused ? "Runner paused" : "Runner on"}</span>` +
       `${state.runner.last_tick ? `<span class="detail" style="color:var(--muted)">last pass ${escapeHtml(state.runner.last_tick)}</span>` : ""}` +
+      `<button class="linkish" data-action="${state.runner.paused ? "runner-resume" : "runner-pause"}" title="${state.runner.paused ? "Start picking up tasks and schedules again." : "Hold new tasks and schedules. Work already underway keeps going."}">${state.runner.paused ? "Resume" : "Pause"}</button>` +
       `<button class="linkish" data-action="runner-stop" title="Stop picking up new tasks. Work already underway keeps going.">Stop</button>`
     : `<span class="dot off"></span><span>Runner off</span>` +
       `<button class="linkish" data-action="runner-start" title="Start picking up waiting tasks.">Start</button>`;
@@ -1701,8 +1702,8 @@ document.addEventListener("click", (e) => {
     copyText(btn.dataset.text);
   } else if (action === "use-agent") {
     useAgent(btn.dataset.name, btn);
-  } else if (action === "runner-start" || action === "runner-stop") {
-    runnerAction(action === "runner-start" ? "start" : "stop", btn);
+  } else if (action === "runner-start" || action === "runner-stop" || action === "runner-pause" || action === "runner-resume") {
+    runnerAction(action.slice("runner-".length), btn);
   } else if (action === "logs") {
     showLogs(id);
   } else if (action === "clear-filters") {
@@ -1818,7 +1819,7 @@ async function runnerAction(what, btn) {
     const res = await fetch(`/api/runner/${what}`, { method: "POST", headers: { "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}` } });
     const data = await res.json();
     if (!res.ok) toast(data.error || `couldn't ${what} the runner`);
-    else toast(what === "start" ? "Runner started" : "Runner stopped", true);
+    else toast({ start: "Runner started", stop: "Runner stopped", pause: "Runner paused", resume: "Runner resumed" }[what], true);
   } catch (e) {
     toast(String(e));
   }
