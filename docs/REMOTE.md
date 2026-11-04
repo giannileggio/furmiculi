@@ -56,8 +56,10 @@ furmi web --listen 0.0.0.0:7433 --token-file ~/.furmiculi/web-token \
 - `--listen <addr>`: the address to bind (`0.0.0.0:7433` for every
   interface).
 - `--token-file <path>` (or `--token <value>`, but the file keeps the secret
-  out of argv, shell history and `ps`): a shared secret every request must
-  carry — `Authorization: Bearer <t>`. It must be 0600; a group- or
+  out of argv, shell history and `ps` — which is also why `--token` is refused
+  together with `-d`/`--detach`, where the backgrounded dashboard's command
+  line would carry it for as long as it runs): a shared secret every request
+  must carry — `Authorization: Bearer <t>`. It must be 0600; a group- or
   world-readable one is refused.
 - `--allowed-host <name>` (repeatable): the exact `Host` the browser sends
   when it reaches the dashboard; requests with any other Host are rejected.

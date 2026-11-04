@@ -34,6 +34,8 @@ pub(crate) struct WebArgs {
     pub(super) token_file: Option<PathBuf>,
     /// Bearer token for `--listen`, right on the command line (--token-file
     /// is preferred: command lines end up in shell history and ps output).
+    /// Not accepted with --detach, whose backgrounded child would carry it in
+    /// its command line too.
     #[arg(long)]
     pub(super) token: Option<String>,
     /// Host an HTTP `Host` header must carry exactly to be served, for

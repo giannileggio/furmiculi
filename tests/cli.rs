@@ -1221,6 +1221,70 @@ fn web_new_task_form_queues_a_task() {
     child.wait().unwrap();
 }
 
+/// `--detach` re-runs the command in a child whose argv is the dashboard's for
+/// as long as it serves, so `--token` there would undo what `--token-file`
+/// keeps out of `ps`: the pair is refused before anything is served, pointing
+/// at the file. `--token` in the foreground is still the operator's call.
+#[test]
+fn web_refuses_a_token_on_the_command_line_when_detaching() {
+    let home = tempfile::tempdir().unwrap();
+    init(home.path());
+
+    for cmd in ["web", "start"] {
+        let out = failed(run(furmi(home.path()).args([
+            cmd,
+            "--detach",
+            "--no-open",
+            "--listen",
+            "0.0.0.0:18447",
+            "--token",
+            TEST_TOKEN,
+            "--allowed-host",
+            "toolnet.example",
+        ])));
+        let err = stderr(&out);
+        assert!(err.contains("--token-file"), "{cmd}: {err}");
+        assert!(err.contains("--detach"), "{cmd}: {err}");
+        // The refusal names the way out, never the secret.
+        assert!(!err.contains(TEST_TOKEN), "{cmd}: {err}");
+        assert!(!stdout(&out).contains("Dashboard:"), "{cmd}");
+    }
+    // Both gave up before forking anything: nothing is serving, nothing was
+    // left in a log file.
+    assert!(!home.path().join(".web.lock").exists());
+
+    // In the foreground the token on the command line still works.
+    let port = 18447u16;
+    let mut child = furmi(home.path())
+        .args([
+            "web",
+            "--no-open",
+            "--listen",
+            &format!("0.0.0.0:{port}"),
+            "--token",
+            TEST_TOKEN,
+            "--allowed-host",
+            "toolnet.example",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let page = http_at(
+        "127.0.0.1",
+        port,
+        "GET",
+        "/api/state",
+        "toolnet.example",
+        &[("Authorization", &format!("Bearer {TEST_TOKEN}"))],
+        "",
+    );
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
 #[test]
 fn start_detached_serves_in_the_background_until_stop() {
     let home = tempfile::tempdir().unwrap();
