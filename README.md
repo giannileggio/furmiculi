@@ -213,6 +213,30 @@ no schedule fires, while running tasks are still reaped and finished (their
 survives a runner restart; `furmi status` and the dashboard header show it, and
 `furmi resume` (or the header's **Resume** button) lifts it.
 
+The runner also tidies up after itself, when it starts and then every hour:
+
+- **Done on its own, and logged to `runner.log`:** it removes the worktree of a
+  done task, trims each task's logs to its last 5 attempts, and requeues a task
+  that failed because of the machine (tmux gone, agent not installed) once that
+  has cleared, at most twice per task. A worktree goes only if git can inspect
+  it, it is its own checkout and it has no uncommitted changes; otherwise it
+  stays and the banner says why.
+- **Reported in a dashboard banner:** what `furmi doctor` warns about, and
+  anything the pass declined to do.
+- **Only ever suggested:** deleting a merged `furmi/*` branch of an archived
+  task. The banner lists the exact command to run.
+
+While the runner is paused (`furmi pause`) the pass still reports but changes
+nothing. Tune it in `config.toml`, or turn it off:
+
+```toml
+[housekeeping]
+enabled = true
+interval = "1h"
+keep_attempts = 5  # log attempts kept per task
+max_requeues = 2   # automatic requeues per task
+```
+
 What `furmi` does so that a bad day doesn't lose work:
 
 - **Crash-safe state.** Task, schedule and exit files are replaced atomically,

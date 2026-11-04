@@ -10,12 +10,13 @@
 //! Split by what the runner does: [`scheduler`] enqueues due schedules,
 //! [`starting`] starts pending tasks (within the parallelism limits),
 //! [`reaping`] reaps running ones and
-//! [`finishing`] closes them out, and [`mod@exec`] is the per-task process that
+//! [`finishing`] closes them out, [`housekeeping`] tidies up now and then, and [`mod@exec`] is the per-task process that
 //! runs the agent (parsing its output for usage in [`usage`]). [`mod@log`] is
 //! the runner log.
 
 mod exec;
 mod finishing;
+mod housekeeping;
 mod log;
 mod reaping;
 mod scheduler;
@@ -24,6 +25,7 @@ mod usage;
 
 pub use exec::exec;
 pub use finishing::{archive, complete};
+pub use housekeeping::{Health, load_health};
 pub use log::log;
 pub use reaping::{save_log, window_of};
 pub use scheduler::failure_streak;
@@ -44,6 +46,7 @@ use crate::home::Home;
 use crate::task::{Status, Task, now};
 
 use self::finishing::finalize;
+use self::housekeeping::Housekeeper;
 use self::log::LOG_FILE;
 use self::reaping::poll_running;
 use self::scheduler::enqueue_schedules;
@@ -102,8 +105,13 @@ pub fn run(home: &Home, once: bool) -> Result<()> {
             humantime::format_duration(config.runner.poll_interval)
         ));
     }
+    let mut housekeeper = Housekeeper::new();
     loop {
         let result = tick(home, &config);
+        if !once {
+            // Paused (`furmi pause`): health is still reported, nothing changes.
+            housekeeper.tick(home, &config, !home.is_paused());
+        }
         state.last_tick_at = Some(now());
         state.last_error = result.as_ref().err().map(|e| format!("{e:#}"));
         if !once {

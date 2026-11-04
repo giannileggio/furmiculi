@@ -75,6 +75,17 @@ headless = ["pi", "--mode", "json", "{prompt}"]
 interactive = ["pi", "{prompt}"]
 model_args = ["--model", "{model}"]
 
+# The runner tidies up after itself, at start and then every `interval`: it
+# removes the clean worktrees of done tasks, trims old attempt logs, requeues
+# tasks that failed because of the machine (tmux gone, agent not installed),
+# and reports problems in the dashboard. It only ever *suggests* destructive
+# steps (deleting merged branches); see the README.
+# [housekeeping]
+# enabled = true
+# interval = "1h"
+# keep_attempts = 5      # log files kept per task
+# max_requeues = 2       # automatic requeues per task
+
 # The dashboard (`furmi web`, `furmi start`). The first `furmi web` asks once
 # whether to serve this machine only or your other machines too (a tailnet),
 # and writes this table, so it asks only that once. Flags beat it.
@@ -122,6 +133,36 @@ pub struct Config {
     pub agents: BTreeMap<String, Agent>,
     pub web: Web,
     pub notify: crate::notify::Notify,
+    pub housekeeping: Housekeeping,
+}
+
+/// `[housekeeping]`: the runner's low-frequency tidy-up pass (see
+/// `run::housekeeping`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Housekeeping {
+    /// The off switch. Off, the runner never tidies and reports no health.
+    pub enabled: bool,
+    /// How often the pass runs (it also runs when the runner starts).
+    #[serde(with = "humantime_serde")]
+    pub interval: Duration,
+    /// Log attempts kept per task; older attempts' `.log`/`.exit`/`.usage`
+    /// files are deleted.
+    pub keep_attempts: u32,
+    /// How many times a task that failed for an environmental reason (tmux
+    /// gone, agent not installed) is requeued automatically.
+    pub max_requeues: u32,
+}
+
+impl Default for Housekeeping {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval: Duration::from_secs(60 * 60),
+            keep_attempts: 5,
+            max_requeues: 2,
+        }
+    }
 }
 
 /// The dashboard, as `furmi web` / `furmi start` serve it. All optional: with
@@ -218,6 +259,7 @@ impl Default for Config {
             agents: builtin_agents(),
             web: Web::default(),
             notify: Default::default(),
+            housekeeping: Housekeeping::default(),
         }
     }
 }
@@ -530,6 +572,12 @@ impl Config {
     fn check(&self) -> Result<()> {
         if self.runner.max_parallel == 0 || self.runner.max_parallel_per_repo == 0 {
             bail!("runner.max_parallel and runner.max_parallel_per_repo must be at least 1");
+        }
+        if self.housekeeping.keep_attempts == 0 {
+            bail!("housekeeping.keep_attempts must be at least 1");
+        }
+        if self.housekeeping.interval.is_zero() {
+            bail!("housekeeping.interval must not be zero");
         }
         for (name, agent) in &self.agents {
             if agent.headless.is_empty() || agent.interactive.is_empty() {

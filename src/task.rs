@@ -64,6 +64,10 @@ pub struct Task {
     /// the machine going away). They don't count against `retries`.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub interruptions: u32,
+    /// Times housekeeping requeued this task after an environmental failure
+    /// (tmux gone, agent not installed). Capped by `housekeeping.max_requeues`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub auto_requeues: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<DateTime<FixedOffset>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,6 +104,7 @@ const TASK_KEYS: &[&str] = &[
     "remote",
     "attempts",
     "interruptions",
+    "auto_requeues",
     "started_at",
     "finished_at",
     "exit_code",
@@ -161,6 +166,7 @@ impl Task {
             remote: None,
             attempts: 0,
             interruptions: 0,
+            auto_requeues: 0,
             started_at: None,
             finished_at: None,
             exit_code: None,

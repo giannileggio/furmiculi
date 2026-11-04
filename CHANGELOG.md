@@ -12,6 +12,15 @@ lists what changed between them.
   `curl` with a short timeout, so it can't hold up or fail a task. `furmi doctor`
   checks the config is complete and that `curl` is installed.
 
+- The runner now tidies up after itself, at start and then hourly: it removes
+  the clean worktrees of done tasks, trims logs past the last 5 attempts, and
+  requeues tasks that failed because of the machine (tmux gone, agent not
+  installed) once that's fixed, at most twice. The dashboard shows a banner with
+  `furmi doctor` problems, anything it declined to do, and merged `furmi/*`
+  branches with the command to delete them, which it never does itself. Pausing
+  the runner pauses the changes too. Configure or turn it off under
+  `[housekeeping]`.
+
 - `furmi schedule` manages schedules from the terminal: `ls`, `add` (the
   options of `furmi add`, plus `--cron` and `--allow-overlap`), `edit <id>`,
   `pause <id>`, `resume <id>` and `delete <id>`. It writes the files the

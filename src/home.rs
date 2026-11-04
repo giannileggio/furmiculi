@@ -114,6 +114,11 @@ impl Home {
         Ok(paused != was)
     }
 
+    /// What the last housekeeping pass found wrong, for the dashboard.
+    pub fn health_file(&self) -> PathBuf {
+        self.root.join("health.json")
+    }
+
     /// Where a backgrounded dashboard (`furmi start -d`, `furmi web -d`)
     /// appends its output: it has no terminal to print to.
     pub fn web_log(&self) -> PathBuf {

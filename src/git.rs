@@ -257,6 +257,38 @@ pub fn valid_branch_name(name: &str) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+/// Whether `branch` exists in `repo` and is fully merged into `base`.
+pub fn branch_merged_into(repo: &Path, branch: &str, base: &str) -> bool {
+    branch_exists(repo, branch)
+        && branch_exists(repo, base)
+        && git(
+            repo,
+            &[
+                "merge-base",
+                "--is-ancestor",
+                &format!("refs/heads/{branch}"),
+                &format!("refs/heads/{base}"),
+            ],
+        )
+        .is_ok()
+}
+
+/// The repo's main branch: what `origin/HEAD` points at, else `main` or `master`.
+pub fn main_branch(repo: &Path) -> Option<String> {
+    if let Ok(out) = git(
+        repo,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    ) && let Some(name) = out.trim().strip_prefix("origin/")
+        && branch_exists(repo, name)
+    {
+        return Some(name.to_string());
+    }
+    ["main", "master"]
+        .into_iter()
+        .find(|b| branch_exists(repo, b))
+        .map(String::from)
+}
+
 pub fn has_changes(dir: &Path) -> Result<bool> {
     Ok(!git(dir, &["status", "--porcelain"])?.trim().is_empty())
 }

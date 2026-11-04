@@ -231,6 +231,11 @@ pub fn cancel(home: &Home, id: Option<String>) -> Result<()> {
 pub fn retry(home: &Home, id: &str) -> Result<()> {
     home.ensure_initialized()?;
     let _lock = home.lock()?;
+    retry_locked(home, id)
+}
+
+/// [`retry`] for a caller already holding `home.lock()`, which isn't reentrant.
+pub(crate) fn retry_locked(home: &Home, id: &str) -> Result<()> {
     let (path, mut task) = find(home, id)?;
     if !matches!(
         task.status,
