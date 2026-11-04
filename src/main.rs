@@ -10,6 +10,7 @@ mod fsutil;
 mod git;
 mod home;
 mod nodes;
+mod notify;
 mod run;
 mod schedule;
 mod schedule_cmd;

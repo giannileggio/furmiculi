@@ -305,6 +305,16 @@ pub fn checks(home: &Home) -> Vec<Check> {
     }
 
     add(web_check(&config));
+    let notify = crate::notify::problems(&config.notify);
+    if notify.is_empty() {
+        if !config.notify.on.is_empty() {
+            add(Check::Ok("notifications are configured".into()));
+        }
+    } else {
+        for problem in notify {
+            add(Check::Warn(problem));
+        }
+    }
 
     checks
 }

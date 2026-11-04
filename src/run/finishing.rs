@@ -255,6 +255,7 @@ pub fn archive(home: &Home, path: &Path, mut task: Task, now: DateTime<FixedOffs
         .map(|e| format!(": {e}"))
         .unwrap_or_default();
     log(&format!("{} {}{detail}", task.id, task.status.as_str()));
+    crate::notify::task_archived(home, &task);
     Ok(())
 }
 

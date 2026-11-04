@@ -6,6 +6,12 @@ lists what changed between them.
 
 ## Unreleased
 
+- Notifications when a task ends, by ntfy and Telegram: `[notify]` in
+  `config.toml` picks the endings (`finished`, `failed`, `needs_review`) and the
+  services, and nothing is sent unless it's set. Sending runs in a detached
+  `curl` with a short timeout, so it can't hold up or fail a task. `furmi doctor`
+  checks the config is complete and that `curl` is installed.
+
 - `furmi schedule` manages schedules from the terminal: `ls`, `add` (the
   options of `furmi add`, plus `--cron` and `--allow-overlap`), `edit <id>`,
   `pause <id>`, `resume <id>` and `delete <id>`. It writes the files the

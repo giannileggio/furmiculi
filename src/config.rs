@@ -83,6 +83,22 @@ model_args = ["--model", "{model}"]
 # listen = "0.0.0.0:7433"               # ...to serve other machines
 # allowed_hosts = ["this-box.ts.net"]   # the Host header those browsers send
 # token_file = "~/.furmiculi/web-token" # shared secret every request carries
+
+# Notifications when a task ends for good. Nothing is sent unless `on` is set.
+# Secrets live in files (or the FURMI_NTFY_TOKEN / FURMI_TELEGRAM_BOT_TOKEN
+# environment variables), never in this file. With [web] serving other
+# machines under an allowed host, messages link to the task's dashboard page.
+# [notify]
+# on = ["failed", "finished"]    # finished | failed | needs_review
+#
+# [notify.ntfy]
+# url = "https://ntfy.sh"        # or the full topic URL
+# topic = "my-furmi"
+# token_file = "~/.furmiculi/ntfy-token"   # only for a protected topic
+#
+# [notify.telegram]
+# bot_token_file = "~/.furmiculi/telegram-token"
+# chat_id = "123456789"
 "#;
 
 /// The config `furmi init` writes, with `agent` as the default agent (left
@@ -105,6 +121,7 @@ pub struct Config {
     pub defaults: Defaults,
     pub agents: BTreeMap<String, Agent>,
     pub web: Web,
+    pub notify: crate::notify::Notify,
 }
 
 /// The dashboard, as `furmi web` / `furmi start` serve it. All optional: with
@@ -200,6 +217,7 @@ impl Default for Config {
             defaults: Defaults::default(),
             agents: builtin_agents(),
             web: Web::default(),
+            notify: Default::default(),
         }
     }
 }

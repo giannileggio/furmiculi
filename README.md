@@ -248,6 +248,40 @@ something needs attention. furmi doesn't run the installs for you: they're
 `npm install -g` (or, for hermes, its own installer) commands and each agent
 needs you to sign in once.
 
+### Notifications
+
+`furmi` can tell you when a task ends, through [ntfy](https://ntfy.sh), Telegram
+or both. Add this to `config.toml`, keeping only the services you use:
+
+```toml
+[notify]
+on = ["failed", "finished"]    # finished | failed | needs_review
+
+[notify.ntfy]
+url = "https://ntfy.sh"        # or the full topic URL, without `topic`
+topic = "my-furmi"
+token_file = "~/.furmiculi/ntfy-token"   # only for a protected topic
+
+[notify.telegram]
+bot_token_file = "~/.furmiculi/telegram-token"
+chat_id = "123456789"
+```
+
+Nothing is sent unless `on` lists an ending and a service is configured.
+`failed` means failed for good, once no retries are left, and `needs_review` is
+an interactive session that ended without saying how it went. Marking a task
+with `furmi done` or `furmi fail` counts too; a cancelled task sends nothing.
+
+A message carries the task's id, repo, status, attempt count and error. When
+`[web]` serves other machines under a name in `allowed_hosts`, it also links to
+the task's dashboard page.
+
+Secrets stay out of `config.toml` and tasks: they're read from those files, or
+from `FURMI_NTFY_TOKEN` and `FURMI_TELEGRAM_BOT_TOKEN` when no file is set.
+Sending needs `curl` on `$PATH`, gets 5 seconds, and can't hold up or fail a
+task: an undelivered message is only logged. `furmi doctor` warns if the config
+is incomplete or `curl` is missing.
+
 ### Serving your other machines (a tailnet)
 
 By default `furmi web` and `furmi start` bind to 127.0.0.1 only. On a box
