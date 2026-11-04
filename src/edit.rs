@@ -67,7 +67,7 @@ fn load_config(home: &Home) -> Result<Config> {
     Config::load(&home.config_path())
 }
 
-fn path_of(repo: &str) -> Result<PathBuf> {
+pub(crate) fn path_of(repo: &str) -> Result<PathBuf> {
     let repo = repo.trim();
     if repo.is_empty() {
         bail!("choose the repository the agent should work in");

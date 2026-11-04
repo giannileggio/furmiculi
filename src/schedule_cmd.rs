@@ -224,7 +224,9 @@ fn change(home: &Home, args: EditArgs) -> Result<()> {
             s.cron = cron;
         }
         if let Some(repo) = args.repo {
-            s.spec.repo = repo;
+            // Same normalisation as `add`: `~/x` or a relative path would
+            // otherwise be stored as typed.
+            s.spec.repo = edit::path_of(&repo.to_string_lossy())?;
         }
         if let Some(overlap) = overlap {
             s.allow_overlap = overlap;
