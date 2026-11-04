@@ -9,6 +9,13 @@ lists what changed between them.
 - A `hermes` agent preset (`hermes -z {prompt}` headless), alongside the other
   built-in agents. It ships without an auto-approve flag, like the rest.
 
+- `furmi clean` no longer removes a worktree it can't inspect. A worktree whose
+  owning repo moved or was deleted fails `git status`, and that used to count as
+  "no changes": the worktree was then removed as broken, taking any uncommitted
+  work in it with it. It is now reported (`kept <id>: can't inspect: …`) and
+  kept, and `furmi clean --remove-broken` removes those worktrees instead. The
+  dry run and the real run agree.
+
 ## 0.5.1
 
 - `furmi node add <name> <ssh-target> --furmi '<command>'` says how to start

@@ -100,7 +100,8 @@ enum Command {
     Node(nodes::NodeCmd),
     /// Remove the worktrees of finished tasks (done only, unless --all).
     ///
-    /// Worktrees with uncommitted changes are kept. Branches are never
+    /// Worktrees with uncommitted changes are kept, and so are worktrees git
+    /// can't inspect (--remove-broken takes those too). Branches are never
     /// deleted. With --archive, also deletes the archived task file and its
     /// logs, once its worktree is gone.
     Clean(clean::CleanArgs),

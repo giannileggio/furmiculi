@@ -163,6 +163,7 @@ furmi retry <id>        # requeue a failed/cancelled/needs_review task
 furmi clean             # remove worktrees and scratch folders of done tasks (-n: dry run)
 furmi clean --all --older-than 7d   # ...and of failed/cancelled ones, a week on
 furmi clean --archive --all --older-than 30d   # ...and their archived task files/logs
+furmi clean --all --remove-broken   # ...and worktrees whose repo moved or was deleted
 
 furmi update            # install a new release over this one (--check: just ask)
 furmi update --to 0.4.1 # ...a specific version, back to an earlier one included
