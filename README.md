@@ -14,17 +14,20 @@ agents, one file each.
 *Furmiculi* means "ants" in Sicilian: lots of small workers, each carrying one
 task, getting the job done while you're away.
 
-- **Tasks** are `.md` files: YAML frontmatter says where and how to run
-  (repo, branch, worktree, agent, model, schedule...), and the body is the
-  prompt.
-- **Schedules** are task templates with a cron expression. furmiculi
-  enqueues a new task each time one fires.
-- **`furmi`** runs pending tasks in tmux, tracks their status in the file, and
-  moves finished tasks to `archive/`.
-
-It works with any CLI coding agent: presets for Claude Code, Codex, Gemini
-CLI, Hermes Agent, opencode and Pi are built in, and others are a few lines of
-config.
+- **A queue made of plain Markdown files.** A task is a `.md` file: YAML
+  frontmatter says where and how to run (repo, branch, worktree, agent, model,
+  schedule...), and the body is the prompt. Status lives in the file and
+  finished tasks move to `archive/`, so the queue is greppable, versionable and
+  has no database. Write tasks by hand, with `furmi add`, or ask an agent to.
+- **Any agent, and plain commands too.** Presets for Claude Code, Codex,
+  Gemini CLI, Hermes Agent, opencode and Pi are built in, and others are a few
+  lines of config. A task can also be a plain shell command (`--run`), and a
+  cron schedule turns any task into recurring work ("every night..."). Tasks run
+  unattended in tmux, each in its own worktree, and can open a PR when done.
+- **One colony across all your machines.** `furmi node add` registers another
+  box over plain SSH, with no cluster, cloud service or extra auth. One
+  dashboard then shows every machine's queue and lets you queue and manage tasks
+  on any of them. Installing is one line, and `furmi doctor` says what's missing.
 
 <p align="center">
   <picture>
