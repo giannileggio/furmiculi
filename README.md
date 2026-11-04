@@ -278,7 +278,7 @@ What `furmi` does so that a bad day doesn't lose work:
   won't switch your checkout's branch over uncommitted changes, and
   `on_finish: pr` won't open a second PR for a branch that has one.
 
-`furmi web` serves a local dashboard (queue, running, archive and schedules,
+`furmi web` serves a local dashboard (queue, running, archive, schedules and stats,
 pushed live over SSE as it changes) — a Sidekiq-style view of the same state
 `furmi ls` prints. **+ New task** queues work from a form (what to do, which
 project, when to start, what to do with the result), calling the same code as

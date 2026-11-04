@@ -313,7 +313,8 @@ systemd|launchd` prints units that do that.
 
 `furmi` records what a headless run's stdout reports as `tokens_in`,
 `tokens_out` and `model_used` on the task (`furmi ls` shows both; the
-dashboard shows the model in the list and the tokens in the task view;
+dashboard shows the model in the list, the tokens in the task view and their
+totals, with how many tasks reported any, in the Stats view;
 `furmi status` totals the day's tokens). Cost is deliberately not recorded:
 on a subscription plan the figure an agent prints is an API-equivalent
 estimate, not what you pay. Two shapes are understood:
