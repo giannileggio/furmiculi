@@ -139,6 +139,11 @@ fn load_all<T>(
 /// How long a snapshot is reused even when no file moved: the parts of the
 /// state that come from the clock or the process table (the runner being
 /// alive, a schedule's next run, `generated_at`) change without a file doing so.
+///
+/// It also bounds how stale a snapshot can get after a change the stamps
+/// can't see: furmi writes task files by atomic rename, which moves the
+/// directory's mtime, but a file edited in place (by hand, or by an editor)
+/// doesn't, and shows up once this expires.
 const SNAPSHOT_TTL: Duration = Duration::from_secs(2);
 
 /// A directory or file that changed this recently might change again within
