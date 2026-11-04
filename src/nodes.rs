@@ -35,11 +35,11 @@ pub const LOCAL: &str = "local";
 /// as offline. One deadline for the whole request: a node that drips a byte at
 /// a time must not hold a web worker for longer than this.
 const TIMEOUT: Duration = Duration::from_secs(3);
-/// How long an answer is reused, so a page polling every couple of seconds, or
+/// How long an answer is reused, so a dashboard looking every second, or
 /// several open pages, ask a node once.
 const CACHE_TTL: Duration = Duration::from_secs(2);
 /// A failure is reused for longer: a node that is down costs a timeout each
-/// time it's asked, and a dead one shouldn't be asked on every poll.
+/// time it's asked, and a dead one shouldn't be asked on every look.
 const FAILURE_TTL: Duration = Duration::from_secs(10);
 /// A change made on a node (a task action can run its when-done step) gets
 /// longer than a read does.

@@ -125,7 +125,7 @@ enum Command {
     /// `furmi web` and `furmi run` began them. Tasks already running keep
     /// going; start again to resume the queue.
     Stop,
-    /// Show whether the runner is alive, the queue, budget and failing schedules.
+    /// Show whether the runner is alive, the queue and failing schedules.
     Status,
     /// Install a new release over this one, keeping the same install.
     ///

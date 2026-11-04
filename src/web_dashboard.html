@@ -1012,7 +1012,7 @@ function idCell(r) {
 
 // When it runs (or ran): for a working task that's when it started, plus how
 // long it has been going. The clock is filled in and kept current by the
-// once-a-second ticker below, so it doesn't wait on the 2s refresh.
+// once-a-second ticker below, so it doesn't wait on the next push.
 function whenCell(r) {
   const when = escapeHtml(r.when);
   if (r.status !== "running" || !r.when_at) return when;
@@ -2316,7 +2316,7 @@ document.addEventListener("visibilitychange", () => {
 addEventListener("popstate", applyUrl);
 applyUrl();
 openEvents();
-// The "running for" clock ticks on its own, so it stays right between refreshes.
+// The "running for" clock ticks on its own, so it stays right between pushes.
 setInterval(tickElapsed, 1000);
 </script>
 </body>

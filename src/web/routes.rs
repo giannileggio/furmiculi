@@ -117,7 +117,7 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 match control::logs(home, id, attempt) {
                     Ok(log) => {
                         // `?tail=<bytes>`: the end of a long log, for the live
-                        // view, instead of re-reading all of it every poll.
+                        // view, instead of re-reading all of it every second.
                         let (log, cut) = match query_param(url, "tail").and_then(|v| v.parse().ok())
                         {
                             Some(limit) => tail_of(&log, limit),
