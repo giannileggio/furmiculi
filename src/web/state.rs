@@ -3,6 +3,10 @@
 //! the new-task form offers.
 
 use std::cmp::Reverse;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
 use serde::Serialize;
@@ -132,7 +136,91 @@ fn load_all<T>(
     ok
 }
 
+/// How long a snapshot is reused even when no file moved: the parts of the
+/// state that come from the clock or the process table (the runner being
+/// alive, a schedule's next run, `generated_at`) change without a file doing so.
+///
+/// It also bounds how stale a snapshot can get after a change the stamps
+/// can't see: furmi writes task files by atomic rename, which moves the
+/// directory's mtime, but a file edited in place (by hand, or by an editor)
+/// doesn't, and shows up once this expires.
+const SNAPSHOT_TTL: Duration = Duration::from_secs(2);
+
+/// A directory or file that changed this recently might change again within
+/// the filesystem's timestamp granularity without its mtime moving, so a
+/// snapshot taken then isn't trusted (the "racily clean" rule git uses).
+const RACY: Duration = Duration::from_secs(2);
+
+type Stamp = Option<(SystemTime, u64)>;
+
+fn stamp(path: &Path) -> Stamp {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
+}
+
+struct Snapshot {
+    stamps: [Stamp; 5],
+    taken: Instant,
+    json: String,
+}
+
+type SnapshotKey = (PathBuf, Option<String>);
+
+static SNAPSHOTS: Mutex<Option<HashMap<SnapshotKey, Snapshot>>> = Mutex::new(None);
+
+#[cfg(test)]
+thread_local! {
+    /// Full rebuilds done on this thread, so tests can tell a cache hit from a rescan.
+    static BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The state as JSON, shared by every caller in the process. Every write furmi
+/// makes to a task or schedule is an atomic rename, which moves the mtime of
+/// the directory it lands in, so an unchanged `tasks/`, `archive/` and
+/// `schedules/` (plus config and runner heartbeat) means nothing needs
+/// re-reading. The lock is held while rebuilding, so tabs asking at once
+/// share one scan instead of each doing their own.
 pub(super) fn state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
+    let stamps = [
+        stamp(&home.tasks()),
+        stamp(&home.archive()),
+        stamp(&home.schedules()),
+        stamp(&home.config_path()),
+        stamp(&home.runner_state()),
+    ];
+    let key = (home.root().to_path_buf(), cwd_repo.map(str::to_string));
+    let mut guard = SNAPSHOTS.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = guard.get_or_insert_with(HashMap::new);
+    if let Some(s) = cache.get(&key)
+        && s.stamps == stamps
+        && s.taken.elapsed() < SNAPSHOT_TTL
+    {
+        return Ok(s.json.clone());
+    }
+    let started = SystemTime::now();
+    let json = build_state_json(home, cwd_repo)?;
+    let racy = stamps
+        .iter()
+        .flatten()
+        .any(|(m, _)| started.duration_since(*m).map_or(true, |age| age < RACY));
+    if racy {
+        cache.remove(&key);
+    } else {
+        cache.insert(
+            key,
+            Snapshot {
+                stamps,
+                taken: Instant::now(),
+                json: json.clone(),
+            },
+        );
+    }
+    Ok(json)
+}
+
+fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
+    #[cfg(test)]
+    BUILDS.with(|b| b.set(b.get() + 1));
     let mut invalid = Vec::new();
     let config = Config::load(&home.config_path()).unwrap_or_else(|e| {
         invalid.push(InvalidRow {
@@ -423,6 +511,80 @@ pub(super) fn capacity(home: &Home, cwd_repo: Option<&str>) -> Result<crate::nod
 mod tests {
     use super::*;
     use crate::spec::TaskSpec;
+
+    /// Pushes every stamped path's mtime into the past, as if the files had
+    /// been quiet for a while (a fresh mtime is deliberately not trusted).
+    fn age(home: &Home) {
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        for dir in [home.tasks(), home.archive(), home.schedules()] {
+            std::fs::File::open(dir).unwrap().set_modified(old).unwrap();
+        }
+    }
+
+    fn builds() -> usize {
+        BUILDS.with(|b| b.get())
+    }
+
+    fn home_in(dir: &tempfile::TempDir) -> Home {
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        for d in home.dirs() {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        home
+    }
+
+    fn task(id: &str) -> Task {
+        let spec = crate::spec::TaskSpec {
+            repo: "/tmp".into(),
+            branch: None,
+            worktree: None,
+            agent: Some("claude".into()),
+            model: None,
+            mode: None,
+            on_finish: None,
+            retries: None,
+            retry_delay: None,
+            timeout: None,
+        };
+        Task::new(id.into(), spec, "do it".into())
+    }
+
+    #[test]
+    fn an_idle_dashboard_reuses_the_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home_in(&dir);
+        age(&home);
+        let before = builds();
+        let first = state_json(&home, None).unwrap();
+        for _ in 0..5 {
+            assert_eq!(state_json(&home, None).unwrap(), first);
+        }
+        assert_eq!(builds() - before, 1, "only the first look scans");
+    }
+
+    #[test]
+    fn a_change_is_picked_up_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home_in(&dir);
+        age(&home);
+        let quiet = state_json(&home, None).unwrap();
+        assert!(!quiet.contains("\"id\":\"fresh\""));
+        let before = builds();
+
+        // A status update is an atomic rewrite of a file in tasks/.
+        let t = task("fresh");
+        t.save(&home.tasks().join("fresh.md")).unwrap();
+        let after = state_json(&home, None).unwrap();
+        assert!(after.contains("\"id\":\"fresh\""));
+        assert_eq!(builds() - before, 1);
+
+        // Right after a write the directory is too fresh to trust, so the
+        // next look rescans rather than risk missing a same-tick change.
+        let mut t = t;
+        t.status = Status::Failed;
+        t.save(&home.tasks().join("fresh.md")).unwrap();
+        assert_ne!(state_json(&home, None).unwrap(), after);
+    }
 
     #[test]
     fn a_failed_tasks_reason_reaches_its_row() {
