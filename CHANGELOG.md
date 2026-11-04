@@ -6,6 +6,14 @@ lists what changed between them.
 
 ## Unreleased
 
+- A worktree task that edits the base checkout instead of its own worktree no
+  longer looks like a clean no-op. The runner saves the base checkout's dirty
+  paths when an attempt starts and compares them when it ends; if the worktree
+  stayed clean while the base checkout gained changes and the task has an
+  `on_finish` step, its log names those paths and the dashboard's health list
+  warns that the work may be in the shared checkout. The task still succeeds:
+  the warning makes the escape visible, not fatal.
+
 - **Setup** in the dashboard can now change the runner's limits (tasks at once,
   overall and per repo, and how often it rescans) and the task defaults (mode,
   when-done, worktree, retries, retry delay, timeout). It rewrites those keys in
