@@ -231,10 +231,72 @@ pub(super) fn perform_set_default_agent(home: &Home, body: &str) -> Result<()> {
     crate::config::set_default_agent(&home.config_path(), &form.agent)
 }
 
-/// Which coding agents are installed here and how to get the others.
+#[derive(Deserialize)]
+struct LimitsBody {
+    max_parallel: usize,
+    max_parallel_per_repo: usize,
+    poll_interval: String,
+}
+
+#[derive(Deserialize)]
+struct DefaultsBody {
+    mode: String,
+    worktree: bool,
+    on_finish: String,
+    retries: u32,
+    retry_delay: String,
+    timeout: String,
+}
+
+pub(super) fn perform_set_defaults(home: &Home, body: &str) -> Result<()> {
+    let f: DefaultsBody = serde_json::from_str(body).context("couldn't read the form")?;
+    home.ensure_initialized()?;
+    crate::config::set_defaults(
+        &home.config_path(),
+        &crate::config::DefaultsForm {
+            mode: &f.mode,
+            worktree: f.worktree,
+            on_finish: &f.on_finish,
+            retries: f.retries,
+            retry_delay: &f.retry_delay,
+            timeout: &f.timeout,
+        },
+    )
+}
+
+pub(super) fn perform_set_limits(home: &Home, body: &str) -> Result<()> {
+    let form: LimitsBody = serde_json::from_str(body).context("couldn't read the form")?;
+    if form.max_parallel == 0 || form.max_parallel_per_repo == 0 {
+        anyhow::bail!("both limits must be at least 1");
+    }
+    home.ensure_initialized()?;
+    crate::config::set_runner_limits(
+        &home.config_path(),
+        form.max_parallel,
+        form.max_parallel_per_repo,
+        &form.poll_interval,
+    )
+}
+
+/// Which coding agents are installed here and how to get the others, and how
+/// many tasks may run at once.
 pub(super) fn agents_json(home: &Home) -> Result<String> {
     let config = Config::load(&home.config_path())?;
-    Ok(serde_json::json!({ "agents": crate::config::agent_statuses(&config) }).to_string())
+    Ok(serde_json::json!({
+        "agents": crate::config::agent_statuses(&config),
+        "max_parallel": config.runner.max_parallel,
+        "max_parallel_per_repo": config.runner.max_parallel_per_repo,
+        "poll_interval": humantime::format_duration(config.runner.poll_interval).to_string(),
+        "defaults": {
+            "mode": config.defaults.mode,
+            "worktree": config.defaults.worktree,
+            "on_finish": config.defaults.on_finish,
+            "retries": config.defaults.retries,
+            "retry_delay": humantime::format_duration(config.defaults.retry_delay).to_string(),
+            "timeout": humantime::format_duration(config.defaults.timeout).to_string(),
+        },
+    })
+    .to_string())
 }
 
 /// The setup check: what `furmi doctor` looks at, for the dashboard.
