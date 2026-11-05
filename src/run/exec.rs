@@ -343,6 +343,7 @@ mod tests {
             interactive: argv(&["agent", "{prompt}"]),
             model_args: argv(&["-m", "{model}"]),
             model: None,
+            models_cmd: Vec::new(),
         };
         let prompt = "fix {model}; rm -rf";
         assert_eq!(

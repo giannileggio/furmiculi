@@ -672,6 +672,12 @@
         <label id="f-agent-wrap" hidden>Agent
           <select id="f-agent"></select>
         </label>
+        <label id="f-model-wrap">Model
+          <input id="f-model" list="f-models" autocomplete="off" placeholder="the agent's own"
+            spellcheck="false" class="mono">
+          <datalist id="f-models"></datalist>
+          <small id="f-model-hint">Leave empty for the agent's own model.</small>
+        </label>
       </div>
       <div class="buttons">
         <span class="error" id="f-error"></span>
@@ -2310,6 +2316,8 @@ setupOverlay.addEventListener("click", (e) => { if (e.target === setupOverlay) s
 
 let formInfo = null;
 let formMode = { kind: "new" };
+/// The agent this form will run under, which is what the model is chosen for.
+let formAgent = null;
 let draftPrompt = ""; // what was typed into "New task" before it was closed
 const newOverlay = document.getElementById("new-overlay");
 const newForm = document.getElementById("new-form");
@@ -2350,6 +2358,79 @@ function setAgents(list, current) {
   $("f-agent").innerHTML = agents.map(a =>
     `<option value="${escapeHtml(a)}"${a === current ? " selected" : ""}>${escapeHtml(a)}</option>`
   ).join("");
+  formAgent = agents.includes(current) ? current : (agents[0] || null);
+}
+
+// ---- Models
+//
+// A model is the agent's to know (its CLI's version, the providers signed in),
+// so the suggestions come from the agent itself: /api/models asks it on the
+// machine that will run the task, which keeps its answer for an hour. Models a
+// task has already run with here are offered at once, from the page's own state.
+let modelAnswers = new Map();   // "machine|agent" -> what /api/models said
+let modelAsked = 0;             // so a slow answer can't fill a form that moved on
+
+function chosenNode() {
+  return $("f-node-wrap").hidden ? "local" : $("f-node").value;
+}
+
+function historyModels(agent) {
+  const seen = new Set();
+  const rows = (lastState && (lastState.queue || []).concat(lastState.running || [], lastState.archive || [])) || [];
+  for (const r of rows) {
+    if (r.command || r.agent !== agent || !r.model || r.model === "-") continue;
+    seen.add(r.model);
+  }
+  return [...seen];
+}
+
+function offerModels(names) {
+  $("f-models").innerHTML = names.map(m => `<option value="${escapeHtml(m)}"></option>`).join("");
+}
+
+async function refreshModels() {
+  const wrap = $("f-model-wrap");
+  const agent = formAgent;
+  // A command task has no agent to run a model on.
+  if (!agent || formMode.command) {
+    wrap.hidden = true;
+    $("f-model").value = "";
+    return;
+  }
+  wrap.hidden = false;
+  const mine = ++modelAsked;
+  const node = chosenNode();
+  // What this page already knows, before anything is asked: models its own
+  // tasks have run with.
+  offerModels(historyModels(agent));
+  $("f-model-hint").textContent = "Leave empty for the agent's own model.";
+  // Nothing is placed yet on "any machine", so there's no CLI to ask.
+  if (node === "auto") return;
+  const key = `${node}|${agent}`;
+  let answer = modelAnswers.get(key);
+  if (!answer) {
+    try {
+      const q = node === "local" ? "" : `&node=${encodeURIComponent(node)}`;
+      const res = await fetch(`/api/models?agent=${encodeURIComponent(agent)}${q}`, { headers: AUTH() });
+      answer = res.ok ? await res.json() : { models: [], source: "none" };
+    } catch { answer = { models: [], source: "none" }; }
+    if (mine !== modelAsked) return; // the form moved on while asking
+    modelAnswers.set(key, answer);
+  }
+  if (mine !== modelAsked) return;
+  // An agent with no `model_args` can't be handed a model at all.
+  if (answer.can_pin === false) {
+    wrap.hidden = true;
+    $("f-model").value = "";
+    return;
+  }
+  wrap.hidden = false;
+  offerModels([...answer.models, ...historyModels(agent)]);
+  if (answer.error) {
+    $("f-model-hint").textContent = `Couldn't ask ${agent} which models it has: ${answer.error}`;
+  } else if (answer.default) {
+    $("f-model-hint").textContent = `Leave empty for the agent's own model (${answer.default}).`;
+  }
 }
 
 const LOCAL_HINT = "The folder of a git repository on this machine.";
@@ -2366,6 +2447,7 @@ async function onNodeChange() {
     setAgents(info.agents, info.agent);
     $("f-repo-hint").textContent = LOCAL_HINT;
     fSubmit.disabled = false;
+    refreshModels();
     return;
   }
   fError.textContent = "";
@@ -2399,12 +2481,15 @@ async function onNodeChange() {
     $("f-repos").innerHTML = data.repos.map(r =>
       `<option value="${escapeHtml(r.remote)}">${escapeHtml(r.path)}</option>`).join("");
     setAgents(data.agents, data.agent);
+    refreshModels();
     $("f-repo-hint").textContent = node === "auto"
       ? "A repository some machine has, by its git remote (github.com/me/app). The least busy one that has it is picked once, now."
       : `A repository ${node} has a clone of, by its git remote (github.com/me/app).`;
     fSubmit.disabled = false;
   } catch (err) {
     fError.textContent = String(err.message || err);
+    // No agent to pick a model for, so nothing to offer.
+    $("f-model-wrap").hidden = true;
     if ($("f-scratch").checked) fSubmit.disabled = false;
   }
 }
@@ -2417,12 +2502,12 @@ $("f-scratch").addEventListener("change", () => {
 
 function openForm(kind, v) {
   const info = formInfo || { repos: [], agents: [], agent: null, on_finish: "none" };
-  formMode = { kind, id: v && v.id };
+  // A command task's one text box holds its command, and it has no agent.
+  const command = !!(v && v.command);
+  formMode = { kind, id: v && v.id, command };
   $("new-title").textContent = kind === "task" ? `Edit ${v.id}`
     : kind === "schedule" ? "Edit schedule" : "New task";
 
-  // A command task's one text box holds its command, and it has no agent.
-  const command = !!(v && v.command);
   $("f-prompt-label").textContent = command ? "What command should it run?" : "What should the agent do?";
   $("f-prompt-hint").textContent = command
     ? "Run with sh -c in the project's folder."
@@ -2431,6 +2516,9 @@ function openForm(kind, v) {
   $("f-repo").value = v ? v.repo : (info.repos[0] || "");
   $("f-repos").innerHTML = info.repos.map(r => `<option value="${escapeHtml(r)}"></option>`).join("");
   $("f-finish").value = v ? v.on_finish : info.on_finish;
+  // The model the file pins, not the one it will run with: an empty box means
+  // "the agent's own", so prefilling the agent's default would pin it.
+  $("f-model").value = (v && v.model) || "";
 
   setAgents(command ? [] : info.agents, v && v.agent ? v.agent : info.agent);
 
@@ -2464,6 +2552,8 @@ function openForm(kind, v) {
   $("f-start").innerHTML = starts.map(([val, label]) => `<option value="${val}">${label}</option>`).join("");
 
   syncFormFields();
+  // Last, once the machine and agent the form starts with are settled.
+  refreshModels();
   fError.textContent = "";
   newOverlay.classList.add("active");
   $("f-prompt").focus();
@@ -2506,6 +2596,8 @@ $("new-task-open").addEventListener("click", () => openForm("new"));
 $("new-close").addEventListener("click", closeForm);
 $("new-cancel").addEventListener("click", closeForm);
 $("f-repeat").addEventListener("change", syncFormFields);
+// Another agent has another list of models (and another default).
+$("f-agent").addEventListener("change", () => { formAgent = $("f-agent").value; refreshModels(); });
 newOverlay.addEventListener("click", (e) => { if (e.target === newOverlay) closeForm(); });
 // ---- Keyboard
 //
@@ -2615,6 +2707,8 @@ newForm.addEventListener("submit", async (e) => {
     repo: $("f-repo").value,
     on_finish: $("f-finish").value,
     agent: $("f-agent-wrap").hidden ? null : $("f-agent").value,
+    // `null` leaves an existing model alone; "" clears it, back to the agent's.
+    model: $("f-model-wrap").hidden ? null : $("f-model").value.trim(),
   };
   const cron = cronFor(repeat, $("f-time").value, $("f-day").value, $("f-cron").value);
   try {

@@ -13,6 +13,16 @@ lists what changed between them.
   alone, and a running `furmi run` picks them up within a poll. A dashboard
   whose session has ended says so instead of quietly showing stale numbers.
 
+- The dashboard's task form can pin a model, like `furmi add --model`: the
+  **Model** box is there for a new task, an edit and a schedule, on any machine.
+  The suggestions are the ones the agent's own CLI names (`pi --list-models`,
+  `opencode models`), asked on the machine that will run the task and kept for
+  an hour in `models-cache.json`, plus models your tasks have already run with.
+  Agents whose CLI has no such command (claude, codex, gemini, hermes) get a box
+  to type into and no list; an agent with no `model_args` can't be handed a
+  model, so it gets no box. New optional `models_cmd` per agent in `config.toml`,
+  filled in for the pi and opencode presets.
+
 ## 0.6.0
 
 - The dashboard has a Stats view: how many tasks finished, the success rate,

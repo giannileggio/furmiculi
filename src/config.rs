@@ -34,6 +34,11 @@ timeout = "2h"
 # the agent uses its own default. Add [agents.<name>] tables for any other
 # CLI agent; these presets stay available unless you redefine them.
 #
+# `models_cmd` is how the dashboard asks the agent which models it can run,
+# for the form's suggestions: one provider and a model per line, or a
+# `provider  model` table. Only where the CLI can answer; leave it out and the
+# form still takes any model you type. Answers are kept an hour.
+#
 # Headless runs can't answer permission prompts: add each agent's
 # auto-approve flags (e.g. claude "--permission-mode", "acceptEdits";
 # codex "--full-auto"; gemini "--yolo"; hermes "--yolo") to suit your trust
@@ -69,11 +74,13 @@ model_args = ["--model", "{model}"]
 headless = ["opencode", "run", "{prompt}"]
 interactive = ["opencode", "--prompt", "{prompt}"]
 model_args = ["--model", "{model}"]
+models_cmd = ["opencode", "models"]
 
 [agents.pi]
 headless = ["pi", "--mode", "json", "{prompt}"]
 interactive = ["pi", "{prompt}"]
 model_args = ["--model", "{model}"]
+models_cmd = ["pi", "--list-models"]
 
 # The runner tidies up after itself, at start and then every `interval`: it
 # removes the clean worktrees of done tasks, trims old attempt logs, requeues
@@ -224,6 +231,11 @@ pub struct Agent {
     /// Model used when the task doesn't name one.
     #[serde(default)]
     pub model: Option<String>,
+    /// Asks this CLI which models it can run (`pi --list-models`), for the
+    /// dashboard form's suggestions. Empty when the CLI has no answer: the
+    /// form then takes any name typed into it, and offers none.
+    #[serde(default)]
+    pub models_cmd: Vec<String>,
 }
 
 impl Default for Runner {
@@ -264,41 +276,58 @@ impl Default for Config {
     }
 }
 
-/// Presets for common CLI agents: `(name, headless, interactive)`. All take
-/// `--model`. The headless ones ask for JSON output where the agent has it
-/// (`claude --output-format json`, `pi --mode json`), because that is what
-/// carries the token usage furmi records — and, for pi, the only place a
+/// Presets for common CLI agents: `(name, headless, interactive, models_cmd)`.
+/// All take `--model`. The headless ones ask for JSON output where the agent
+/// has it (`claude --output-format json`, `pi --mode json`), because that is
+/// what carries the token usage furmi records — and, for pi, the only place a
 /// failed run is reported (its JSON mode exits 0 either way).
-const PRESETS: &[(&str, &[&str], &[&str])] = &[
+///
+/// `models_cmd` is only there where the CLI has such a command: `pi --list-models`
+/// and `opencode models`. claude, codex, gemini and hermes take a name (or have
+/// an interactive picker) and never say one, so their list stays empty.
+type Preset = (
+    &'static str,
+    &'static [&'static str],
+    &'static [&'static str],
+    &'static [&'static str],
+);
+
+const PRESETS: &[Preset] = &[
     (
         "claude",
         &["claude", "-p", "{prompt}", "--output-format", "json"],
         &["claude", "{prompt}"],
+        &[],
     ),
     (
         "codex",
         &["codex", "exec", "{prompt}"],
         &["codex", "{prompt}"],
+        &[],
     ),
     (
         "gemini",
         &["gemini", "--prompt", "{prompt}"],
         &["gemini", "--prompt-interactive", "{prompt}"],
+        &[],
     ),
     (
         "hermes",
         &["hermes", "-z", "{prompt}"],
         &["hermes", "chat", "-q", "{prompt}"],
+        &[],
     ),
     (
         "opencode",
         &["opencode", "run", "{prompt}"],
         &["opencode", "--prompt", "{prompt}"],
+        &["opencode", "models"],
     ),
     (
         "pi",
         &["pi", "--mode", "json", "{prompt}"],
         &["pi", "{prompt}"],
+        &["pi", "--list-models"],
     ),
 ];
 
@@ -306,12 +335,13 @@ fn builtin_agents() -> BTreeMap<String, Agent> {
     let argv = |parts: &[&str]| parts.iter().map(|s| s.to_string()).collect();
     PRESETS
         .iter()
-        .map(|(name, headless, interactive)| {
+        .map(|(name, headless, interactive, models_cmd)| {
             let agent = Agent {
                 headless: argv(headless),
                 interactive: argv(interactive),
                 model_args: argv(&["--model", "{model}"]),
                 model: None,
+                models_cmd: argv(models_cmd),
             };
             (name.to_string(), agent)
         })
@@ -350,7 +380,7 @@ pub fn agent_statuses(config: &Config) -> Vec<AgentStatus> {
     let order = |name: &str| {
         PRESETS
             .iter()
-            .position(|(p, _, _)| *p == name)
+            .position(|(p, ..)| *p == name)
             .unwrap_or(usize::MAX)
     };
     let mut agents: Vec<AgentStatus> = config
@@ -672,8 +702,8 @@ fn web_table(web: &Web) -> String {
 pub fn installed_presets() -> Vec<&'static str> {
     PRESETS
         .iter()
-        .filter(|(_, headless, _)| on_path(headless[0]))
-        .map(|(name, _, _)| *name)
+        .filter(|(_, headless, ..)| on_path(headless[0]))
+        .map(|(name, ..)| *name)
         .collect()
 }
 

@@ -345,7 +345,13 @@ queue and manage tasks on any of them (see the same page).
 
 A task that is still *Waiting* has an **Edit** button: change what it does, the
 project, when it starts, or what happens when it's done (not once it has
-started: cancel it and add a new one). **+ New task** with "How often?" set to
+started: cancel it and add a new one). Its **Model** box is the same as
+`furmi add --model`: empty means the agent's own model, and the suggestions are
+the ones that agent's CLI names itself (`pi --list-models`, `opencode models`),
+kept for an hour, plus any model a task of yours has already run with. Agents
+with no way to list models (claude, codex, gemini, hermes) get a box you can
+type into and no suggestions, and an agent with no `model_args` gets no box at
+all: it can't be handed a model. **+ New task** with "How often?" set to
 anything but "Just once" creates a schedule, which appears under *Repeating*
 with **Edit**, **Pause**/**Resume** and **Delete**. Changing a schedule's time or
 resuming it starts counting from now, so it never fires for a slot that passed

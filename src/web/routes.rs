@@ -5,7 +5,7 @@
 use tiny_http::Method;
 
 use super::handlers::{
-    agents_json, detail_reply, doctor_json, json_err, json_log_with, mutation_reply,
+    agents_json, detail_reply, doctor_json, json_err, json_log_with, models_json, mutation_reply,
     perform_action, perform_create, perform_create_schedule, perform_edit_schedule,
     perform_edit_task, perform_set_default_agent, perform_set_defaults, perform_set_limits,
     tail_of, task_view_json,
@@ -102,6 +102,15 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 Ok(json) => json_reply(200, json),
                 Err(e) => json_reply(500, json_err(&e)),
             },
+            // What the chosen agent can run, for the task form's model box.
+            ["api", "models"] => {
+                let agent = query_param(url, "agent");
+                let refresh = query_param(url, "refresh") == Some("1");
+                match models_json(home, agent, refresh) {
+                    Ok(json) => json_reply(200, json),
+                    Err(e) => json_reply(500, json_err(&e)),
+                }
+            }
             ["api", "doctor"] => json_reply(200, doctor_json(home)),
             ["api", "agents"] => match agents_json(home) {
                 Ok(json) => json_reply(200, json),

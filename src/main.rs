@@ -9,6 +9,7 @@ mod frontmatter;
 mod fsutil;
 mod git;
 mod home;
+mod models;
 mod nodes;
 mod notify;
 mod restart;
