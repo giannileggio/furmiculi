@@ -291,7 +291,10 @@ after you close the dashboard; `furmi stop` or the **stop** link next to
 "runner: on" ends it), and **Setup** lists the coding agents (installed or not,
 with the install command to copy, and **Use this one** to make one the default)
 above what `furmi doctor` finds (tmux, git, task files), with a banner when
-something needs attention. furmi doesn't run the installs for you: they're
+something needs attention. It's also where the runner's limits (tasks at once,
+overall and per repo, and how often it rescans) and the task defaults (mode,
+when-done, own worktree, retries, retry delay, timeout) are changed: they're
+written into `config.toml`, and everything else in that file stays as it is. furmi doesn't run the installs for you: they're
 `npm install -g` (or, for hermes, its own installer) commands and each agent
 needs you to sign in once.
 

@@ -6,6 +6,13 @@ lists what changed between them.
 
 ## Unreleased
 
+- **Setup** in the dashboard can now change the runner's limits (tasks at once,
+  overall and per repo, and how often it rescans) and the task defaults (mode,
+  when-done, worktree, retries, retry delay, timeout). It rewrites those keys in
+  `config.toml` and leaves the rest of the file — including your comments —
+  alone, and a running `furmi run` picks them up within a poll. A dashboard
+  whose session has ended says so instead of quietly showing stale numbers.
+
 ## 0.6.0
 
 - The dashboard has a Stats view: how many tasks finished, the success rate,

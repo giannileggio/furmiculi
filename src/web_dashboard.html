@@ -303,6 +303,9 @@
   ul.agents code.cmd { flex: 1 1 260px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px; font-size: 12px; overflow-x: auto; white-space: nowrap; }
   ul.agents button { font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
   ul.agents button:hover { background: rgba(127,127,127,.12); }
+  form.limits { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 4px 16px 12px; font-size: 13px; }
+  form.limits input { width: 56px; margin-left: 6px; }
+  form.limits button { font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
   p.hint { margin: 0; padding: 0 16px 12px; font-size: 12px; color: var(--muted); }
   .badge.active { color: var(--done); }
   .badge.paused { color: var(--cancelled); }
@@ -689,6 +692,25 @@
       <h3 class="sub">Coding agents</h3>
       <ul class="agents" id="agent-list"><li>checking&hellip;</li></ul>
       <p class="hint" id="agent-hint"></p>
+      <h3 class="sub">Runner</h3>
+      <form class="limits" id="limits-form">
+        <label>At once, overall <input type="number" min="1" id="lim-total" required></label>
+        <label>At once, per repo <input type="number" min="1" id="lim-repo" required></label>
+        <label>Rescan every <input type="text" id="lim-poll" size="6" required></label>
+        <button type="submit">Save</button>
+      </form>
+      <p class="hint">A running <code>furmi run</code> picks changes up within a poll.</p>
+      <h3 class="sub">Task defaults</h3>
+      <form class="limits" id="defaults-form">
+        <label>Mode <select id="def-mode"><option>headless</option><option>interactive</option></select></label>
+        <label>On finish <select id="def-finish"><option>none</option><option>commit</option><option>push</option><option>pr</option></select></label>
+        <label><input type="checkbox" id="def-worktree"> Own git worktree</label>
+        <label>Retries <input type="number" min="0" id="def-retries" required></label>
+        <label>Retry delay <input type="text" id="def-delay" size="6" required></label>
+        <label>Timeout <input type="text" id="def-timeout" size="6" required></label>
+        <button type="submit">Save</button>
+      </form>
+      <p class="hint">Used by any task or schedule that doesn't set its own. Durations look like <code>30s</code>, <code>5m</code>, <code>2h</code>.</p>
       <h3 class="sub">Checks</h3>
       <ul class="checks" id="setup-list"><li>checking&hellip;</li></ul>
     </div>
@@ -749,6 +771,7 @@ const TOKEN = (() => {
 })();
 // Sent with every request: the per-run token (defeats cross-site forgery)
 // and, on a remote dashboard, the bearer token the server gates on.
+const LAPSED = "Your session has ended (idle, or the server restarted). Open the dashboard link with its token again.";
 const AUTH = () => ({
   "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}`,
 });
@@ -1170,6 +1193,7 @@ let lastState = null;
 async function refresh() {
   try {
     const res = await fetch("/api/state", { headers: AUTH() });
+    if (res.status === 401) { toast(LAPSED); return; }
     lastState = await res.json();
   } catch (e) {
     return; // keep showing the last good state
@@ -2128,8 +2152,52 @@ async function loadSetup() {
 
 async function loadAgents() {
   const res = await fetch("/api/agents", { headers: AUTH() });
-  return (await res.json()).agents;
+  const data = await res.json();
+  if (data.max_parallel) {
+    document.getElementById("lim-total").value = data.max_parallel;
+    document.getElementById("lim-repo").value = data.max_parallel_per_repo;
+    document.getElementById("lim-poll").value = data.poll_interval;
+    const d = data.defaults;
+    document.getElementById("def-mode").value = d.mode;
+    document.getElementById("def-finish").value = d.on_finish;
+    document.getElementById("def-worktree").checked = d.worktree;
+    document.getElementById("def-retries").value = d.retries;
+    document.getElementById("def-delay").value = d.retry_delay;
+    document.getElementById("def-timeout").value = d.timeout;
+  }
+  return data.agents;
 }
+
+function saveForm(formId, url, body, what) {
+  document.getElementById(formId).addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body()),
+      });
+      const data = await res.json();
+      if (!res.ok) toast(data.error || `couldn't save the ${what}`);
+      else toast(`${what[0].toUpperCase()}${what.slice(1)} saved`, true);
+    } catch (err) { toast(String(err)); }
+    refresh();
+  });
+}
+const val = (id) => document.getElementById(id).value;
+saveForm("limits-form", "/api/runner/limits", () => ({
+  max_parallel: Number(val("lim-total")),
+  max_parallel_per_repo: Number(val("lim-repo")),
+  poll_interval: val("lim-poll").trim(),
+}), "limits");
+saveForm("defaults-form", "/api/defaults", () => ({
+  mode: val("def-mode"),
+  worktree: document.getElementById("def-worktree").checked,
+  on_finish: val("def-finish"),
+  retries: Number(val("def-retries")),
+  retry_delay: val("def-delay").trim(),
+  timeout: val("def-timeout").trim(),
+}), "defaults");
 
 function renderSetup(checks) {
   setupList.innerHTML = checks.map(c =>
@@ -2322,6 +2390,7 @@ async function onNodeChange() {
       data = { repos: [...seen.values()], agents: [], agent: null };
     } else {
       const res = await fetch(`/api/repos?node=${encodeURIComponent(node)}`, { headers: AUTH() });
+      if (res.status === 401) throw new Error(LAPSED);
       data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     }
