@@ -682,7 +682,7 @@
       <div class="buttons">
         <span class="error" id="f-error"></span>
         <button type="button" class="btn secondary" id="new-cancel">Cancel</button>
-        <button type="submit" class="btn secondary" id="f-draft"
+        <button type="button" class="btn secondary" id="f-draft"
           title="Save it without queueing it: the runner leaves it alone until you queue it">Save as draft</button>
         <button type="submit" class="btn" id="f-submit">Queue task</button>
       </div>
@@ -2491,7 +2491,7 @@ function openForm(kind, v, template) {
 
   // A new task or schedule can go to another machine, if any are merged in.
   const online = ((lastState && lastState.nodes) || []).filter(n => n.online && n.writable !== false);
-  $("f-node-wrap").hidden = kind !== "new" || online.length < 2;
+  $("f-node-wrap").hidden = kind !== "new" || !!formMode.template || online.length < 2;
   $("f-node").innerHTML = online.map(n =>
     `<option value="${escapeHtml(n.name)}">${n.name === "local" ? "This machine" : escapeHtml(n.name)}</option>`).join("")
     + `<option value="auto">Any machine (least busy)</option>`;
@@ -2662,7 +2662,7 @@ async function post(path, body) {
 
 // Which button sent the form: "Save as draft" queues nothing.
 let asDraft = false;
-$("f-draft").addEventListener("click", () => { asDraft = true; });
+$("f-draft").addEventListener("click", () => { asDraft = true; newForm.requestSubmit(); });
 fSubmit.addEventListener("click", () => { asDraft = false; });
 
 newForm.addEventListener("submit", async (e) => {

@@ -102,7 +102,7 @@ Don't edit these by hand. Use `furmi` commands to change the status.
 |---------|----------|--------|
 | `furmi done [id]`   | running, needs_review, failed | Ends the session if running, runs `on_finish`, archives as `done` (or `failed` if `on_finish` fails). |
 | `furmi fail [id] [-r reason]` | running, needs_review | Ends the session if running, archives as `failed` without retrying. |
-| `furmi cancel [id]` | pending, running | Ends the session if running, archives as `cancelled`. `on_finish` doesn't run. |
+| `furmi cancel [id]` | draft, pending, running | Ends the session if running, archives as `cancelled`; a draft is deleted instead. `on_finish` doesn't run. |
 | `furmi retry <id>`  | failed, cancelled, needs_review | Moves it back to `tasks/` as `pending`, to start as soon as possible in the same worktree. |
 | `furmi queue <id>`  | draft | Makes it `pending`, so the runner picks it up. `--at` / `--in` set a start time. |
 | `furmi attach [id]` | running | Opens the task's tmux window, or the whole session without an id. |

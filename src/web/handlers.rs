@@ -192,6 +192,12 @@ pub(super) fn perform_create(home: &Home, cwd_repo: Option<&str>, body: &str) ->
     let command = base.as_ref().is_some_and(|b| b.run.is_some());
     let mut spec = base.unwrap_or_else(|| edit::blank_spec(repo.into()));
     spec.repo = repo.into();
+    if command {
+        // A command has no agent, model or mode, whatever the template said.
+        spec.agent = None;
+        spec.model = None;
+        spec.mode = None;
+    }
     if let Some(agent) = form.agent.filter(|a| !a.trim().is_empty() && !command) {
         spec.agent = Some(agent);
     }
