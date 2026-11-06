@@ -11,6 +11,7 @@ use crate::home::{Home, contract_tilde};
 use crate::spec::{Effective, OnFinish};
 use crate::task::{Status, Task, now};
 
+use super::escape;
 use super::log::log;
 use super::reaping::{Outcome, note_in_log};
 use super::starting::workdir;
@@ -72,6 +73,10 @@ pub(super) fn finish(
 /// only if the task is still as it was (not cancelled or finished by hand
 /// meanwhile).
 pub(super) fn finalize(home: &Home, config: &Config, path: &Path, mut task: Task) -> Result<()> {
+    let eff = task.spec.resolve(&config.defaults);
+    // Before `on_finish` commits a clean worktree (which it won't, having
+    // nothing to commit): was the base checkout the one that changed?
+    let escaped = escape::escaped_paths(home, &task, &eff);
     let result = run_on_finish(home, config, &task);
     let _lock = home.lock()?;
     match Task::load(path) {
@@ -85,6 +90,11 @@ pub(super) fn finalize(home: &Home, config: &Config, path: &Path, mut task: Task
         }
     }
     record_finish(home, config, &mut task, result);
+    if task.status == Status::Done
+        && let Some(paths) = escaped
+    {
+        escape::report(home, &task, &eff, &paths);
+    }
     archive(home, path, task, now())
 }
 
@@ -105,6 +115,8 @@ pub fn complete(
     task: Task,
     now: DateTime<FixedOffset>,
 ) -> Result<Status> {
+    let eff = task.spec.resolve(&config.defaults);
+    let escaped = escape::escaped_paths(home, &task, &eff);
     let result = run_on_finish(home, config, &task);
     let _lock = home.lock()?;
     match Task::load(path) {
@@ -126,6 +138,11 @@ pub fn complete(
     let mut task = task;
     record_finish(home, config, &mut task, result);
     let status = task.status;
+    if status == Status::Done
+        && let Some(paths) = escaped
+    {
+        escape::report(home, &task, &eff, &paths);
+    }
     archive(home, path, task, now)?;
     if status != Status::Done {
         bail!("on_finish failed; the work is still in the task's worktree or repo");

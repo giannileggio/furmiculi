@@ -154,7 +154,7 @@ pub struct Housekeeping {
     #[serde(with = "humantime_serde")]
     pub interval: Duration,
     /// Log attempts kept per task; older attempts' `.log`/`.exit`/`.usage`
-    /// files are deleted.
+    /// files, and their base-checkout snapshot, are deleted.
     pub keep_attempts: u32,
     /// How many times a task that failed for an environmental reason (tmux
     /// gone, agent not installed) is requeued automatically.
