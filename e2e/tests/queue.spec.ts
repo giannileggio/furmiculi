@@ -132,3 +132,46 @@ test("the form's keyboard shortcut submits and the tabs switch panels", async ({
   await expect(page.locator("#toast")).toContainText("Queued ");
   await expect(count(page, "queue")).toHaveText("2");
 });
+
+// A model is the agent's to know — its CLI's version, the providers signed in —
+// so the form asks that CLI (here a `printf`) and offers what it says. An agent
+// that can't be handed a model gets no box at all.
+test.describe("choosing a model", () => {
+  test.use({
+    config: `
+[agents.modeled]
+headless = ["sh", "-c", "{prompt}"]
+interactive = ["sh", "-c", "{prompt}"]
+model_args = ["--model", "{model}"]
+models_cmd = ["printf", "p/one\\np/two\\n"]
+`,
+  });
+
+  test("the form offers the agent's models and remembers the one picked", async ({ page, forge }) => {
+    await openDashboard(page, forge);
+    await page.locator("#new-task-open").click();
+
+    // The stub agents have no `model_args`, so there is no model to offer.
+    await expect(page.locator("#f-agent")).toHaveValue("stub");
+    await expect(page.locator("#f-model-wrap")).toBeHidden();
+
+    await page.locator("#f-agent").selectOption("modeled");
+    await expect(page.locator("#f-model-wrap")).toBeVisible();
+    await expect(page.locator('#f-models option[value="p/two"]')).toHaveCount(1);
+
+    await page.locator("#f-prompt").fill("echo with a model");
+    await page.locator("#f-model").fill("p/two");
+    await page.locator("#f-submit").click();
+    const id = await createdId(page, "Queued");
+    expect(fs.readFileSync(forge.taskFile(id)!, "utf8")).toContain("model: p/two");
+
+    // The edit form starts from what the task pins, and an empty box means
+    // "the agent's own model": the pin goes away.
+    await row(page, id).getByRole("button", { name: "Edit" }).click();
+    await expect(page.locator("#f-model")).toHaveValue("p/two");
+    await page.locator("#f-model").fill("");
+    await page.locator("#f-submit").click();
+    await expect(page.locator("#toast")).toHaveText(`Saved ${id}`);
+    expect(fs.readFileSync(forge.taskFile(id)!, "utf8")).not.toContain("model:");
+  });
+});

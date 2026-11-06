@@ -563,6 +563,21 @@ pub fn proxy(home: &Home, post: bool, url: &str, body: &str) -> Option<(u16, Str
             let name = query.split('&').find_map(|p| p.strip_prefix("node="))?;
             (name.to_string(), "/api/repos".to_string(), String::new())
         }
+        // Which models that machine's agent can run: the machine has to be
+        // asked, since it is the one with the CLI and the sign-ins.
+        ["api", "models"] => {
+            let name = query.split('&').find_map(|p| p.strip_prefix("node="))?;
+            let rest: Vec<&str> = query
+                .split('&')
+                .filter(|p| !p.is_empty() && !p.starts_with("node="))
+                .collect();
+            let forwarded = if rest.is_empty() {
+                "/api/models".to_string()
+            } else {
+                format!("/api/models?{}", rest.join("&"))
+            };
+            (name.to_string(), forwarded, String::new())
+        }
         ["api", kind @ ("tasks" | "schedules")] if post => {
             let mut form: Value = serde_json::from_str(body).ok()?;
             // No `node`, or this machine: not ours to forward.

@@ -5,9 +5,10 @@
 use tiny_http::Method;
 
 use super::handlers::{
-    agents_json, detail_reply, doctor_json, json_err, json_log_with, mutation_reply,
+    agents_json, detail_reply, doctor_json, json_err, json_log_with, models_json, mutation_reply,
     perform_action, perform_create, perform_create_schedule, perform_edit_schedule,
-    perform_edit_task, perform_set_default_agent, tail_of, task_view_json,
+    perform_edit_task, perform_set_default_agent, perform_set_defaults, perform_set_limits,
+    tail_of, task_view_json,
 };
 use super::state::{capacity, repos_json, state_json};
 use super::{Ctx, Reply, json_reply, reply};
@@ -101,6 +102,15 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 Ok(json) => json_reply(200, json),
                 Err(e) => json_reply(500, json_err(&e)),
             },
+            // What the chosen agent can run, for the task form's model box.
+            ["api", "models"] => {
+                let agent = query_param(url, "agent");
+                let refresh = query_param(url, "refresh") == Some("1");
+                match models_json(home, agent, refresh) {
+                    Ok(json) => json_reply(200, json),
+                    Err(e) => json_reply(500, json_err(&e)),
+                }
+            }
             ["api", "doctor"] => json_reply(200, doctor_json(home)),
             ["api", "agents"] => match agents_json(home) {
                 Ok(json) => json_reply(200, json),
@@ -177,6 +187,8 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 mutation_reply(edit::set_schedule_enabled(home, id, true))
             }
             ["api", "schedules", id, "delete"] => mutation_reply(edit::delete_schedule(home, id)),
+            ["api", "defaults"] => mutation_reply(perform_set_defaults(home, body)),
+            ["api", "runner", "limits"] => mutation_reply(perform_set_limits(home, body)),
             ["api", "agents", "default"] => mutation_reply(perform_set_default_agent(home, body)),
             ["api", "tasks"] => match perform_create(home, ctx.cwd_repo.as_deref(), body) {
                 Ok(id) => json_reply(

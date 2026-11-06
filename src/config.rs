@@ -34,6 +34,11 @@ timeout = "2h"
 # the agent uses its own default. Add [agents.<name>] tables for any other
 # CLI agent; these presets stay available unless you redefine them.
 #
+# `models_cmd` is how the dashboard asks the agent which models it can run,
+# for the form's suggestions: one provider and a model per line, or a
+# `provider  model` table. Only where the CLI can answer; leave it out and the
+# form still takes any model you type. Answers are kept an hour.
+#
 # Headless runs can't answer permission prompts: add each agent's
 # auto-approve flags (e.g. claude "--permission-mode", "acceptEdits";
 # codex "--full-auto"; gemini "--yolo"; hermes "--yolo") to suit your trust
@@ -69,11 +74,13 @@ model_args = ["--model", "{model}"]
 headless = ["opencode", "run", "{prompt}"]
 interactive = ["opencode", "--prompt", "{prompt}"]
 model_args = ["--model", "{model}"]
+models_cmd = ["opencode", "models"]
 
 [agents.pi]
 headless = ["pi", "--mode", "json", "{prompt}"]
 interactive = ["pi", "{prompt}"]
 model_args = ["--model", "{model}"]
+models_cmd = ["pi", "--list-models"]
 
 # The runner tidies up after itself, at start and then every `interval`: it
 # removes the clean worktrees of done tasks, trims old attempt logs, requeues
@@ -224,6 +231,11 @@ pub struct Agent {
     /// Model used when the task doesn't name one.
     #[serde(default)]
     pub model: Option<String>,
+    /// Asks this CLI which models it can run (`pi --list-models`), for the
+    /// dashboard form's suggestions. Empty when the CLI has no answer: the
+    /// form then takes any name typed into it, and offers none.
+    #[serde(default)]
+    pub models_cmd: Vec<String>,
 }
 
 impl Default for Runner {
@@ -264,41 +276,58 @@ impl Default for Config {
     }
 }
 
-/// Presets for common CLI agents: `(name, headless, interactive)`. All take
-/// `--model`. The headless ones ask for JSON output where the agent has it
-/// (`claude --output-format json`, `pi --mode json`), because that is what
-/// carries the token usage furmi records — and, for pi, the only place a
+/// Presets for common CLI agents: `(name, headless, interactive, models_cmd)`.
+/// All take `--model`. The headless ones ask for JSON output where the agent
+/// has it (`claude --output-format json`, `pi --mode json`), because that is
+/// what carries the token usage furmi records — and, for pi, the only place a
 /// failed run is reported (its JSON mode exits 0 either way).
-const PRESETS: &[(&str, &[&str], &[&str])] = &[
+///
+/// `models_cmd` is only there where the CLI has such a command: `pi --list-models`
+/// and `opencode models`. claude, codex, gemini and hermes take a name (or have
+/// an interactive picker) and never say one, so their list stays empty.
+type Preset = (
+    &'static str,
+    &'static [&'static str],
+    &'static [&'static str],
+    &'static [&'static str],
+);
+
+const PRESETS: &[Preset] = &[
     (
         "claude",
         &["claude", "-p", "{prompt}", "--output-format", "json"],
         &["claude", "{prompt}"],
+        &[],
     ),
     (
         "codex",
         &["codex", "exec", "{prompt}"],
         &["codex", "{prompt}"],
+        &[],
     ),
     (
         "gemini",
         &["gemini", "--prompt", "{prompt}"],
         &["gemini", "--prompt-interactive", "{prompt}"],
+        &[],
     ),
     (
         "hermes",
         &["hermes", "-z", "{prompt}"],
         &["hermes", "chat", "-q", "{prompt}"],
+        &[],
     ),
     (
         "opencode",
         &["opencode", "run", "{prompt}"],
         &["opencode", "--prompt", "{prompt}"],
+        &["opencode", "models"],
     ),
     (
         "pi",
         &["pi", "--mode", "json", "{prompt}"],
         &["pi", "{prompt}"],
+        &["pi", "--list-models"],
     ),
 ];
 
@@ -306,12 +335,13 @@ fn builtin_agents() -> BTreeMap<String, Agent> {
     let argv = |parts: &[&str]| parts.iter().map(|s| s.to_string()).collect();
     PRESETS
         .iter()
-        .map(|(name, headless, interactive)| {
+        .map(|(name, headless, interactive, models_cmd)| {
             let agent = Agent {
                 headless: argv(headless),
                 interactive: argv(interactive),
                 model_args: argv(&["--model", "{model}"]),
                 model: None,
+                models_cmd: argv(models_cmd),
             };
             (name.to_string(), agent)
         })
@@ -350,7 +380,7 @@ pub fn agent_statuses(config: &Config) -> Vec<AgentStatus> {
     let order = |name: &str| {
         PRESETS
             .iter()
-            .position(|(p, _, _)| *p == name)
+            .position(|(p, ..)| *p == name)
             .unwrap_or(usize::MAX)
     };
     let mut agents: Vec<AgentStatus> = config
@@ -394,6 +424,140 @@ pub fn set_default_agent(path: &Path, name: &str) -> Result<()> {
         bail!("couldn't set the default agent in {}", path.display());
     }
     crate::fsutil::write_atomic(path, updated)
+}
+
+/// Sets `runner.max_parallel`, `runner.max_parallel_per_repo` and
+/// `runner.poll_interval` in the config file, leaving the rest of it as it
+/// was. The runner re-reads the config every poll, so a running `furmi run`
+/// picks the new values up on its own.
+pub fn set_runner_limits(
+    path: &Path,
+    max_parallel: usize,
+    per_repo: usize,
+    poll_interval: &str,
+) -> Result<()> {
+    let keys = [
+        ("max_parallel", max_parallel.to_string()),
+        ("max_parallel_per_repo", per_repo.to_string()),
+        ("poll_interval", toml_str(poll_interval)),
+    ];
+    set_keys(path, "runner", &keys, |c| {
+        c.runner.max_parallel == max_parallel && c.runner.max_parallel_per_repo == per_repo
+    })
+}
+
+/// The `[defaults]` a task falls back to (everything but the agent, which has
+/// its own setter).
+pub struct DefaultsForm<'a> {
+    pub mode: &'a str,
+    pub worktree: bool,
+    pub on_finish: &'a str,
+    pub retries: u32,
+    pub retry_delay: &'a str,
+    pub timeout: &'a str,
+}
+
+pub fn set_defaults(path: &Path, form: &DefaultsForm) -> Result<()> {
+    let keys = [
+        ("mode", toml_str(form.mode)),
+        ("worktree", form.worktree.to_string()),
+        ("on_finish", toml_str(form.on_finish)),
+        ("retries", form.retries.to_string()),
+        ("retry_delay", toml_str(form.retry_delay)),
+        ("timeout", toml_str(form.timeout)),
+    ];
+    set_keys(path, "defaults", &keys, |c| {
+        c.defaults.worktree == form.worktree && c.defaults.retries == form.retries
+    })
+}
+
+/// `s` as a quoted TOML string.
+fn toml_str(s: &str) -> String {
+    toml::Value::String(s.to_string()).to_string()
+}
+
+/// Writes `keys` (already rendered as TOML values) into `[table]`, never
+/// writing a file that wouldn't parse, or whose result `verify` rejects.
+fn set_keys(
+    path: &Path,
+    table: &str,
+    keys: &[(&str, String)],
+    verify: impl Fn(&Config) -> bool,
+) -> Result<()> {
+    let text = if path.exists() {
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?
+    } else {
+        default_config_toml(None)
+    };
+    Config::parse(&text)?;
+    let updated = with_table_keys(&text, table, keys);
+    let check = Config::parse(&updated)?;
+    if !verify(&check) {
+        bail!("couldn't save the settings in {}", path.display());
+    }
+    crate::fsutil::write_atomic(path, updated)
+}
+
+/// `text` with `keys` set in `[table]`: an existing line is replaced in place
+/// (its comment kept), a missing one added at the end of the table, and a
+/// missing table appended.
+fn with_table_keys(text: &str, table: &str, keys: &[(&str, String)]) -> String {
+    let header = format!("[{table}]");
+    let key_of = |l: &str| {
+        let (key, _) = l.trim_start().split_once('=')?;
+        Some(key.trim().to_string())
+    };
+    let mut out = String::new();
+    let mut inside = false;
+    let mut seen_table = false;
+    let mut done = vec![false; keys.len()];
+    let flush_missing = |out: &mut String, done: &mut Vec<bool>| {
+        for (i, (key, value)) in keys.iter().enumerate() {
+            if !done[i] {
+                out.push_str(&format!("{key} = {value}\n"));
+                done[i] = true;
+            }
+        }
+    };
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with('[') {
+            if inside {
+                flush_missing(&mut out, &mut done);
+            }
+            inside = t.trim_end().starts_with(&header);
+            seen_table |= inside;
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if inside
+            && let Some(key) = key_of(line)
+            && let Some(i) = keys.iter().position(|(k, _)| *k == key)
+        {
+            let set = format!("{key} = {}", keys[i].1);
+            match line.find('#') {
+                Some(at) => out.push_str(&format!("{set:<28}{}\n", &line[at..])),
+                None => out.push_str(&format!("{set}\n")),
+            }
+            done[i] = true;
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if inside {
+        flush_missing(&mut out, &mut done);
+    }
+    if !seen_table {
+        if !out.is_empty() && !out.ends_with("\n\n") {
+            out.push('\n');
+        }
+        out.push_str(&header);
+        out.push('\n');
+        flush_missing(&mut out, &mut done);
+    }
+    out
 }
 
 /// `text` with `agent = "<name>"` in its `[defaults]` table: replacing the
@@ -538,8 +702,8 @@ fn web_table(web: &Web) -> String {
 pub fn installed_presets() -> Vec<&'static str> {
     PRESETS
         .iter()
-        .filter(|(_, headless, _)| on_path(headless[0]))
-        .map(|(name, _, _)| *name)
+        .filter(|(_, headless, ..)| on_path(headless[0]))
+        .map(|(name, ..)| *name)
         .collect()
 }
 
@@ -595,6 +759,57 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sets_table_keys_in_place_keeping_comments() {
+        let keys = [
+            ("max_parallel", "5".to_string()),
+            ("max_parallel_per_repo", "2".to_string()),
+            ("poll_interval", super::toml_str("10s")),
+        ];
+        let out = super::with_table_keys(&super::default_config_toml(None), "runner", &keys);
+        assert!(out.contains("max_parallel = 5   "));
+        assert!(out.contains("# tasks running at once, overall"));
+        let c = super::Config::parse(&out).unwrap();
+        assert_eq!(
+            (c.runner.max_parallel, c.runner.max_parallel_per_repo),
+            (5, 2)
+        );
+        assert_eq!(c.runner.poll_interval, std::time::Duration::from_secs(10));
+        // No table, or a table missing a key.
+        for text in [
+            "",
+            "[runner]\ntmux_session = \"x\"\n\n[defaults]\nmode = \"headless\"\n",
+        ] {
+            let c = super::Config::parse(&super::with_table_keys(text, "runner", &keys)).unwrap();
+            assert_eq!(c.runner.max_parallel, 5);
+        }
+    }
+
+    #[test]
+    fn sets_defaults_and_rejects_bad_values() {
+        let dir = std::env::temp_dir().join(format!("furmi-defaults-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let form = super::DefaultsForm {
+            mode: "interactive",
+            worktree: false,
+            on_finish: "pr",
+            retries: 0,
+            retry_delay: "1m",
+            timeout: "30m",
+        };
+        super::set_defaults(&path, &form).unwrap();
+        let c = super::Config::load(&path).unwrap();
+        assert!(!c.defaults.worktree);
+        assert_eq!(c.defaults.timeout, std::time::Duration::from_secs(1800));
+        let bad = super::DefaultsForm {
+            timeout: "soon",
+            ..form
+        };
+        assert!(super::set_defaults(&path, &bad).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn sets_the_default_agent_in_place() {
         // The template, with and without an agent chosen.

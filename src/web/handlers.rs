@@ -59,6 +59,9 @@ struct NewTaskBody {
     on_finish: Option<OnFinish>,
     #[serde(default)]
     agent: Option<String>,
+    /// Pin a model for this task; empty or absent means the agent's own.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 /// Queues the task described by the form, as `furmi add` would. Returns its id.
@@ -90,7 +93,10 @@ pub(super) fn perform_create(home: &Home, cwd_repo: Option<&str>, body: &str) ->
         branch: None,
         worktree: None,
         agent: form.agent.filter(|a| !a.trim().is_empty()),
-        model: None,
+        model: form
+            .model
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty()),
         mode: None,
         on_finish: form.on_finish,
         retries: None,
@@ -150,6 +156,10 @@ struct EditTaskBody {
     on_finish: Option<OnFinish>,
     #[serde(default)]
     agent: Option<String>,
+    /// The form always says what this field holds: empty means "the agent's
+    /// own", `None` (a form without the field) leaves it as it is.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 pub(super) fn perform_edit_task(home: &Home, id: &str, body: &str) -> Result<()> {
@@ -163,6 +173,7 @@ pub(super) fn perform_edit_task(home: &Home, id: &str, body: &str) -> Result<()>
             start: edit::parse_start(form.start.as_deref())?,
             on_finish: form.on_finish,
             agent: form.agent,
+            model: form.model,
         },
     )
 }
@@ -181,6 +192,9 @@ struct ScheduleBody {
     on_finish: Option<OnFinish>,
     #[serde(default)]
     agent: Option<String>,
+    /// Empty clears it (the agent's own model then applies); absent leaves it.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 fn schedule_form(
@@ -205,6 +219,7 @@ fn schedule_form(
         cron: form.cron,
         on_finish: form.on_finish,
         agent: form.agent,
+        model: form.model,
     })
 }
 
@@ -231,10 +246,103 @@ pub(super) fn perform_set_default_agent(home: &Home, body: &str) -> Result<()> {
     crate::config::set_default_agent(&home.config_path(), &form.agent)
 }
 
-/// Which coding agents are installed here and how to get the others.
+#[derive(Deserialize)]
+struct LimitsBody {
+    max_parallel: usize,
+    max_parallel_per_repo: usize,
+    poll_interval: String,
+}
+
+#[derive(Deserialize)]
+struct DefaultsBody {
+    mode: String,
+    worktree: bool,
+    on_finish: String,
+    retries: u32,
+    retry_delay: String,
+    timeout: String,
+}
+
+pub(super) fn perform_set_defaults(home: &Home, body: &str) -> Result<()> {
+    let f: DefaultsBody = serde_json::from_str(body).context("couldn't read the form")?;
+    home.ensure_initialized()?;
+    crate::config::set_defaults(
+        &home.config_path(),
+        &crate::config::DefaultsForm {
+            mode: &f.mode,
+            worktree: f.worktree,
+            on_finish: &f.on_finish,
+            retries: f.retries,
+            retry_delay: &f.retry_delay,
+            timeout: &f.timeout,
+        },
+    )
+}
+
+pub(super) fn perform_set_limits(home: &Home, body: &str) -> Result<()> {
+    let form: LimitsBody = serde_json::from_str(body).context("couldn't read the form")?;
+    if form.max_parallel == 0 || form.max_parallel_per_repo == 0 {
+        anyhow::bail!("both limits must be at least 1");
+    }
+    home.ensure_initialized()?;
+    crate::config::set_runner_limits(
+        &home.config_path(),
+        form.max_parallel,
+        form.max_parallel_per_repo,
+        &form.poll_interval,
+    )
+}
+
+/// Which coding agents are installed here and how to get the others, and how
+/// many tasks may run at once.
 pub(super) fn agents_json(home: &Home) -> Result<String> {
     let config = Config::load(&home.config_path())?;
-    Ok(serde_json::json!({ "agents": crate::config::agent_statuses(&config) }).to_string())
+    Ok(serde_json::json!({
+        "agents": crate::config::agent_statuses(&config),
+        "max_parallel": config.runner.max_parallel,
+        "max_parallel_per_repo": config.runner.max_parallel_per_repo,
+        "poll_interval": humantime::format_duration(config.runner.poll_interval).to_string(),
+        "defaults": {
+            "mode": config.defaults.mode,
+            "worktree": config.defaults.worktree,
+            "on_finish": config.defaults.on_finish,
+            "retries": config.defaults.retries,
+            "retry_delay": humantime::format_duration(config.defaults.retry_delay).to_string(),
+            "timeout": humantime::format_duration(config.defaults.timeout).to_string(),
+        },
+    })
+    .to_string())
+}
+
+/// The models an agent can run, for the task form's suggestions: the ones its
+/// own CLI names (`pi --list-models`), the model it uses when a task pins
+/// none, and whether it can be handed one at all.
+pub(super) fn models_json(home: &Home, agent: Option<&str>, refresh: bool) -> Result<String> {
+    let config = Config::load(&home.config_path())?;
+    let name = agent.map(str::trim).filter(|a| !a.is_empty());
+    let Some((name, agent)) = name.and_then(|n| config.agents.get_key_value(n)) else {
+        // No agent named (a form that doesn't offer a choice): nothing to ask.
+        return Ok(serde_json::json!({
+            "agent": name,
+            "can_pin": false,
+            "default": null,
+            "models": [],
+            "source": "none",
+        })
+        .to_string());
+    };
+    let listed = crate::models::list(home, name, agent, refresh);
+    Ok(serde_json::json!({
+        "agent": name,
+        // An agent with no `model_args` can't be handed a model at all: the
+        // form hides the field rather than let it fail on submit.
+        "can_pin": !agent.model_args.is_empty(),
+        "default": agent.model,
+        "models": listed.models,
+        "source": listed.source,
+        "error": listed.error,
+    })
+    .to_string())
 }
 
 /// The setup check: what `furmi doctor` looks at, for the dashboard.
@@ -456,6 +564,124 @@ mod tests {
         assert!(perform_create_schedule(&home, Some(cwd), &form("github.com/me/other")).is_err());
         let edit = perform_edit_schedule(&home, &id, &form("github.com/me/app"));
         assert!(format!("{:#}", edit.unwrap_err()).contains("by its folder"));
+    }
+
+    #[test]
+    fn the_form_pins_a_model_and_gives_it_back_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        for d in home.dirs() {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(home.config_path(), "[defaults]\nagent = \"claude\"\n").unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        let path = repo.path().display().to_string();
+        let saved = |home: &Home, id: &str| {
+            crate::task::Task::load(&home.tasks().join(format!("{id}.md")))
+                .unwrap()
+                .spec
+                .model
+        };
+
+        let form = format!(r#"{{"prompt":"do it","repo":"{path}","model":"opus"}}"#);
+        let id = perform_create(&home, None, &form).unwrap();
+        assert_eq!(saved(&home, &id).as_deref(), Some("opus"));
+        // The edit form starts from what the file pins, not from what will run.
+        assert_eq!(
+            crate::edit::task_detail(&home, &id).unwrap()["model"],
+            "opus"
+        );
+
+        let edit = format!(r#"{{"prompt":"do it","repo":"{path}","model":"sonnet"}}"#);
+        perform_edit_task(&home, &id, &edit).unwrap();
+        assert_eq!(saved(&home, &id).as_deref(), Some("sonnet"));
+
+        // An empty box means the agent's own model: the pin goes away.
+        let cleared = format!(r#"{{"prompt":"do it","repo":"{path}","model":""}}"#);
+        perform_edit_task(&home, &id, &cleared).unwrap();
+        assert_eq!(saved(&home, &id), None);
+
+        // A form that doesn't carry the field at all leaves the pin alone.
+        perform_edit_task(&home, &id, &form).unwrap();
+        let without = format!(r#"{{"prompt":"do it","repo":"{path}"}}"#);
+        perform_edit_task(&home, &id, &without).unwrap();
+        assert_eq!(saved(&home, &id).as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn a_schedule_keeps_the_model_its_form_pins() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        for d in home.dirs() {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(home.config_path(), "[defaults]\nagent = \"claude\"\n").unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        let path = repo.path().display().to_string();
+
+        let form =
+            format!(r#"{{"prompt":"nightly","repo":"{path}","cron":"0 3 * * *","model":"opus"}}"#);
+        let id = perform_create_schedule(&home, None, &form).unwrap();
+        let schedule = |home: &Home| {
+            crate::schedule::Schedule::load(&home.schedules().join(format!("{id}.md")))
+                .unwrap()
+                .spec
+                .model
+        };
+        assert_eq!(schedule(&home).as_deref(), Some("opus"));
+
+        let cleared =
+            format!(r#"{{"prompt":"nightly","repo":"{path}","cron":"0 3 * * *","model":""}}"#);
+        perform_edit_schedule(&home, &id, &cleared).unwrap();
+        assert_eq!(schedule(&home), None);
+    }
+
+    #[test]
+    fn models_json_offers_what_the_agent_names_and_says_if_it_takes_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        for d in home.dirs() {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(
+            home.config_path(),
+            r#"[defaults]
+agent = "asks"
+
+[agents.asks]
+headless = ["x"]
+interactive = ["x"]
+model_args = ["--model", "{model}"]
+model = "its/default"
+models_cmd = ["printf", "p/one\np/two\n"]
+
+[agents.mute]
+headless = ["x"]
+interactive = ["x"]
+"#,
+        )
+        .unwrap();
+
+        let answer = |body: Result<String>| {
+            serde_json::from_str::<serde_json::Value>(&body.unwrap()).unwrap()
+        };
+        let asks = answer(models_json(&home, Some("asks"), false));
+        assert_eq!(asks["can_pin"], true);
+        assert_eq!(asks["default"], "its/default");
+        assert_eq!(asks["models"], serde_json::json!(["p/one", "p/two"]));
+        assert_eq!(asks["source"], "agent");
+
+        // No `model_args`: the agent can't be handed a model, the form hides it.
+        let mute = answer(models_json(&home, Some("mute"), false));
+        assert_eq!(mute["can_pin"], false);
+        assert!(mute["models"].as_array().unwrap().is_empty());
+
+        // No agent named (a form with nothing to choose): nothing to ask.
+        let none = answer(models_json(&home, None, false));
+        assert_eq!(none["can_pin"], false);
+        assert_eq!(none["source"], "none");
     }
 
     #[test]

@@ -291,7 +291,10 @@ after you close the dashboard; `furmi stop` or the **stop** link next to
 "runner: on" ends it), and **Setup** lists the coding agents (installed or not,
 with the install command to copy, and **Use this one** to make one the default)
 above what `furmi doctor` finds (tmux, git, task files), with a banner when
-something needs attention. furmi doesn't run the installs for you: they're
+something needs attention. It's also where the runner's limits (tasks at once,
+overall and per repo, and how often it rescans) and the task defaults (mode,
+when-done, own worktree, retries, retry delay, timeout) are changed: they're
+written into `config.toml`, and everything else in that file stays as it is. furmi doesn't run the installs for you: they're
 `npm install -g` (or, for hermes, its own installer) commands and each agent
 needs you to sign in once.
 
@@ -342,7 +345,13 @@ queue and manage tasks on any of them (see the same page).
 
 A task that is still *Waiting* has an **Edit** button: change what it does, the
 project, when it starts, or what happens when it's done (not once it has
-started: cancel it and add a new one). **+ New task** with "How often?" set to
+started: cancel it and add a new one). Its **Model** box is the same as
+`furmi add --model`: empty means the agent's own model, and the suggestions are
+the ones that agent's CLI names itself (`pi --list-models`, `opencode models`),
+kept for an hour, plus any model a task of yours has already run with. Agents
+with no way to list models (claude, codex, gemini, hermes) get a box you can
+type into and no suggestions, and an agent with no `model_args` gets no box at
+all: it can't be handed a model. **+ New task** with "How often?" set to
 anything but "Just once" creates a schedule, which appears under *Repeating*
 with **Edit**, **Pause**/**Resume** and **Delete**. Changing a schedule's time or
 resuming it starts counting from now, so it never fires for a slot that passed
