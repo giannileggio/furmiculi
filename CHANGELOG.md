@@ -4,7 +4,7 @@ Releases and their notes are on the
 [releases page](https://github.com/giannileggio/furmiculi/releases). This file
 lists what changed between them.
 
-## Unreleased
+## 0.7.0
 
 - A worktree task that edits the base checkout instead of its own worktree no
   longer looks like a clean no-op. The runner saves the base checkout's dirty
