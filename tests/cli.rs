@@ -147,7 +147,8 @@ fn add_ls_and_validate_roundtrip() {
     let out = ok(run(furmi(home.path()).arg("validate")));
     let report = stdout(&out);
     assert!(report.contains("ok"));
-    assert!(report.contains("1 file(s) checked, 0 with errors"));
+    assert!(report.contains("my-task.md"));
+    assert!(report.contains("0 with errors"), "{report}");
 }
 
 #[test]
@@ -2398,4 +2399,169 @@ fn schedule_lifecycle() {
     let out = failed(schedule(home.path(), &["pause", "nightly"]));
     assert!(stderr(&out).contains("no schedule `nightly`"));
     failed(schedule(home.path(), &["delete", "../x"]));
+}
+
+#[test]
+fn a_draft_waits_for_furmi_queue_and_the_runner_ignores_it() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+
+    ok(run(furmi(home.path()).args([
+        "add",
+        "--draft",
+        "--repo",
+        repo.path().to_str().unwrap(),
+        "--no-worktree",
+        "--id",
+        "later",
+        "--prompt",
+        "look this over first",
+    ])));
+    let file = home.path().join("tasks/later.md");
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("status: draft")
+    );
+    let ls = stdout(&ok(run(furmi(home.path()).arg("ls"))));
+    assert!(ls.contains("draft"), "{ls}");
+
+    // A pass of the runner leaves it exactly as it was.
+    let before = std::fs::read_to_string(&file).unwrap();
+    ok(run(furmi(home.path()).args(["run", "--once"])));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+
+    ok(run(
+        furmi(home.path()).args(["queue", "later", "--in", "2h"])
+    ));
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("status: pending"), "{text}");
+    assert!(text.contains("scheduled_at:"), "{text}");
+    failed(run(furmi(home.path()).args(["queue", "later"])));
+}
+
+#[test]
+fn cancelling_a_draft_discards_it() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    ok(run(furmi(home.path()).args([
+        "add",
+        "--draft",
+        "--repo",
+        repo.path().to_str().unwrap(),
+        "--no-worktree",
+        "--id",
+        "nope",
+        "--prompt",
+        "never mind",
+    ])));
+    ok(run(furmi(home.path()).args(["cancel", "nope"])));
+    assert!(!home.path().join("tasks/nope.md").exists());
+    assert!(!home.path().join("archive/nope.md").exists());
+}
+
+#[test]
+fn duplicate_copies_a_task_into_a_draft() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    add(home.path(), repo.path(), "original", "do the thing");
+
+    ok(run(furmi(home.path()).args([
+        "duplicate",
+        "original",
+        "--as",
+        "again",
+    ])));
+    let text = std::fs::read_to_string(home.path().join("tasks/again.md")).unwrap();
+    assert!(text.contains("status: draft"), "{text}");
+    assert!(text.contains("do the thing"), "{text}");
+    failed(run(furmi(home.path()).args(["duplicate", "missing"])));
+}
+
+#[test]
+fn templates_are_listed_saved_used_and_deleted() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    let repo_arg = repo.path().to_str().unwrap();
+
+    // The starters arrive with `furmi init`.
+    let ls = stdout(&ok(run(furmi(home.path()).args(["template", "ls"]))));
+    assert!(ls.contains("fix-failing-test"), "{ls}");
+    assert!(ls.contains("(you choose)"), "{ls}");
+
+    // A task becomes a template, and a template becomes a task in any project.
+    add(
+        home.path(),
+        repo.path(),
+        "weekly-check",
+        "run the weekly check",
+    );
+    ok(run(furmi(home.path()).args([
+        "template",
+        "save",
+        "weekly-check",
+    ])));
+    let ls = stdout(&ok(run(furmi(home.path()).args(["template", "ls"]))));
+    assert!(ls.contains("weekly-check"), "{ls}");
+
+    ok(run(furmi(home.path()).args([
+        "add",
+        "--template",
+        "review-the-diff",
+        "--repo",
+        repo_arg,
+        "--no-worktree",
+        "--draft",
+        "--id",
+        "from-starter",
+    ])));
+    let text = std::fs::read_to_string(home.path().join("tasks/from-starter.md")).unwrap();
+    assert!(text.contains("status: draft"), "{text}");
+    assert!(
+        text.contains("Review the changes on the current branch"),
+        "{text}"
+    );
+    assert!(text.contains("on_finish: none"), "{text}");
+
+    // What is given replaces what the template says.
+    ok(run(furmi(home.path()).args([
+        "add",
+        "--template",
+        "review-the-diff",
+        "--repo",
+        repo_arg,
+        "--no-worktree",
+        "--on-finish",
+        "commit",
+        "--id",
+        "changed",
+        "--prompt",
+        "my own words",
+    ])));
+    let text = std::fs::read_to_string(home.path().join("tasks/changed.md")).unwrap();
+    assert!(text.contains("on_finish: commit"), "{text}");
+    assert!(text.contains("my own words"), "{text}");
+
+    failed(run(furmi(home.path()).args([
+        "add",
+        "--template",
+        "nope",
+        "--id",
+        "x",
+    ])));
+    ok(run(furmi(home.path()).args([
+        "template",
+        "delete",
+        "weekly-check",
+    ])));
+    failed(run(furmi(home.path()).args([
+        "template",
+        "delete",
+        "weekly-check",
+    ])));
+    ok(run(furmi(home.path()).arg("validate")));
 }

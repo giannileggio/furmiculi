@@ -97,6 +97,7 @@ pub fn task_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
         "agent": eff.agent,
         "starts": task.scheduled_at.map(crate::cmd::fmt_time),
         "has_run": task.attempts > 0,
+        "draft": task.status == Status::Draft,
     }))
 }
 
@@ -107,7 +108,7 @@ fn load_pending(home: &Home, id: &str) -> Result<(PathBuf, Task)> {
         bail!("no waiting task `{id}`: it may have finished, or been cancelled");
     }
     let task = Task::load(&path)?;
-    if task.status != Status::Pending {
+    if !matches!(task.status, Status::Pending | Status::Draft) {
         bail!(
             "`{id}` is {}; only tasks that haven't started can be edited. \
              Cancel it and add a new one instead",
@@ -159,7 +160,11 @@ pub fn edit_task(home: &Home, id: &str, edit: TaskEdit) -> Result<()> {
     task.save(&path)
 }
 
-fn apply_choices(spec: &mut TaskSpec, on_finish: Option<OnFinish>, agent: Option<String>) {
+pub(crate) fn apply_choices(
+    spec: &mut TaskSpec,
+    on_finish: Option<OnFinish>,
+    agent: Option<String>,
+) {
     if on_finish.is_some() {
         spec.on_finish = on_finish;
     }
@@ -170,7 +175,7 @@ fn apply_choices(spec: &mut TaskSpec, on_finish: Option<OnFinish>, agent: Option
 
 /// Stores what the form's one text box says: a command task's command, else
 /// the prompt.
-fn set_ask(spec: &mut TaskSpec, prompt: &mut String, text: &str) {
+pub(crate) fn set_ask(spec: &mut TaskSpec, prompt: &mut String, text: &str) {
     let text = text.trim().to_string();
     match &mut spec.run {
         Some(run) => *run = text,
@@ -417,6 +422,7 @@ mod tests {
                 spec: spec(repo),
                 scheduled_at: None,
                 created_by: "test".into(),
+                draft: false,
             },
         )
         .unwrap()
@@ -449,6 +455,7 @@ mod tests {
                     spec: scratch.clone(),
                     scheduled_at: None,
                     created_by: "test".into(),
+                    draft: false,
                 },
             )
             .unwrap()
@@ -529,6 +536,7 @@ mod tests {
                 },
                 scheduled_at: None,
                 created_by: "test".into(),
+                draft: false,
             },
         )
         .unwrap();

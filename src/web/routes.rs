@@ -6,8 +6,10 @@ use tiny_http::Method;
 
 use super::handlers::{
     agents_json, detail_reply, doctor_json, json_err, json_log_with, mutation_reply,
-    perform_action, perform_create, perform_create_schedule, perform_edit_schedule,
-    perform_edit_task, perform_set_default_agent, tail_of, task_view_json,
+    perform_action, perform_create, perform_create_schedule, perform_create_template,
+    perform_delete_template, perform_duplicate, perform_edit_schedule, perform_edit_task,
+    perform_edit_template, perform_save_template, perform_set_default_agent, tail_of,
+    task_view_json, template_detail,
 };
 use super::state::{capacity, repos_json, state_json};
 use super::{Ctx, Reply, json_reply, reply};
@@ -15,7 +17,7 @@ use super::{Ctx, Reply, json_reply, reply};
 use crate::control;
 use crate::edit;
 
-const ACTIONS: [&str; 4] = ["done", "fail", "cancel", "retry"];
+const ACTIONS: [&str; 5] = ["done", "fail", "cancel", "retry", "queue"];
 
 /// The ant from the README, cropped to the mark itself and carried inside the
 /// binary: no file to install, no request off the box, and the same picture the
@@ -112,6 +114,7 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 Err(e) => json_reply(404, json_err(&e)),
             },
             ["api", "schedules", id] => detail_reply(edit::schedule_detail(home, id)),
+            ["api", "templates", id] => detail_reply(template_detail(home, id)),
             ["api", "tasks", id, "logs"] => {
                 let attempt = query_param(url, "attempt").and_then(|v| v.parse().ok());
                 match control::logs(home, id, attempt) {
@@ -155,6 +158,15 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 }
             }
             ["api", "tasks", id, "edit"] => mutation_reply(perform_edit_task(home, id, body)),
+            ["api", "tasks", id, "duplicate"] => created_reply(perform_duplicate(home, id, body)),
+            ["api", "tasks", id, "template"] => {
+                created_reply(perform_save_template(home, id, body))
+            }
+            ["api", "templates"] => created_reply(perform_create_template(home, body)),
+            ["api", "templates", id, "edit"] => {
+                mutation_reply(perform_edit_template(home, id, body))
+            }
+            ["api", "templates", id, "delete"] => mutation_reply(perform_delete_template(home, id)),
             ["api", "schedules"] => {
                 match perform_create_schedule(home, ctx.cwd_repo.as_deref(), body) {
                     Ok(id) => json_reply(
@@ -197,6 +209,14 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
             _ => reply(404, "text/plain", "not found"),
         },
         _ => reply(404, "text/plain", "not found"),
+    }
+}
+
+/// `{"ok":true,"id":...}` for something just made, or the error.
+fn created_reply(made: anyhow::Result<String>) -> Reply {
+    match made {
+        Ok(id) => json_reply(200, serde_json::json!({ "ok": true, "id": id }).to_string()),
+        Err(e) => json_reply(400, json_err(&e)),
     }
 }
 

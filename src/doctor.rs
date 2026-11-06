@@ -88,10 +88,16 @@ pub fn status(home: &Home) -> Result<()> {
     let queued = load(home.tasks());
     let archived = load(home.archive());
     let count = |tasks: &[Task], status| tasks.iter().filter(|t| t.status == status).count();
+    let drafts = count(&queued, Status::Draft);
     println!(
-        "queue      {} pending, {} running",
+        "queue      {} pending, {} running{}",
         count(&queued, Status::Pending),
-        count(&queued, Status::Running)
+        count(&queued, Status::Running),
+        if drafts > 0 {
+            format!(", {drafts} draft(s) waiting for you")
+        } else {
+            String::new()
+        }
     );
     println!(
         "archive    {} done, {} failed, {} cancelled, {} needs review",

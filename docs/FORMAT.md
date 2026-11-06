@@ -7,6 +7,7 @@ All state lives under one folder: `$FURMI_HOME`, default `~/.furmiculi`.
   config.toml    user preferences and defaults
   tasks/         queue: one <id>.md per task
   schedules/     recurring task templates: one <id>.md per schedule
+  templates/     tasks to start new tasks from: one <id>.md per template
   archive/       finished tasks, moved out of tasks/
   logs/          <id>.<attempt>.log (the task's output), .exit (exit status)
                  and .usage (token usage, if the agent reports it) per run
@@ -82,7 +83,7 @@ Don't edit these by hand. Use `furmi` commands to change the status.
 
 | Field         | Meaning |
 |---------------|---------|
-| `status`      | `pending` → `running` → `done` \| `failed` \| `cancelled` \| `needs_review` |
+| `status`      | `draft` → `pending` → `running` → `done` \| `failed` \| `cancelled` \| `needs_review` (a task starts as `pending`, or as `draft` if saved for review) |
 | `attempts`    | Attempts started so far. |
 | `interruptions` | Attempts cut short from outside (tmux or the machine went away). They are requeued at once and don't count against `retries`, up to 5 times. |
 | `started_at`, `finished_at` | RFC 3339. |
@@ -103,6 +104,7 @@ Don't edit these by hand. Use `furmi` commands to change the status.
 | `furmi fail [id] [-r reason]` | running, needs_review | Ends the session if running, archives as `failed` without retrying. |
 | `furmi cancel [id]` | pending, running | Ends the session if running, archives as `cancelled`. `on_finish` doesn't run. |
 | `furmi retry <id>`  | failed, cancelled, needs_review | Moves it back to `tasks/` as `pending`, to start as soon as possible in the same worktree. |
+| `furmi queue <id>`  | draft | Makes it `pending`, so the runner picks it up. `--at` / `--in` set a start time. |
 | `furmi attach [id]` | running | Opens the task's tmux window, or the whole session without an id. |
 
 `id` defaults to `$FURMI_TASK_ID`, so inside a task's window a plain `furmi done`
@@ -208,6 +210,54 @@ What differs from an agent task:
 `furmi ls` and the dashboard show `command` where an agent's name would be, and
 the command where a prompt would be. The dashboard edits a waiting one's command
 but doesn't offer creating one; use `furmi add --run`.
+
+## Drafts
+
+A **draft** is a task saved for review: `furmi add --draft`, `furmi duplicate
+<id>`, or "Save as draft" in the dashboard. It is an ordinary task file in
+`tasks/` with `status: draft`, and `furmi run` never starts it. Edit it like a
+pending task (the dashboard form, or the file then `furmi validate`), and
+`furmi queue <id>` (the dashboard's Queue button) makes it `pending`.
+`furmi cancel <id>` on a draft discards it: the file is deleted, not archived,
+since nothing ran. The dashboard lists drafts under Drafts, apart from the
+waiting tasks.
+
+`furmi duplicate <id>` copies any task, waiting or finished, into a new draft
+(`--as <id>` names it): the prompt and options only, none of how the original
+ran. A task with no project copies as one with no project, with a folder of
+its own.
+
+## Template — `templates/<id>.md`
+
+A template is a task to start new tasks from. It is written like a task, with
+`id` and the same options (`repo`, `branch`, `worktree`, `agent`, `model`,
+`mode`, `on_finish`, `retries`, `retry_delay`, `timeout`, `run`), and the body
+is the prompt. It has no status, times or cron, and nothing ever runs it. Two
+differences from a task:
+
+| Field         | Required | Meaning |
+|---------------|----------|---------|
+| `repo`        | no       | Left out, whoever uses the template chooses the project. |
+| `description` | no       | One line saying what it is for, shown in listings. |
+
+| Command | Effect |
+|---------|--------|
+| `furmi template ls`            | List templates. |
+| `furmi template show <id>`     | Print a template's file. |
+| `furmi template save <task> [--id name]` | Save a task, waiting or finished, as a template. Never overwrites one. |
+| `furmi template delete <id>`   | Delete it. Tasks made from it stay. |
+| `furmi add --template <id>`    | A new task from it. The prompt and options are the template's, and anything given on the command line replaces them. `--draft` saves it for review. |
+
+The dashboard's Templates page lists them, starts a task from one in its New
+task form, edits one (its description, prompt, project, agent and what happens
+at the end; options the form doesn't show, such as `model`, are kept), writes a
+new one from scratch, and saves any task as a template from its detail view. A
+template can also be written by hand: put the file in `templates/` and run
+`furmi validate`.
+
+The first time furmi runs in a home with no `templates/` folder, it creates
+one with a few starter templates. Delete or change them freely: they aren't
+written again.
 
 ## Schedule — `schedules/<id>.md`
 

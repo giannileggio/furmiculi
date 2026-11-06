@@ -12,7 +12,8 @@ use crate::home::{Home, contract_tilde, expand_tilde};
 use crate::schedule::Schedule;
 use crate::skill;
 use crate::spec::{Mode, OnFinish, TaskSpec, slugify, validate_id};
-use crate::task::{Task, fmt_tokens, now};
+use crate::task::{Status, Task, fmt_tokens, now};
+use crate::template::{self, Template};
 
 #[derive(clap::Args)]
 pub struct InitArgs {
@@ -55,6 +56,7 @@ fn setup(home: &Home, agent: Option<String>, global_skill: Option<Option<bool>>)
         crate::fsutil::write_atomic(&config, default_config_toml(agent.as_deref()))?;
         skill::note(format_args!("wrote {}", config.display()));
     }
+    template::install_starters(home)?;
     skill::install_in_home(home)?;
     if let Some(choice) = global_skill {
         skill::set_global(home, choice)?;
@@ -68,7 +70,8 @@ fn setup(home: &Home, agent: Option<String>, global_skill: Option<Option<bool>>)
 /// an explicit `furmi init`.
 pub fn ensure_ready(home: &Home) -> Result<()> {
     if home.ensure_initialized().is_ok() {
-        return Ok(());
+        // A home made before templates existed gets the starters once.
+        return template::install_starters(home);
     }
     // Guidance, not output: stdout stays clean for scripts reading `furmi add`.
     eprintln!(
@@ -386,6 +389,14 @@ pub struct AddArgs {
     /// Who created the task (e.g. cli, agent).
     #[arg(long, default_value = "cli")]
     created_by: String,
+    /// Save it as a draft instead of queueing it: the runner leaves it alone
+    /// until `furmi queue <id>`, so it can be looked over (and edited) first.
+    #[arg(long)]
+    draft: bool,
+    /// Start from this template (`furmi template ls`): its prompt and options
+    /// are used, and anything given here replaces them.
+    #[arg(long)]
+    template: Option<String>,
 }
 
 /// Everything needed to queue a task, from the CLI or the dashboard.
@@ -396,6 +407,8 @@ pub struct NewTask {
     pub spec: TaskSpec,
     pub scheduled_at: Option<DateTime<FixedOffset>>,
     pub created_by: String,
+    /// Save as a draft: written, but not queued.
+    pub draft: bool,
 }
 
 /// Validates `new` and writes its task file into the queue.
@@ -442,6 +455,9 @@ pub fn create_task(home: &Home, config: &Config, new: NewTask) -> Result<(Task, 
         let mut task = Task::new(id, spec, prompt);
         task.created_by = Some(new.created_by);
         task.scheduled_at = new.scheduled_at;
+        if new.draft {
+            task.status = Status::Draft;
+        }
 
         let problems = task.problems(config, None);
         if !problems.is_empty() {
@@ -467,28 +483,51 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
     home.ensure_initialized()?;
     let config = Config::load(&home.config_path())?;
 
-    let prompt = if args.run.is_some() {
-        String::new()
-    } else {
-        read_prompt(args.text.or(args.prompt))?
+    let template = args
+        .template
+        .as_deref()
+        .map(|id| Template::find(home, id))
+        .transpose()?;
+    let given = args.text.or(args.prompt);
+    let prompt = match (&args.run, &template) {
+        (Some(_), _) => String::new(),
+        // The template's own prompt, unless one was given to replace it.
+        (None, Some(t)) => given.unwrap_or_else(|| t.prompt.clone()),
+        (None, None) => read_prompt(given)?,
     };
+    let base = template.as_ref().map(|t| t.spec.clone());
     let repo = match args.repo {
         _ if args.scratch => PathBuf::new(),
         Some(repo) => repo,
-        None => current_repo()?,
+        None => match template.as_ref().and_then(|t| t.repo()) {
+            Some(repo) => repo.to_path_buf(),
+            None => current_repo()?,
+        },
     };
+    let base = base.as_ref();
+    let command = args.run.is_some();
     let spec = TaskSpec {
         repo,
-        branch: args.branch,
-        worktree: worktree_choice(args.worktree, args.no_worktree),
-        agent: args.agent,
-        model: args.model,
-        mode: args.mode,
-        on_finish: args.on_finish,
-        retries: args.retries,
-        retry_delay: args.retry_delay,
-        timeout: args.timeout,
-        run: args.run,
+        branch: args.branch.or_else(|| base.and_then(|s| s.branch.clone())),
+        worktree: worktree_choice(args.worktree, args.no_worktree)
+            .or_else(|| base.and_then(|s| s.worktree)),
+        // A command has no agent, model or mode, whatever the template said.
+        agent: args
+            .agent
+            .or_else(|| base.and_then(|s| s.agent.clone()).filter(|_| !command)),
+        model: args
+            .model
+            .or_else(|| base.and_then(|s| s.model.clone()).filter(|_| !command)),
+        mode: args
+            .mode
+            .or_else(|| base.and_then(|s| s.mode).filter(|_| !command)),
+        on_finish: args.on_finish.or_else(|| base.and_then(|s| s.on_finish)),
+        retries: args.retries.or_else(|| base.and_then(|s| s.retries)),
+        retry_delay: args
+            .retry_delay
+            .or_else(|| base.and_then(|s| s.retry_delay)),
+        timeout: args.timeout.or_else(|| base.and_then(|s| s.timeout)),
+        run: args.run.or_else(|| base.and_then(|s| s.run.clone())),
     };
     let scheduled_at = match (args.at, args.delay) {
         (Some(at), _) => Some(at),
@@ -504,6 +543,7 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
             spec,
             scheduled_at,
             created_by: args.created_by,
+            draft: args.draft,
         },
     )?;
 
@@ -554,18 +594,32 @@ pub(crate) fn current_repo() -> Result<PathBuf> {
 /// Plain-language confirmation for a person at a terminal, and what to do next.
 fn print_queued(home: &Home, config: &Config, task: &Task) {
     let eff = task.spec.resolve(&config.defaults);
-    println!("Queued `{}`", task.id);
+    let draft = task.status == Status::Draft;
+    println!(
+        "{} `{}`",
+        if draft { "Saved a draft," } else { "Queued" },
+        task.id
+    );
     println!("  repo       {}", contract_tilde(&eff.repo));
     match &eff.run {
         Some(run) => println!("  command    {run}"),
         None => println!("  agent      {}", eff.runner()),
     }
-    match task.scheduled_at {
-        Some(at) => println!("  starts     {}", fmt_time(at)),
-        None => println!("  starts     as soon as the runner picks it up"),
+    match (task.scheduled_at, draft) {
+        (Some(at), _) => println!("  starts     {}", fmt_time(at)),
+        (None, true) => println!("  starts     when you queue it"),
+        (None, false) => println!("  starts     as soon as the runner picks it up"),
     }
     println!("  when done  {}", describe_on_finish(eff.on_finish));
     println!();
+    if draft {
+        println!(
+            "It won't run until you queue it: look it over, then `furmi queue {}` (or Queue \
+             it in the dashboard).",
+            task.id
+        );
+        return;
+    }
     if home.runner_alive() {
         println!(
             "The runner is up, so it will start on its own. Follow along with `furmi ls --watch`."
@@ -613,6 +667,7 @@ pub fn validate(home: &Home, files: Vec<PathBuf>) -> Result<ExitCode> {
         home.ensure_initialized()?;
         let mut all = md_files(&home.tasks())?;
         all.extend(md_files(&home.schedules())?);
+        all.extend(md_files(&home.templates()).unwrap_or_default());
         all
     } else {
         files
@@ -645,6 +700,13 @@ pub fn validate(home: &Home, files: Vec<PathBuf>) -> Result<ExitCode> {
 fn validate_file(config: &Config, path: &Path) -> Result<Vec<String>> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    if path
+        .parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|d| d == "templates")
+    {
+        return template::validate_file(path);
+    }
     Ok(if frontmatter::has_key(&text, "cron") {
         Schedule::parse(&text)?.problems(config, Some(path))
     } else {

@@ -19,6 +19,8 @@ task, getting the job done while you're away.
   prompt.
 - **Schedules** are task templates with a cron expression. furmiculi
   enqueues a new task each time one fires.
+- **Drafts** are tasks saved for review: they don't run until you queue them.
+  **Templates** are tasks kept to start new ones from.
 - **`furmi`** runs pending tasks in tmux, tracks their status in the file, and
   moves finished tasks to `archive/`.
 
@@ -135,6 +137,12 @@ furmi add --repo ~/Projects/myapp --on-finish pr --in 2h \
 echo "Update deps and run tests" | furmi add --repo ~/Projects/myapp --agent codex
 furmi add --scratch "Compare the three queue libraries and write up a summary"   # no project
 furmi add --repo ~/Projects/myapp --run "./scripts/backup.sh"   # a shell command, no agent (see below)
+furmi add --draft "Fix the redirect loop"   # saved, not queued: look it over first
+furmi queue <id>        # ...then let the runner have it (--in 2h / --at ...)
+furmi duplicate <id>    # copy any task into a new draft
+furmi template ls       # tasks to start new ones from (a few come with furmi)
+furmi template save <task>   # keep a task as a template
+furmi add --template review-the-diff --repo ~/Projects/myapp   # a task from one
 
 furmi start             # the runner and the dashboard together (--no-open: no browser)
 furmi start -d          # ...in the background: prints the URL and returns
@@ -166,7 +174,7 @@ furmi logs <id> --attempt 1   # an earlier attempt, instead of the latest
 
 furmi done [id]         # finish a task: runs on_finish, archives it
 furmi fail [id] -r why   # give up on it, without retrying
-furmi cancel [id]       # drop a pending or running task
+furmi cancel [id]       # drop a draft, pending or running task
 furmi retry <id>        # requeue a failed/cancelled/needs_review task
 
 furmi clean             # remove worktrees and scratch folders of done tasks (-n: dry run)

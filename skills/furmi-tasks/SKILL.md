@@ -33,6 +33,13 @@ task it can carry out.
   one or two questions before you queue it. A vague task wastes a whole run.
 - **When**: now (the default), at a given time, after a delay, or on a
   recurring schedule (see section 4).
+- **Queue it, or save a draft?** A queued task starts as soon as the runner
+  sees it, and the user can't look it over first. A **draft** is saved but
+  doesn't run until the user queues it (in the dashboard, or with
+  `furmi queue <id>`). This is the user's call, not yours: unless they have
+  already said ("queue it", "let me review it first") or told you to always do
+  one or the other, ask once, before you create anything. Don't choose for them.
+  Recurring schedules are created as asked; this is about one-off tasks.
 - **Only set fields the user asked for.** Anything you leave out falls back
   to `[defaults]` in `~/.furmiculi/config.toml`, which is what the user expects.
   Examples: "open a PR" → `--on-finish pr`; "I'll drive it" →
@@ -93,6 +100,8 @@ fall back to `[defaults]`):
 | `--retries <n>`, `--retry-delay 5m`, `--timeout 2h` | |
 | `--at <RFC 3339>` | e.g. `2026-09-28T02:00:00+02:00`. Use the local UTC offset (`date +%:z`). |
 | `--in <duration>` | e.g. `2h`. |
+| `--draft` | Save it as a draft instead of queueing it (see step 1). Add it only when the user chose a draft. |
+| `--template <id>` | Start from a template (section 5): its prompt and options are used, and anything you pass replaces them. |
 
 On success it prints the new file's path (a person at a terminal sees a short
 summary instead). On failure it lists the problems; fix them and run it
@@ -140,15 +149,31 @@ previous task from the same schedule is still queued or running; add
 `--allow-overlap` only if the user wants runs to pile up. Don't write files in
 `~/.furmiculi/schedules/` by hand.
 
-## 5. Changing or dropping queued work
+## 5. Drafts and templates
+
+- `furmi queue <id>` queues a draft (with `--at` or `--in` for a later start).
+  Run it only when the user says to. `furmi cancel <id>` on a draft discards it.
+- `furmi duplicate <id>` copies any task, waiting or finished, into a new
+  draft ("do that again", "same thing for another repo": then `edit` the draft's
+  file or ask the user to). `--as <new-id>` names the copy.
+- A **template** is a task kept to start new ones from. `furmi template ls`
+  lists them; `furmi add --template <id> --repo ~/Projects/myapp` creates a
+  task from one. When the user asks for work a template already covers, use it
+  instead of writing the prompt again, and add what is specific to this request
+  as extra detail in the prompt. `furmi template save <task-id>` turns an
+  existing task into a template. Create and change templates only when the user
+  asks; don't write files in `~/.furmiculi/templates/` by hand.
+
+## 6. Changing or dropping queued work
 
 - Check the current state with `furmi ls` (or read the file) first.
-- **Pending tasks**: edit the file and run
+- **Pending and draft tasks**: edit the file and run
   `furmi validate <file>`. For a schedule use `furmi schedule edit <id>` with
   just the options to change (`--cron`, `--prompt`, `--run`, ...), `furmi schedule pause <id>`,
   `resume <id>` and `delete <id>`; `furmi schedule ls` lists them.
 - Change a status only with these commands, and confirm with the user first:
-  `furmi cancel <id>` (pending or running), `furmi retry <id>` (failed,
+  `furmi cancel <id>` (draft, pending or running; a draft is deleted),
+  `furmi retry <id>` (failed,
   cancelled or needs_review: requeues it), `furmi done <id>` (running,
   needs_review or failed: runs `on_finish`, e.g. opens the PR) and
   `furmi fail <id> -r "<why>"` (running or needs_review). The `error:` field
@@ -160,9 +185,12 @@ previous task from the same schedule is still queued or running; add
 - Don't edit `running` tasks, or anything in `~/.furmiculi/archive/`, `logs/` or
   `worktrees/` or `scratch/`.
 
-## 6. Report back
+## 7. Report back
 
-Tell the user the task id, when it will start, and what happens when it
+For a draft, give the id and say it will not run until it is queued: they can
+open it in the dashboard, edit it and press Queue, or you can run
+`furmi queue <id>` once they say so. Otherwise tell the user the task id, when
+it will start, and what happens when it
 finishes (e.g. "opens a PR on `furmi/fix-login-redirect`"). Tasks only run
 while the runner is up; `furmi status` says whether it is, so check it
 before promising a start time. If the runner is down,

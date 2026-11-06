@@ -109,6 +109,13 @@ impl Home {
         self.root.join("schedules")
     }
 
+    /// Tasks to start new tasks from. Not in [`Home::dirs`]: a home made before
+    /// templates existed is still initialized, and the folder appears (with the
+    /// starter templates) the first time furmi runs.
+    pub fn templates(&self) -> PathBuf {
+        self.root.join("templates")
+    }
+
     pub fn archive(&self) -> PathBuf {
         self.root.join("archive")
     }

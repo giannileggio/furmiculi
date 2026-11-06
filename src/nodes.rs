@@ -513,8 +513,19 @@ fn call(home: &Home, method: &str, url: &str) -> Result<()> {
 }
 
 /// What may follow `/api/tasks/<id>` or `/api/schedules/<id>` when forwarded.
-const FORWARDED: [&str; 10] = [
-    "view", "logs", "edit", "pause", "resume", "delete", "done", "fail", "cancel", "retry",
+const FORWARDED: [&str; 12] = [
+    "view",
+    "logs",
+    "edit",
+    "pause",
+    "resume",
+    "delete",
+    "done",
+    "fail",
+    "cancel",
+    "retry",
+    "queue",
+    "duplicate",
 ];
 
 /// An id of the form `<id>@<node>` (or `%40`), the way the merged state names
@@ -908,7 +919,7 @@ pub fn is_running(home: &Home, name: &str, id: &str) -> Option<bool> {
     )
 }
 
-const LISTS: [&str; 4] = ["queue", "running", "archive", "schedules"];
+const LISTS: [&str; 5] = ["queue", "drafts", "running", "archive", "schedules"];
 
 /// `local` (this machine's `/api/state`) with every node's rows added, each row
 /// tagged with its `node`, the counts summed, and a `nodes` list saying which
@@ -1006,7 +1017,12 @@ fn sort_merged(state: &mut Value) {
             .as_str()
             .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
     };
-    for (list, newest_first) in [("queue", false), ("running", false), ("archive", true)] {
+    for (list, newest_first) in [
+        ("queue", false),
+        ("drafts", true),
+        ("running", false),
+        ("archive", true),
+    ] {
         if let Some(rows) = state[list].as_array_mut() {
             // Stable, so ties keep this machine first.
             rows.sort_by(|a, b| {

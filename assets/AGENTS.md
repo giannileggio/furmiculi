@@ -12,6 +12,7 @@ Layout:
 
 - `tasks/`: the queue, one `<id>.md` per task
 - `schedules/`: recurring task templates, one `<id>.md` each
+- `templates/`: tasks to start new tasks from, one `<id>.md` each
 - `archive/`: finished tasks; read-only history
 - `logs/`: output of each run; read-only
 - `worktrees/`: git checkouts where tasks run; not yours to edit

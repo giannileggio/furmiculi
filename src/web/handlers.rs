@@ -12,8 +12,9 @@ use crate::config::Config;
 use crate::control;
 use crate::edit::{self, ScheduleEdit, Start, TaskEdit, on_finish_str};
 use crate::home::{Home, contract_tilde};
-use crate::spec::{OnFinish, TaskSpec};
+use crate::spec::OnFinish;
 use crate::task::Task;
+use crate::template::{self, Template};
 
 #[derive(Deserialize, Default)]
 struct ActionBody {
@@ -34,8 +35,94 @@ pub(super) fn perform_action(home: &Home, id: &str, action: &str, body: &str) ->
         }
         "cancel" => control::cancel(home, Some(id.to_string())),
         "retry" => control::retry(home, id),
+        "queue" => {
+            #[derive(Deserialize, Default)]
+            struct QueueBody {
+                start: Option<String>,
+            }
+            let form: QueueBody = serde_json::from_str(body).unwrap_or_default();
+            control::queue(home, id, edit::parse_start(form.start.as_deref())?)
+        }
         _ => unreachable!("route only matches ACTIONS"),
     }
+}
+
+#[derive(Deserialize, Default)]
+struct NameBody {
+    /// What to call the copy; made up from the task if empty.
+    #[serde(default)]
+    id: Option<String>,
+}
+
+fn chosen_name(body: &str) -> Option<String> {
+    serde_json::from_str::<NameBody>(body)
+        .ok()
+        .and_then(|b| b.id)
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+}
+
+/// "Duplicate as new draft": copies a task into a draft. Returns its id.
+pub(super) fn perform_duplicate(home: &Home, id: &str, body: &str) -> Result<String> {
+    control::duplicate(home, id, chosen_name(body))
+}
+
+/// "Save as template". Returns the template's id.
+pub(super) fn perform_save_template(home: &Home, id: &str, body: &str) -> Result<String> {
+    template::save_from_task(home, id, chosen_name(body))
+}
+
+/// What the new-task form starts from when a template is used.
+pub(super) fn template_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
+    let config = Config::load(&home.config_path())?;
+    let t = Template::find(home, id)?;
+    let eff = t.spec.resolve(&config.defaults);
+    Ok(serde_json::json!({
+        "id": t.id,
+        "description": t.description,
+        "prompt": t.spec.ask(&t.prompt),
+        "command": t.spec.run.is_some(),
+        "repo": t.repo().map(contract_tilde).unwrap_or_default(),
+        "on_finish": on_finish_str(eff.on_finish),
+        "agent": eff.agent,
+    }))
+}
+
+/// The template form, for creating and editing alike.
+#[derive(Deserialize)]
+struct TemplateBody {
+    #[serde(default)]
+    description: String,
+    prompt: String,
+    #[serde(default)]
+    repo: String,
+    #[serde(default)]
+    on_finish: Option<OnFinish>,
+    #[serde(default)]
+    agent: Option<String>,
+}
+
+fn template_form(body: &str) -> Result<template::TemplateEdit> {
+    let form: TemplateBody = serde_json::from_str(body).context("couldn't read the form")?;
+    Ok(template::TemplateEdit {
+        description: form.description,
+        prompt: form.prompt,
+        repo: form.repo,
+        on_finish: form.on_finish,
+        agent: form.agent,
+    })
+}
+
+pub(super) fn perform_create_template(home: &Home, body: &str) -> Result<String> {
+    template::create(home, template_form(body)?)
+}
+
+pub(super) fn perform_edit_template(home: &Home, id: &str, body: &str) -> Result<()> {
+    template::update(home, id, template_form(body)?)
+}
+
+pub(super) fn perform_delete_template(home: &Home, id: &str) -> Result<()> {
+    template::delete(home, id)
 }
 
 /// The "New task" form.
@@ -59,6 +146,12 @@ struct NewTaskBody {
     on_finish: Option<OnFinish>,
     #[serde(default)]
     agent: Option<String>,
+    /// Save it for review instead of queueing it.
+    #[serde(default)]
+    draft: bool,
+    /// Start from this template's options (the prompt is the form's own).
+    #[serde(default)]
+    template: Option<String>,
 }
 
 /// Queues the task described by the form, as `furmi add` would. Returns its id.
@@ -85,28 +178,41 @@ pub(super) fn perform_create(home: &Home, cwd_repo: Option<&str>, body: &str) ->
         Start::Keep | Start::Asap => None,
     };
     let config = Config::load(&home.config_path())?;
-    let spec = TaskSpec {
-        repo: repo.into(),
-        branch: None,
-        worktree: None,
-        agent: form.agent.filter(|a| !a.trim().is_empty()),
-        model: None,
-        mode: None,
-        on_finish: form.on_finish,
-        retries: None,
-        retry_delay: None,
-        timeout: None,
-        run: None,
+    // A template brings the options the form doesn't show (model, branch...);
+    // what the form does show replaces its own.
+    let base = match form
+        .template
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        Some(id) => Some(Template::find(home, id)?.spec),
+        None => None,
     };
+    let command = base.as_ref().is_some_and(|b| b.run.is_some());
+    let mut spec = base.unwrap_or_else(|| edit::blank_spec(repo.into()));
+    spec.repo = repo.into();
+    if let Some(agent) = form.agent.filter(|a| !a.trim().is_empty() && !command) {
+        spec.agent = Some(agent);
+    }
+    if form.on_finish.is_some() {
+        spec.on_finish = form.on_finish;
+    }
+    // The form's one text box holds a command task's command.
+    let mut prompt = form.prompt;
+    if command {
+        spec.run = Some(std::mem::take(&mut prompt).trim().to_string());
+    }
     let created = create_task(
         home,
         &config,
         NewTask {
-            prompt: form.prompt,
+            prompt,
             id: None,
             spec,
             scheduled_at,
             created_by: "web".into(),
+            draft: form.draft,
         },
     );
     match created {

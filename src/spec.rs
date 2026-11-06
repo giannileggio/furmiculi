@@ -32,6 +32,11 @@ pub enum OnFinish {
 /// in config.toml.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskSpec {
+    /// Empty only in a template that leaves the project to whoever uses it.
+    #[serde(
+        serialize_with = "serialize_repo",
+        skip_serializing_if = "path_is_empty"
+    )]
     pub repo: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
@@ -63,6 +68,14 @@ pub struct TaskSpec {
     /// task: it has no prompt, agent, model or mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
+}
+
+fn path_is_empty(path: &std::path::Path) -> bool {
+    path.as_os_str().is_empty()
+}
+
+fn serialize_repo<S: serde::Serializer>(path: &PathBuf, s: S) -> Result<S::Ok, S::Error> {
+    path.serialize(s)
 }
 
 pub const SPEC_KEYS: &[&str] = &[
