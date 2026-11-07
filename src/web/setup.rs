@@ -119,6 +119,7 @@ impl Serving {
 /// they're not there: `--setup` always asks, and so does whatever `furmi web`
 /// runs the first time it's pointed at a non-loopback address.
 pub(super) fn setup(home: &Home, args: &WebArgs) -> Result<Serving> {
+    let mut config_broken = false;
     let mut web = match Config::load(&home.config_path()) {
         Ok(config) => config.web,
         // The dashboard is where a broken config gets explained (see
@@ -126,17 +127,26 @@ pub(super) fn setup(home: &Home, args: &WebArgs) -> Result<Serving> {
         // loopback, the safe default, and says what's wrong.
         Err(e) => {
             eprintln!("warning: {e:#} (serving the dashboard on loopback)");
+            config_broken = true;
             Web::default()
         }
     };
-    // Asked once, ever, on a terminal: either because nobody has answered yet
-    // (a first run) or because a wide address is missing its token or hosts.
-    let asks = args.setup
-        || (std::io::stdin().is_terminal() && (never_asked(&web) || unanswered(args, &web)));
-    if asks {
+    if asks(args, &web, std::io::stdin().is_terminal(), config_broken) {
         web = interactive_setup(home, args, &web)?;
     }
     resolve(args, &web)
+}
+
+/// Does this run ask the setup questions? Once, ever, on a terminal: either
+/// because nobody has answered yet (a first run) or because a wide address is
+/// missing its token or hosts. Not when config.toml couldn't be parsed: the
+/// answers are saved by `set_web_config`, which refuses to touch a file it
+/// can't read, so the questions could never be answered usefully — they would
+/// only block whoever is at the terminal (a daily e2e run in a tmux pane sat on
+/// the first one for an hour). `--setup` still asks, and then fails with the
+/// parse error, which is the point of asking for it by hand.
+fn asks(args: &WebArgs, web: &Web, interactive: bool, config_broken: bool) -> bool {
+    args.setup || (interactive && !config_broken && (never_asked(web) || unanswered(args, web)))
 }
 
 /// Has nobody answered `furmi web --setup`'s questions for this home yet?
@@ -490,6 +500,35 @@ mod tests {
         let serving = setup(&home, &args(None, &[])).unwrap();
         assert_eq!(serving.addr, "127.0.0.1:7433");
         assert!(!serving.remote);
+        // And it served without asking anything: a test with a terminal on
+        // stdin (cargo test in a tmux pane) used to wait on that question.
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config.toml")).unwrap(),
+            "this is [not toml"
+        );
+    }
+
+    #[test]
+    fn a_broken_config_never_runs_the_first_run_questions() {
+        let first_run = Web::default();
+        // A first run on a terminal asks, and saves the answers.
+        assert!(asks(&args(None, &[]), &first_run, true, false));
+        // Nowhere to ask: no questions.
+        assert!(!asks(&args(None, &[]), &first_run, false, false));
+        // A config.toml that doesn't parse: the answers couldn't be saved, so
+        // the questions are skipped rather than sat on.
+        assert!(!asks(&args(None, &[]), &first_run, true, true));
+        // --setup asks regardless: it's the request to be asked.
+        let mut by_hand = args(None, &[]);
+        by_hand.setup = true;
+        assert!(asks(&by_hand, &first_run, true, true));
+        // A wide bind still asks, broken config or not, when it can be saved.
+        assert!(asks(
+            &args(Some("0.0.0.0:7433"), &[]),
+            &first_run,
+            true,
+            false
+        ));
     }
 
     #[test]
