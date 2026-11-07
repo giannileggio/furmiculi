@@ -289,12 +289,12 @@ const VIEW_OF: Record<Tab, string> = {
 
 /** A list's entry in the sidebar: click it to open the list. */
 export function tab(page: Page, name: Tab) {
-  return page.locator(`#views button[data-view="${VIEW_OF[name]}"]`);
+  return page.locator(`#side nav button[data-view="${VIEW_OF[name]}"]`);
 }
 
 /** A sidebar entry by its own name, for the ones that narrow a tab to a status. */
 export function view(page: Page, name: "waiting" | "drafts" | "templates" | "working" | "review" | "failed" | "finished" | "repeating" | "stats") {
-  return page.locator(`#views button[data-view="${name}"]`);
+  return page.locator(`#side nav button[data-view="${name}"]`);
 }
 
 /** The number beside a list in the sidebar. */
