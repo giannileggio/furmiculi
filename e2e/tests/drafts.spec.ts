@@ -167,3 +167,24 @@ test("a template can be written from scratch, with or without a project", async 
   await expect(page.locator("#f-error")).not.toHaveText("");
   expect(fs.readdirSync(`${forge.home}/templates`)).toHaveLength(before);
 });
+
+test("the sidebar keeps Drafts and Templates in their own Library section", async ({ page, forge }) => {
+  forge.add("a-draft", "echo look this over later", "--draft");
+  await openDashboard(page, forge);
+  const queue = page.locator("#views");
+  const library = page.locator("#views-saved");
+  await expect(page.locator("#side h2").first()).toHaveText("Queue");
+  await expect(page.locator("#side h2").nth(1)).toHaveText("Library");
+
+  // Kept for later, so they are not among the lists work moves through.
+  await expect(library.locator("button")).toHaveText([/Drafts/, /Templates/]);
+  await expect(
+    queue.locator('button[data-view="drafts"], button[data-view="templates"]'),
+  ).toHaveCount(0);
+
+  // Still the way in: its count is there and it opens the list.
+  await expect(library.locator('button[data-view="drafts"] .count')).toHaveText("1");
+  await library.locator('button[data-view="drafts"]').click();
+  await expect(row(page, "a-draft").locator(".badge")).toHaveText("Draft");
+  await expect(library.locator('button[data-view="drafts"]')).toHaveAttribute("aria-pressed", "true");
+});

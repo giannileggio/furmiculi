@@ -564,6 +564,7 @@
 <div class="layout">
 <aside id="side">
   <div><h2>Queue</h2><nav id="views"></nav></div>
+  <div><h2>Library</h2><nav id="views-saved"></nav></div>
   <div id="projects-wrap" hidden><h2>Projects</h2><nav id="projects"></nav></div>
   <div class="side-note">
     <span class="mono" id="home"></span>
@@ -841,7 +842,7 @@ const STATUS_LABELS = {
 const VIEWS = [
   { id: "waiting", tab: "queue", label: "Waiting", count: s => s.queue.length,
     desc: "Queued or scheduled to start. Each one says why it hasn't started yet." },
-  { id: "drafts", tab: "drafts", label: "Drafts", alert: true, count: s => s.drafts.length,
+  { id: "drafts", tab: "drafts", saved: true, label: "Drafts", alert: true, count: s => s.drafts.length,
     desc: "Saved but not queued: nothing runs until you look it over and queue it." },
   { id: "working", tab: "running", label: "Working", count: s => s.running.length,
     desc: "An agent is working on these right now." },
@@ -855,7 +856,7 @@ const VIEWS = [
     desc: "Done, failed and cancelled tasks." },
   { id: "repeating", tab: "schedules", label: "Repeating", count: s => s.schedules.length,
     desc: "Schedules that queue a task again each time they come round." },
-  { id: "templates", tab: "templates", label: "Templates", count: s => s.templates.length,
+  { id: "templates", tab: "templates", saved: true, label: "Templates", count: s => s.templates.length,
     desc: "Tasks to start new ones from. Use one, and it opens the New task form filled in." },
   { id: "stats", tab: "stats", label: "Stats",
     desc: "How the finished tasks went." },
@@ -1637,12 +1638,15 @@ function drawSide(state) {
     archive: inProject(state.archive), schedules: inProject(state.schedules),
     templates: state.templates, // a template is not tied to a project
   };
-  document.getElementById("views").innerHTML = VIEWS.map(v => {
+  // Drafts and templates are kept for later, not work in the queue: their own section.
+  const navButtons = saved => VIEWS.filter(v => !!v.saved === saved).map(v => {
     const n = v.count ? v.count(scoped) : null; // Stats is not a list of anything
     return `<button data-view="${v.id}" class="${v === view ? "active" : ""}${v.alert && n ? " alert" : ""}"
       aria-pressed="${v === view}"><span class="label">${escapeHtml(v.label)}</span>` +
       `${n === null ? "" : `<span class="count">${n}</span>`}</button>`;
   }).join("");
+  document.getElementById("views").innerHTML = navButtons(false);
+  document.getElementById("views-saved").innerHTML = navButtons(true);
   document.getElementById("view-title").textContent = view.label;
   document.getElementById("view-desc").textContent = view.desc + (project ? ` Showing ${baseName(project)}.` : "");
 
