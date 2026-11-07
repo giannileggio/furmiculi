@@ -424,6 +424,7 @@ Fix the redirect loop.
                 interactive: Vec::new(),
                 model_args: Vec::new(),
                 model: Some("agent/default".into()),
+                models_cmd: Vec::new(),
             },
         );
         assert_eq!(t.model_in_use(&config), ("agent/default".into(), "agent"));

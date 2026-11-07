@@ -51,6 +51,9 @@ pub struct TaskEdit {
     pub start: Start,
     pub on_finish: Option<OnFinish>,
     pub agent: Option<String>,
+    /// `None` leaves the model as it is, `Some("")` clears it (the agent's own
+    /// model applies), anything else pins that one.
+    pub model: Option<String>,
 }
 
 /// What the schedule form edits.
@@ -60,6 +63,8 @@ pub struct ScheduleEdit {
     pub cron: String,
     pub on_finish: Option<OnFinish>,
     pub agent: Option<String>,
+    /// As `TaskEdit::model`.
+    pub model: Option<String>,
 }
 
 fn load_config(home: &Home) -> Result<Config> {
@@ -95,6 +100,9 @@ pub fn task_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
         "repo": contract_tilde(&eff.repo),
         "on_finish": on_finish_str(eff.on_finish),
         "agent": eff.agent,
+        // The model the file pins, not the one that will run: an empty field in
+        // the form must mean "keep using the agent's own", not re-pin it.
+        "model": task.spec.model,
         "starts": task.scheduled_at.map(crate::cmd::fmt_time),
         "has_run": task.attempts > 0,
         "draft": task.status == Status::Draft,
@@ -149,6 +157,7 @@ pub fn edit_task(home: &Home, id: &str, edit: TaskEdit) -> Result<()> {
         Start::At(at) => task.scheduled_at = Some(at),
     }
     apply_choices(&mut task.spec, edit.on_finish, edit.agent);
+    apply_model(&mut task.spec, edit.model);
 
     let mut problems = task.problems(&config, Some(&path));
     if task.prompt.is_empty() && task.spec.run.is_none() {
@@ -170,6 +179,22 @@ pub(crate) fn apply_choices(
     }
     if let Some(agent) = agent.filter(|a| !a.trim().is_empty() && spec.run.is_none()) {
         spec.agent = Some(agent);
+    }
+}
+
+/// The form's model box: empty means the agent's own model, so it clears the
+/// field. A command task has no model to set (its own validation says so).
+fn apply_model(spec: &mut TaskSpec, model: Option<String>) {
+    if spec.run.is_some() {
+        return;
+    }
+    if let Some(model) = model {
+        let model = model.trim();
+        spec.model = if model.is_empty() {
+            None
+        } else {
+            Some(model.to_string())
+        };
     }
 }
 
@@ -216,6 +241,7 @@ pub fn schedule_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
         "repo": contract_tilde(&eff.repo),
         "on_finish": on_finish_str(eff.on_finish),
         "agent": eff.agent,
+        "model": s.spec.model,
     }))
 }
 
@@ -223,6 +249,7 @@ pub fn schedule_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
 pub fn create_schedule(home: &Home, new: ScheduleEdit) -> Result<String> {
     let mut spec = blank_spec(path_of(&new.repo)?);
     apply_choices(&mut spec, new.on_finish, new.agent);
+    apply_model(&mut spec, new.model);
     add_schedule(home, None, new.cron, false, spec, new.prompt)
 }
 
@@ -314,6 +341,7 @@ pub fn edit_schedule(home: &Home, id: &str, edit: ScheduleEdit) -> Result<()> {
         set_ask(&mut s.spec, &mut s.prompt, &edit.prompt);
         s.spec.repo = path_of(&edit.repo)?;
         apply_choices(&mut s.spec, edit.on_finish, edit.agent);
+        apply_model(&mut s.spec, edit.model);
         Ok(())
     })
 }
@@ -436,6 +464,7 @@ mod tests {
             start: Start::Keep,
             on_finish: None,
             agent: None,
+            model: None,
         }
     }
 
@@ -646,6 +675,7 @@ mod tests {
             cron: cron.into(),
             on_finish: None,
             agent: None,
+            model: None,
         }
     }
 

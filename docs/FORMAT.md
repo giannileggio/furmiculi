@@ -320,12 +320,22 @@ headless = ["aider", "--yes-always", "--message", "{prompt}"]
 interactive = ["aider", "--message", "{prompt}"]
 model_args = ["--model", "{model}"]   # appended only when a model is set
 model = "sonnet"                      # optional: this agent's default model
+models_cmd = ["aider", "--list-models"]  # optional: what the form offers
 ```
 
 `headless` and `interactive` are argv lists with `{prompt}` and `{id}`
 placeholders. No shell is involved, so prompts need no quoting. A task's
 `model` (else the agent's `model`) fills `{model}` in `model_args`; with
 neither, nothing is added and the agent picks its own model.
+
+`models_cmd` is how the dashboard asks the agent which models it can run, for
+the **Model** box in its task form: it runs the command (20 seconds at most)
+and reads the answer, one name per line already as `provider/model`
+(`opencode models`) or a table whose first two columns are the provider and the
+model (`pi --list-models`). The presets fill it in only where the CLI has
+such a command — pi and opencode. The answer is kept for an hour in
+`models-cache.json` beside the tasks, and a failing command falls back to the
+last answer it gave. Without it the box still takes any model you type.
 
 ### The dashboard
 

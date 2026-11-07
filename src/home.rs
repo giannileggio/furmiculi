@@ -194,6 +194,12 @@ impl Home {
         self.root.join("health.json")
     }
 
+    /// The models each agent's CLI last named, with when it said so: a
+    /// shortcut for the dashboard's form, thrown away at will.
+    pub fn models_cache(&self) -> PathBuf {
+        self.root.join("models-cache.json")
+    }
+
     /// Where a backgrounded dashboard (`furmi start -d`, `furmi web -d`)
     /// appends its output: it has no terminal to print to.
     pub fn web_log(&self) -> PathBuf {

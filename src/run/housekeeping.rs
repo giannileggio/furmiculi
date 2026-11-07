@@ -9,8 +9,9 @@
 //!   whose cause was the machine (tmux gone, agent not installed) once that
 //!   cause is gone, a capped number of times.
 //! - **Health**, written to `health.json` for the dashboard: the
-//!   `furmi doctor` checks that aren't ok, plus anything the pass declined
-//!   to do and why.
+//!   `furmi doctor` checks that aren't ok, anything the pass declined to do
+//!   and why, and tasks whose worktree stayed clean while the base checkout
+//!   gained changes (see [`super::escape`]).
 //! - **Suggestions**, destructive things (a merged `furmi/*` branch) that are
 //!   only listed, each with the exact command to run. Never done here.
 //!
@@ -32,6 +33,7 @@ use crate::home::Home;
 use crate::task::{Status, Task, now};
 use crate::{control, doctor, tmux};
 
+use super::escape;
 use super::log::log;
 use super::starting::start_problems;
 
@@ -111,6 +113,7 @@ pub fn pass(home: &Home, config: &Config, mutate: bool) -> Vec<Health> {
         .map(|c| Health::new(c.level(), c.message()))
         .collect();
     let now = now();
+    health.extend(escape::health(home, mutate));
     if mutate {
         let hk = &config.housekeeping;
         health.extend(requeue_environmental(home, config, hk.max_requeues));
@@ -235,7 +238,7 @@ fn trim_logs(home: &Home, keep: u32) {
         else {
             continue;
         };
-        if !matches!(ext, "log" | "exit" | "usage") {
+        if !matches!(ext, "log" | "exit" | "usage" | "base" | "escaped") {
             continue;
         }
         if let Ok(attempt) = attempt.parse::<u32>() {

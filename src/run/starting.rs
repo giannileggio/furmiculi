@@ -14,6 +14,7 @@ use crate::spec::{Effective, Mode, OnFinish};
 use crate::task::{Status, Task};
 use crate::tmux;
 
+use super::escape;
 use super::finishing::{archive, fail_attempt};
 use super::log::log;
 use super::{load_tasks, log_file, status_file};
@@ -105,6 +106,9 @@ fn start(
         let status = status_file(home, &task.id, task.attempts);
         remove_if_exists(&status)?;
         remove_if_exists(&log_file(home, &task.id, task.attempts))?;
+        // Where the base checkout stood before the agent ran, so an edit
+        // there instead of in this worktree can be told from a no-op.
+        escape::snapshot(home, &task, &eff);
         tmux::spawn(
             session,
             &task.id,

@@ -869,6 +869,7 @@ mod tests {
                 interactive: Vec::new(),
                 model_args: Vec::new(),
                 model: Some("agent/default".into()),
+                models_cmd: Vec::new(),
             },
         );
         config.defaults.agent = Some("pi".into());

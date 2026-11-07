@@ -14,19 +14,22 @@ agents, one file each.
 *Furmiculi* means "ants" in Sicilian: lots of small workers, each carrying one
 task, getting the job done while you're away.
 
-- **Tasks** are `.md` files: YAML frontmatter says where and how to run
-  (repo, branch, worktree, agent, model, schedule...), and the body is the
-  prompt.
-- **Schedules** are task templates with a cron expression. furmiculi
-  enqueues a new task each time one fires.
-- **Drafts** are tasks saved for review: they don't run until you queue them.
-  **Templates** are tasks kept to start new ones from.
-- **`furmi`** runs pending tasks in tmux, tracks their status in the file, and
-  moves finished tasks to `archive/`.
-
-It works with any CLI coding agent: presets for Claude Code, Codex, Gemini
-CLI, Hermes Agent, opencode and Pi are built in, and others are a few lines of
-config.
+- **A queue made of plain Markdown files.** A task is a `.md` file: YAML
+  frontmatter says where and how to run (repo, branch, worktree, agent, model,
+  schedule...), and the body is the prompt. Status lives in the file and
+  finished tasks move to `archive/`, so the queue is greppable, versionable and
+  has no database. Write tasks by hand, with `furmi add`, or ask an agent to.
+- **Any agent, and plain commands too.** Presets for Claude Code, Codex,
+  Gemini CLI, Hermes Agent, opencode and Pi are built in, and others are a few
+  lines of config. A task can also be a plain shell command (`--run`), and a
+  cron schedule turns any task into recurring work ("every night..."). Tasks run
+  unattended in tmux, each in its own worktree, and can open a PR when done.
+- **One colony across all your machines.** `furmi node add` registers another
+  box over plain SSH, with no cluster, cloud service or extra auth. One
+  dashboard then shows every machine's queue and lets you queue and manage tasks
+  on any of them. Installing is one line, and `furmi doctor` says what's missing.
+- **Drafts and templates.** A task can be saved as a draft, which waits for you
+  to queue it, and any task can be kept as a template to start new ones from.
 
 <p align="center">
   <picture>
@@ -299,7 +302,10 @@ after you close the dashboard; `furmi stop` or the **stop** link next to
 "runner: on" ends it), and **Setup** lists the coding agents (installed or not,
 with the install command to copy, and **Use this one** to make one the default)
 above what `furmi doctor` finds (tmux, git, task files), with a banner when
-something needs attention. furmi doesn't run the installs for you: they're
+something needs attention. It's also where the runner's limits (tasks at once,
+overall and per repo, and how often it rescans) and the task defaults (mode,
+when-done, own worktree, retries, retry delay, timeout) are changed: they're
+written into `config.toml`, and everything else in that file stays as it is. furmi doesn't run the installs for you: they're
 `npm install -g` (or, for hermes, its own installer) commands and each agent
 needs you to sign in once.
 
@@ -350,7 +356,13 @@ queue and manage tasks on any of them (see the same page).
 
 A task that is still *Waiting* has an **Edit** button: change what it does, the
 project, when it starts, or what happens when it's done (not once it has
-started: cancel it and add a new one). **+ New task** with "How often?" set to
+started: cancel it and add a new one). Its **Model** box is the same as
+`furmi add --model`: empty means the agent's own model, and the suggestions are
+the ones that agent's CLI names itself (`pi --list-models`, `opencode models`),
+kept for an hour, plus any model a task of yours has already run with. Agents
+with no way to list models (claude, codex, gemini, hermes) get a box you can
+type into and no suggestions, and an agent with no `model_args` gets no box at
+all: it can't be handed a model. **+ New task** with "How often?" set to
 anything but "Just once" creates a schedule, which appears under *Repeating*
 with **Edit**, **Pause**/**Resume** and **Delete**. Changing a schedule's time or
 resuming it starts counting from now, so it never fires for a slot that passed

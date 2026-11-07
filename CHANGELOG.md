@@ -4,7 +4,32 @@ Releases and their notes are on the
 [releases page](https://github.com/giannileggio/furmiculi/releases). This file
 lists what changed between them.
 
-## Unreleased
+## 0.7.0
+
+- A worktree task that edits the base checkout instead of its own worktree no
+  longer looks like a clean no-op. The runner saves the base checkout's dirty
+  paths when an attempt starts and compares them when it ends; if the worktree
+  stayed clean while the base checkout gained changes and the task has an
+  `on_finish` step, its log names those paths and the dashboard's health list
+  warns that the work may be in the shared checkout. The task still succeeds:
+  the warning makes the escape visible, not fatal.
+
+- **Setup** in the dashboard can now change the runner's limits (tasks at once,
+  overall and per repo, and how often it rescans) and the task defaults (mode,
+  when-done, worktree, retries, retry delay, timeout). It rewrites those keys in
+  `config.toml` and leaves the rest of the file — including your comments —
+  alone, and a running `furmi run` picks them up within a poll. A dashboard
+  whose session has ended says so instead of quietly showing stale numbers.
+
+- The dashboard's task form can pin a model, like `furmi add --model`: the
+  **Model** box is there for a new task, an edit and a schedule, on any machine.
+  The suggestions are the ones the agent's own CLI names (`pi --list-models`,
+  `opencode models`), asked on the machine that will run the task and kept for
+  an hour in `models-cache.json`, plus models your tasks have already run with.
+  Agents whose CLI has no such command (claude, codex, gemini, hermes) get a box
+  to type into and no list; an agent with no `model_args` can't be handed a
+  model, so it gets no box. New optional `models_cmd` per agent in `config.toml`,
+  filled in for the pi and opencode presets.
 
 - Drafts: `furmi add --draft` (and **Save as draft** in the dashboard's New task
   form) saves a task without queueing it. The runner leaves it alone until you

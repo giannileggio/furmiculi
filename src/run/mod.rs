@@ -14,6 +14,7 @@
 //! runs the agent (parsing its output for usage in [`usage`]). [`mod@log`] is
 //! the runner log.
 
+mod escape;
 mod exec;
 mod finishing;
 mod housekeeping;
