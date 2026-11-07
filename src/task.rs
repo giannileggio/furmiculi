@@ -12,6 +12,8 @@ use crate::spec::{SPEC_KEYS, TaskSpec, validate_id};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
+    /// Written but not queued: the runner ignores it until `furmi queue`.
+    Draft,
     #[default]
     Pending,
     Running,
@@ -25,6 +27,7 @@ pub enum Status {
 impl Status {
     pub fn as_str(self) -> &'static str {
         match self {
+            Status::Draft => "draft",
             Status::Pending => "pending",
             Status::Running => "running",
             Status::Done => "done",

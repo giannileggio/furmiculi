@@ -181,6 +181,8 @@
     font-size: 12px; font-weight: 500; white-space: nowrap;
   }
   .badge.pending { color: var(--pending); }
+  #f-draft[hidden] { display: none; }
+  .badge.draft { color: var(--review); border-style: dashed; }
   .badge.running { color: var(--running); background: var(--accent-wash); }
   .badge.done { color: var(--done); }
   .badge.failed { color: var(--bg); background: var(--failed); border-color: var(--failed); }
@@ -573,6 +575,7 @@
 <div class="content">
 <div class="view-head">
   <div><h1 id="view-title">Waiting</h1><p id="view-desc"></p></div>
+  <button class="ghost" id="tpl-new" data-action="tpl-new" hidden title="Write a template from scratch">+ New template</button>
   <button class="ghost" id="select-toggle" data-action="select" hidden title="Tick several tasks and act on them together (x)">Select</button>
 </div>
 <div class="warn" id="invalid" hidden></div>
@@ -588,10 +591,12 @@
 </div>
 
 <main>
+  <section class="panel" id="panel-drafts"></section>
   <section class="panel active" id="panel-queue"></section>
   <section class="panel" id="panel-running"></section>
   <section class="panel" id="panel-archive"></section>
   <section class="panel" id="panel-schedules"></section>
+  <section class="panel" id="panel-templates"></section>
   <section class="panel" id="panel-stats"></section>
 </main>
 </div>
@@ -621,6 +626,10 @@
       <button id="new-close" aria-label="Close">&times;</button>
     </header>
     <form class="new-task" id="new-form">
+      <label id="f-desc-wrap" hidden>What is it for?
+        <input id="f-desc" autocomplete="off" placeholder="e.g. Update dependencies and check nothing broke">
+        <small>One line, shown in the list of templates.</small>
+      </label>
       <label><span id="f-prompt-label">What should the agent do?</span>
         <textarea id="f-prompt" required autofocus
           placeholder="e.g. Fix the redirect loop after login, and add a test for it"></textarea>
@@ -682,6 +691,8 @@
       <div class="buttons">
         <span class="error" id="f-error"></span>
         <button type="button" class="btn secondary" id="new-cancel">Cancel</button>
+        <button type="button" class="btn secondary" id="f-draft"
+          title="Save it without queueing it: the runner leaves it alone until you queue it">Save as draft</button>
         <button type="submit" class="btn" id="f-submit">Queue task</button>
       </div>
     </form>
@@ -744,7 +755,7 @@
     </header>
     <ul class="keys">
       <li class="k"><kbd>/</kbd></li><li>Search the tables</li>
-      <li class="k"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd></li><li>Waiting, Working, Finished, Repeating, Stats</li>
+      <li class="k"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd><kbd>6</kbd><kbd>7</kbd></li><li>Waiting, Working, Finished, Repeating, Stats, Drafts, Templates</li>
       <li class="k"><kbd>k</kbd><kbd>j</kbd></li><li>Move up and down the table</li>
       <li class="k"><kbd>Enter</kbd></li><li>Open the highlighted task</li>
       <li class="k"><kbd>o</kbd></li><li>Show what the agent printed</li>
@@ -822,7 +833,7 @@ function applyTheme(choice, remember) {
 }
 // The words the page uses for the statuses in the task files and `furmi ls`.
 const STATUS_LABELS = {
-  pending: "Waiting", running: "Working", done: "Done", failed: "Failed",
+  draft: "Draft", pending: "Waiting", running: "Working", done: "Done", failed: "Failed",
   cancelled: "Cancelled", needs_review: "Needs review",
 };
 // The sidebar's lists. Each is a tab, optionally narrowed to one status (the
@@ -830,6 +841,8 @@ const STATUS_LABELS = {
 const VIEWS = [
   { id: "waiting", tab: "queue", label: "Waiting", count: s => s.queue.length,
     desc: "Queued or scheduled to start. Each one says why it hasn't started yet." },
+  { id: "drafts", tab: "drafts", label: "Drafts", alert: true, count: s => s.drafts.length,
+    desc: "Saved but not queued: nothing runs until you look it over and queue it." },
   { id: "working", tab: "running", label: "Working", count: s => s.running.length,
     desc: "An agent is working on these right now." },
   { id: "review", tab: "archive", filter: "needs_review", label: "Needs review", alert: true,
@@ -842,6 +855,8 @@ const VIEWS = [
     desc: "Done, failed and cancelled tasks." },
   { id: "repeating", tab: "schedules", label: "Repeating", count: s => s.schedules.length,
     desc: "Schedules that queue a task again each time they come round." },
+  { id: "templates", tab: "templates", label: "Templates", count: s => s.templates.length,
+    desc: "Tasks to start new ones from. Use one, and it opens the New task form filled in." },
   { id: "stats", tab: "stats", label: "Stats",
     desc: "How the finished tasks went." },
 ];
@@ -873,6 +888,7 @@ const picked = new Set();
 // The column being sorted, and which way. Nothing is sorted until asked.
 let sort = { key: null, dir: 1 };
 const STATUS_HELP = {
+  draft: "Saved, not queued: the runner leaves it alone until you queue it.",
   pending: "Queued: it starts when the runner picks it up (or at its start time).",
   running: "An agent is working on it right now.",
   done: "Finished successfully.",
@@ -1036,6 +1052,7 @@ function taskTable(rows, cols, empty, sortable, kind = "task") {
 
 // Which action buttons make sense for a task in this status.
 const ACTIONS_FOR_STATUS = {
+  draft: ["queue", "edit", "cancel"],
   pending: ["edit", "cancel"],
   // A task an agent is working on has one real question — did it work out?
   // Either answer stops it; "cancelled" is for work that never ran at all.
@@ -1046,12 +1063,16 @@ const ACTIONS_FOR_STATUS = {
   done: [],
 };
 
-const ACTION_LABELS = { edit: "Edit", done: "Mark done", fail: "Mark failed", cancel: "Drop it", retry: "Try again", logs: "Output" };
+const ACTION_LABELS = { queue: "Queue", edit: "Edit", done: "Mark done", fail: "Mark failed", cancel: "Drop it", retry: "Try again", logs: "Output" };
 const ACTION_HELP = {
+  queue: "Let the runner have it: it starts as soon as it can.",
   edit: "Change what it will do, where, or when it starts.",
   done: "Finish it: runs the when-done step and moves it to Finished.",
   fail: "It didn't work out: stops the agent, records why, and doesn't retry.",
   cancel: "Drop it before it starts. The when-done step doesn't run.",
+  discard: "Throw this draft away.",
+  duplicate: "Copy it into a new draft you can change before queueing.",
+  template: "Keep it as a template to start new tasks from.",
   retry: "Put it back in the queue, in the same workspace.",
   logs: "See what the agent printed.",
 };
@@ -1065,9 +1086,11 @@ function actionButtons(r) {
   if (!canAct(r)) return "";
   const acts = [...(ACTIONS_FOR_STATUS[r.status] || [])];
   acts.push("logs"); // always offered; the endpoint reports if there's nothing yet
-  return acts.map(a =>
-    `<button data-id="${escapeHtml(r.id)}" data-action="${a}" title="${escapeHtml(ACTION_HELP[a])}" class="${DANGER_ACTIONS.has(a) ? "danger" : ""}">${ACTION_LABELS[a]}</button>`
-  ).join("");
+  const draft = r.status === "draft";
+  return acts.map(a => {
+    const shown = draft && a === "cancel" ? "discard" : a; // a draft never ran: nothing to drop
+    return `<button data-id="${escapeHtml(r.id)}" data-action="${a}" title="${escapeHtml(ACTION_HELP[shown])}" class="${DANGER_ACTIONS.has(a) ? "danger" : ""}">${draft && a === "cancel" ? "Discard" : ACTION_LABELS[a]}</button>`;
+  }).join("");
 }
 
 const TASK_COLS = [
@@ -1181,6 +1204,21 @@ const SCHEDULE_COLS = [
       <button data-id="${escapeHtml(r.id)}" data-action="${r.enabled ? "sched-pause" : "sched-resume"}"
         title="${r.enabled ? "Stop adding tasks until you resume it" : "Start adding tasks again"}">${r.enabled ? "Pause" : "Resume"}</button>
       <button class="danger" data-id="${escapeHtml(r.id)}" data-action="sched-delete" title="Remove the schedule. Tasks it already added stay.">Delete</button>
+    </div>` },
+];
+
+// A template: what it is for, where it runs (if it says), and the buttons that use it.
+const TEMPLATE_COLS = [
+  { key: "id", label: "Template", render: r =>
+      `<div class="summary">${escapeHtml(r.description || r.summary)}</div><div class="why mono">${escapeHtml(r.id)}</div>` },
+  { key: "repo", label: "Project", render: r => r.repo
+      ? `<div title="${escapeHtml(r.repo)}">${escapeHtml(baseName(r.repo))}</div>`
+      : `<span class="sub">you choose</span>` },
+  { key: "agent", label: "Agent", render: r => r.command ? "command" : marked(r.agent) },
+  { key: "actions", label: "", render: r => `<div class="actions">
+      <button data-id="${escapeHtml(r.id)}" data-action="tpl-use" title="Open the New task form with this template filled in">Use</button>
+      <button data-id="${escapeHtml(r.id)}" data-action="tpl-edit" title="Change what the template says">Edit</button>
+      <button class="danger" data-id="${escapeHtml(r.id)}" data-action="tpl-delete" title="Delete the template. Tasks made from it stay.">Delete</button>
     </div>` },
 ];
 
@@ -1309,13 +1347,14 @@ function draw(state) {
   drawSide(state);
   drawBulk(state);
 
-  const firstRun = state.queue.length + state.running.length + state.archive.length === 0;
+  const firstRun = state.drafts.length + state.queue.length + state.running.length + state.archive.length === 0;
 
   // The toolbar over the tables: how far back to look, and what a clicked
   // number has narrowed things to.
   document.getElementById("toolbar").hidden = firstRun && state.schedules.length === 0;
   // The window is about when a task ran; a schedule is a rule, not a run.
-  document.getElementById("age-wrap").hidden = activeTab() === "schedules";
+  document.getElementById("tpl-new").hidden = activeTab() !== "templates";
+  document.getElementById("age-wrap").hidden = ["schedules", "templates"].includes(activeTab());
   if (ageEl.value !== age) ageEl.value = age;
   const narrowed = !!project || age !== "any" || !!query; // the tables show less than everything
   document.getElementById("toolbar-note").textContent = project ? `Showing ${baseName(project)}` : "";
@@ -1334,6 +1373,13 @@ function draw(state) {
     .map(r => ({ ...r, state: r.enabled ? "active" : "paused", words: describeCron(r.cron) }));
   const emptyFor = (base) => (firstRun || !narrowed ? base : windowMessage());
 
+  document.getElementById("panel-drafts").innerHTML = taskTable(taskRows(state.drafts), withNode(TASK_COLS, state),
+    emptyFor(`<div class="empty">No drafts. Save a task as a draft to look it over before it runs.</div>`), true);
+  const templateRows = state.templates.filter(r => matches(r, TEMPLATE_SEARCH_FIELDS));
+  document.getElementById("panel-templates").innerHTML = taskTable(templateRows, TEMPLATE_COLS,
+    `<div class="empty">${query ? `Nothing matches “${escapeHtml(query)}”.` : "No templates yet."}` +
+      `${query ? "" : ` Open a task and choose Save as template, or add a Markdown file to <code>${escapeHtml(state.home)}/templates</code>.`}` +
+      `</div>`, false, "template");
   document.getElementById("panel-queue").innerHTML = taskTable(taskRows(state.queue), withNode(TASK_COLS, state), emptyFor(firstRun
     ? `<div class="empty"><div class="big">No tasks yet</div>
          Describe some work and the colony will get to it while you're away.<br>
@@ -1359,7 +1405,7 @@ function draw(state) {
     : emptyFor(`<div class="empty">Nothing has finished yet.</div>`);
   // Say what the box is searching, and how much of it is left.
   const tab = activeTab();
-  const noun = { queue: "waiting tasks", running: "tasks at work", archive: "finished tasks", schedules: "repeating tasks", stats: "finished tasks" }[tab];
+  const noun = { drafts: "drafts", templates: "templates", queue: "waiting tasks", running: "tasks at work", archive: "finished tasks", schedules: "repeating tasks", stats: "finished tasks" }[tab];
   searchEl.placeholder = `Search ${noun}`;
   searchEl.setAttribute("aria-label", searchEl.placeholder);
   const total = state[tab === "stats" ? "archive" : tab].length;
@@ -1547,6 +1593,7 @@ function statsPanel(rows) {
 }
 
 // What a search looks through, per kind of row.
+const TEMPLATE_SEARCH_FIELDS = ["id", "description", "summary", "repo", "agent"];
 const TASK_SEARCH_FIELDS = ["id", "summary", "repo", "branch", "agent", "model", "status", "node"];
 const SCHEDULE_SEARCH_FIELDS = ["id", "summary", "repo", "cron", "node", "state", "words"];
 
@@ -1586,8 +1633,9 @@ function drawSide(state) {
   // project's tasks only, so a "0" never sits over a list with something in it.
   const inProject = rows => project ? rows.filter(r => r.repo === project) : rows;
   const scoped = {
-    queue: inProject(state.queue), running: inProject(state.running),
+    drafts: inProject(state.drafts), queue: inProject(state.queue), running: inProject(state.running),
     archive: inProject(state.archive), schedules: inProject(state.schedules),
+    templates: state.templates, // a template is not tied to a project
   };
   document.getElementById("views").innerHTML = VIEWS.map(v => {
     const n = v.count ? v.count(scoped) : null; // Stats is not a list of anything
@@ -1718,7 +1766,7 @@ function drawLogs() {
 // Which of the dashboard's tasks is this id (wherever it lives).
 function taskRow(id) {
   if (!lastState) return null;
-  return [...lastState.running, ...lastState.queue, ...lastState.archive]
+  return [...lastState.running, ...lastState.drafts, ...lastState.queue, ...lastState.archive]
     .find(r => r.id === id) || null;
 }
 
@@ -1903,7 +1951,9 @@ async function runAction(id, action) {
     if (reason === null) return; // cancelled
     body = JSON.stringify({ reason });
   }
-  const confirmText = { cancel: `Drop ${id}? It hasn't started, and the when-done step won't run.` };
+  const row = taskRow(id);
+  const confirmText = { cancel: row && row.status === "draft"
+    ? `Discard the draft ${id}?` : `Drop ${id}? It hasn't started, and the when-done step won't run.` };
   if (CONFIRM_ACTIONS.has(action) && action !== "fail" && !confirm(confirmText[action])) return;
 
   const error = await postAction(id, action, body);
@@ -1918,15 +1968,15 @@ async function runAction(id, action) {
 // Tick tasks, then act on all of them at once. The bar only offers what every
 // ticked task allows: "Mark done" for a mix of waiting and working would fail
 // for half of them.
-const BULK_ACTIONS = ["done", "fail", "cancel", "retry"];
+const BULK_ACTIONS = ["queue", "done", "fail", "cancel", "retry"];
 
 function allTasks(state) {
-  return [...state.queue, ...state.running, ...state.archive];
+  return [...state.drafts, ...state.queue, ...state.running, ...state.archive];
 }
 
 // Only a list of tasks has rows to tick.
 function hasTicks() {
-  return !["schedules", "stats"].includes(activeTab());
+  return !["schedules", "templates", "stats"].includes(activeTab());
 }
 
 function drawBulk(state) {
@@ -1968,7 +2018,7 @@ async function bulkAction(action) {
     const reason = prompt(`Why didn't these ${ids.length} work out? (optional)`, "");
     if (reason === null) return;
     body = JSON.stringify({ reason });
-  } else if (action === "cancel" && !confirm(`Drop ${ids.length} tasks? They haven't started, and the when-done step won't run.`)) {
+  } else if (action === "cancel" && !confirm(`Drop ${ids.length} tasks? They haven't started, and the when-done step won't run. Drafts are deleted.`)) {
     return;
   }
   const errors = [];
@@ -2010,6 +2060,16 @@ document.addEventListener("click", (e) => {
     openForm("new");
   } else if (action === "edit") {
     editTask(id);
+  } else if (action === "tpl-new") {
+    openForm("template-new", { prompt: "", description: "", repo: "", on_finish: (formInfo || {}).on_finish || "none", agent: null });
+  } else if (action === "tpl-edit") {
+    editTemplate(id);
+  } else if (action === "tpl-use") {
+    useTemplate(id);
+  } else if (action === "tpl-delete") {
+    deleteTemplate(id);
+  } else if (action === "duplicate" || action === "save-template") {
+    copyTask(id, action);
   } else if (action.startsWith("sched-")) {
     scheduleAction(id, action.slice("sched-".length));
   } else if (action === "copy") {
@@ -2096,7 +2156,58 @@ function renderTaskView(t) {
     `<pre class="prompt">${escapeHtml(t.prompt.trim())}</pre>` +
     `<h3>The run</h3>` +
     `<dl>${facts.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${v}</dd>`).join("")}</dl>` +
-    `<div class="acts">${actionButtons(t)}</div>`;
+    `<div class="acts">${actionButtons(t)}${copyButtons(t)}</div>`;
+}
+
+// Any task can be copied into a new draft, or kept as a template. Not a row of
+// another machine: its templates would be on that machine, not here.
+function copyButtons(t) {
+  if (!canAct(t) || t.id.includes("@")) return "";
+  return `<button data-id="${escapeHtml(t.id)}" data-action="duplicate" title="${escapeHtml(ACTION_HELP.duplicate)}">Duplicate as new draft</button>` +
+    `<button data-id="${escapeHtml(t.id)}" data-action="save-template" title="${escapeHtml(ACTION_HELP.template)}">Save as template</button>`;
+}
+
+async function copyTask(id, action) {
+  const template = action === "save-template";
+  const { ok, data } = await post(`/api/tasks/${encodeURIComponent(id)}/${template ? "template" : "duplicate"}`, {});
+  if (!ok) { toast(`${id}: ${data.error || "couldn't copy it"}`); return; }
+  if (template) {
+    toast(`Saved the template ${data.id}`, true);
+  } else {
+    toast(`Saved the draft ${data.id}`, true);
+    closeTask();
+    filter = null;
+    showTab("drafts");
+  }
+  refresh();
+}
+
+// A template starts the New task form, filled in. What the form asks is the
+// prompt, the project, the agent and what happens at the end; the rest of the
+// template (model, branch...) is carried by its id.
+async function useTemplate(id) {
+  try {
+    const res = await fetch(`/api/templates/${encodeURIComponent(id)}`, { headers: AUTH() });
+    const data = await res.json();
+    if (!res.ok) { toast(data.error || "can't read that template"); refresh(); return; }
+    openForm("new", data, id);
+  } catch (e) { toast(String(e)); }
+}
+
+async function editTemplate(id) {
+  try {
+    const res = await fetch(`/api/templates/${encodeURIComponent(id)}`, { headers: AUTH() });
+    const data = await res.json();
+    if (!res.ok) { toast(data.error || "can't read that template"); refresh(); return; }
+    openForm("template", data);
+  } catch (e) { toast(String(e)); }
+}
+
+async function deleteTemplate(id) {
+  if (!confirm(`Delete the template ${id}? Tasks made from it stay.`)) return;
+  const { ok, data } = await post(`/api/templates/${encodeURIComponent(id)}/delete`, {});
+  if (!ok) toast(`${id}: ${data.error || "couldn't delete it"}`);
+  refresh();
 }
 
 async function showTask(id) {
@@ -2333,21 +2444,28 @@ const REPEAT_OPTIONS = [
 // Shows the fields the current choices need.
 function syncFormFields() {
   const kind = formMode.kind;
-  const repeat = kind === "task" ? "once" : $("f-repeat").value;
-  $("f-repeat-wrap").hidden = kind === "task";
-  $("f-start-wrap").hidden = repeat !== "once";
+  const isTemplate = kind === "template" || kind === "template-new";
+  const repeat = kind === "task" || isTemplate ? "once" : $("f-repeat").value;
+  $("f-repeat-wrap").hidden = kind === "task" || isTemplate || !!formMode.template;
+  $("f-desc-wrap").hidden = !isTemplate;
+  $("f-start-wrap").hidden = repeat !== "once" || isTemplate;
   // Only a new one-off task can go without a project.
   $("f-scratch-wrap").hidden = kind !== "new" || repeat !== "once";
   if ($("f-scratch-wrap").hidden) $("f-scratch").checked = false;
   $("f-repo-wrap").hidden = $("f-scratch").checked;
-  $("f-repo").required = !$("f-scratch").checked;
+  // A template may leave the project to whoever uses it.
+  $("f-repo").required = !$("f-scratch").checked && !isTemplate;
   $("f-time-wrap").hidden = !["daily", "weekdays", "weekly"].includes(repeat);
   $("f-day-wrap").hidden = repeat !== "weekly";
   $("f-cron-wrap").hidden = repeat !== "custom";
   $("f-cron").required = repeat === "custom";
-  if (kind === "new") $("new-title").textContent = repeat === "once" ? "New task" : "New repeating task";
-  $("f-submit").textContent = kind === "task" || kind === "schedule" ? "Save changes"
+  if (kind === "new") $("new-title").textContent = formMode.template ? `New task from ${formMode.template}`
+    : repeat === "once" ? "New task" : "New repeating task";
+  $("f-submit").textContent = kind === "task" || kind === "schedule" || kind === "template" ? "Save changes"
+    : kind === "template-new" ? "Create template"
     : repeat === "once" ? "Queue task" : "Create schedule";
+  // Only a new one-off task can be saved for later.
+  $("f-draft").hidden = !(kind === "new" && repeat === "once");
 }
 
 // Only worth asking when there's a real choice of agent.
@@ -2500,20 +2618,27 @@ $("f-scratch").addEventListener("change", () => {
   if ($("f-scratch").checked) fSubmit.disabled = false;
 });
 
-function openForm(kind, v) {
+function openForm(kind, v, template) {
   const info = formInfo || { repos: [], agents: [], agent: null, on_finish: "none" };
+  formMode = { kind, id: kind === "new" ? null : v && v.id, template: template || null };
+  const isTemplate = kind === "template" || kind === "template-new";
   // A command task's one text box holds its command, and it has no agent.
   const command = !!(v && v.command);
-  formMode = { kind, id: v && v.id, command };
+  formMode.command = command;
   $("new-title").textContent = kind === "task" ? `Edit ${v.id}`
-    : kind === "schedule" ? "Edit schedule" : "New task";
+    : kind === "template" ? `Edit the template ${v.id}` : kind === "template-new" ? "New template"
+    : kind === "schedule" ? "Edit schedule" : template ? `New task from ${template}` : "New task";
+  $("f-desc").value = isTemplate ? (v.description || "") : "";
 
   $("f-prompt-label").textContent = command ? "What command should it run?" : "What should the agent do?";
   $("f-prompt-hint").textContent = command
     ? "Run with sh -c in the project's folder."
     : "Write it like a message to a teammate. Include anything it can't guess.";
   $("f-prompt").value = v ? v.prompt : draftPrompt;
-  $("f-repo").value = v ? v.repo : (info.repos[0] || "");
+  if (isTemplate && !command) $("f-prompt-hint").textContent = "The prompt every task made from it starts with. Whoever uses it can change it first.";
+  if (template) $("f-prompt-hint").textContent = v.description || "Change anything you like before queueing it.";
+  // A template with no project stays that way; anything else starts from the first suggestion.
+  $("f-repo").value = v && v.repo ? v.repo : isTemplate ? "" : (info.repos[0] || "");
   $("f-repos").innerHTML = info.repos.map(r => `<option value="${escapeHtml(r)}"></option>`).join("");
   $("f-finish").value = v ? v.on_finish : info.on_finish;
   // The model the file pins, not the one it will run with: an empty box means
@@ -2524,12 +2649,12 @@ function openForm(kind, v) {
 
   // A new task or schedule can go to another machine, if any are merged in.
   const online = ((lastState && lastState.nodes) || []).filter(n => n.online && n.writable !== false);
-  $("f-node-wrap").hidden = kind !== "new" || online.length < 2;
+  $("f-node-wrap").hidden = kind !== "new" || !!formMode.template || online.length < 2;
   $("f-node").innerHTML = online.map(n =>
     `<option value="${escapeHtml(n.name)}">${n.name === "local" ? "This machine" : escapeHtml(n.name)}</option>`).join("")
     + `<option value="auto">Any machine (least busy)</option>`;
   $("f-node").value = "local";
-  $("f-repo-hint").textContent = LOCAL_HINT;
+  $("f-repo-hint").textContent = isTemplate ? "Optional. Leave empty and whoever uses the template chooses the project." : LOCAL_HINT;
   $("f-scratch").checked = false;
 
   // How often: schedules can't be "just once".
@@ -2606,7 +2731,8 @@ newOverlay.addEventListener("click", (e) => { if (e.target === newOverlay) close
 // where those keys are just letters.
 
 const keysOverlay = document.getElementById("keys-overlay");
-const KEYS_TABS = ["queue", "running", "archive", "schedules", "stats"];
+// 1-5 have always been these; the lists added since come after.
+const KEYS_TABS = ["queue", "running", "archive", "schedules", "stats", "drafts", "templates"];
 
 function typing() {
   const el = document.activeElement;
@@ -2696,8 +2822,15 @@ async function post(path, body) {
   return { ok: res.ok, data: await res.json() };
 }
 
+// Which button sent the form: "Save as draft" queues nothing.
+let asDraft = false;
+$("f-draft").addEventListener("click", () => { asDraft = true; newForm.requestSubmit(); });
+fSubmit.addEventListener("click", () => { asDraft = false; });
+
 newForm.addEventListener("submit", async (e) => {
   e.preventDefault();
+  const draft = asDraft && formMode.kind === "new";
+  asDraft = false;
   fError.textContent = "";
   fSubmit.disabled = true;
   const kind = formMode.kind;
@@ -2713,7 +2846,11 @@ newForm.addEventListener("submit", async (e) => {
   const cron = cronFor(repeat, $("f-time").value, $("f-day").value, $("f-cron").value);
   try {
     let path, body, done;
-    if (kind === "task") {
+    if (kind === "template" || kind === "template-new") {
+      path = kind === "template" ? `/api/templates/${encodeURIComponent(formMode.id)}/edit` : "/api/templates";
+      body = { ...common, description: $("f-desc").value };
+      done = (d) => kind === "template" ? `Saved the template ${formMode.id}` : `Created the template ${d.id}`;
+    } else if (kind === "task") {
       path = `/api/tasks/${encodeURIComponent(formMode.id)}/edit`;
       body = { ...common, start: $("f-start").value };
       done = () => `Saved ${formMode.id}`;
@@ -2725,8 +2862,11 @@ newForm.addEventListener("submit", async (e) => {
       path = "/api/tasks";
       body = { ...common, start: $("f-start").value };
       if ($("f-scratch").checked) { body.scratch = true; body.repo = ""; }
+      if (draft) body.draft = true;
+      if (formMode.template) body.template = formMode.template;
       if (!$("f-node-wrap").hidden) body.node = $("f-node").value;
-      done = (d) => body.node === "auto" && d.node ? `Queued ${d.id} on ${d.node === "local" ? "this machine" : d.node}` : `Queued ${d.id}`;
+      done = (d) => draft ? `Saved the draft ${d.id}`
+        : body.node === "auto" && d.node ? `Queued ${d.id} on ${d.node === "local" ? "this machine" : d.node}` : `Queued ${d.id}`;
     } else {
       path = "/api/schedules";
       body = { ...common, cron };
@@ -2739,6 +2879,7 @@ newForm.addEventListener("submit", async (e) => {
     } else {
       if (kind === "new") draftPrompt = "";
       newOverlay.classList.remove("active");
+      if (draft) { filter = null; showTab("drafts"); }
       toast(done(data), true);
       refresh();
     }

@@ -31,6 +31,20 @@ lists what changed between them.
   model, so it gets no box. New optional `models_cmd` per agent in `config.toml`,
   filled in for the pi and opencode presets.
 
+- Drafts: `furmi add --draft` (and **Save as draft** in the dashboard's New task
+  form) saves a task without queueing it. The runner leaves it alone until you
+  look it over, edit it if you like, and `furmi queue <id>` it (the dashboard's
+  Queue button). Drafts have their own list in the dashboard. The `furmi-tasks`
+  skill makes an agent ask whether to queue a task or leave a draft, unless you
+  have already said. `furmi duplicate <id>` (Duplicate as draft in the task's
+  detail view) copies any task into a new draft.
+
+- Templates: tasks to start new ones from, in `templates/`. `furmi template
+  ls|show|save|delete` manages them, `furmi add --template <id>` and the
+  dashboard's Templates page start a task from one, and any task can be saved as
+  one. The Templates page also edits a template and writes a new one from
+  scratch. A few starter templates are created the first time furmi runs.
+
 ## 0.6.0
 
 - The dashboard has a Stats view: how many tasks finished, the success rate,

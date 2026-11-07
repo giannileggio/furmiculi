@@ -74,6 +74,19 @@ struct ScheduleRow {
     repo: String,
 }
 
+#[derive(Serialize)]
+struct TemplateRow {
+    id: String,
+    /// What it is for, in the words of its author.
+    description: String,
+    /// The first line of its prompt.
+    summary: String,
+    /// The project it names; empty when whoever uses it chooses.
+    repo: String,
+    agent: String,
+    command: bool,
+}
+
 /// A task, schedule or config file that couldn't be read.
 #[derive(Serialize)]
 struct InvalidRow {
@@ -90,6 +103,7 @@ struct RunnerRow {
 
 #[derive(Serialize, Default)]
 struct Counts {
+    drafts: usize,
     pending: usize,
     running: usize,
     done: usize,
@@ -97,6 +111,7 @@ struct Counts {
     cancelled: usize,
     needs_review: usize,
     schedules: usize,
+    templates: usize,
     invalid: usize,
 }
 
@@ -120,9 +135,14 @@ struct State {
     generated_at: String,
     counts: Counts,
     queue: Vec<Row>,
+    /// Tasks saved for review: not queued, so the runner leaves them alone.
+    drafts: Vec<Row>,
     running: Vec<Row>,
     archive: Vec<Row>,
     schedules: Vec<ScheduleRow>,
+    /// Only this machine's own: a template is a file to start tasks from, and
+    /// is not merged in from other nodes.
+    templates: Vec<TemplateRow>,
     invalid: Vec<InvalidRow>,
     runner: RunnerRow,
     form: FormInfo,
@@ -173,7 +193,7 @@ fn stamp(path: &Path) -> Stamp {
 }
 
 struct Snapshot {
-    stamps: [Stamp; 5],
+    stamps: [Stamp; 6],
     taken: Instant,
     json: String,
 }
@@ -199,6 +219,7 @@ pub(super) fn state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> 
         stamp(&home.tasks()),
         stamp(&home.archive()),
         stamp(&home.schedules()),
+        stamp(&home.templates()),
         stamp(&home.config_path()),
         stamp(&home.runner_state()),
     ];
@@ -245,12 +266,18 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
     });
     let mut counts = Counts::default();
 
-    let (mut running_tasks, mut queue_tasks): (Vec<_>, Vec<_>) =
+    let (mut running_tasks, queue_tasks): (Vec<_>, Vec<_>) =
         load_all(md_files(&home.tasks())?, Task::load, &mut invalid)
             .into_iter()
             .partition(|t| t.status == Status::Running);
+    // Drafts wait for a person, not for the runner: a list of their own.
+    let (mut draft_tasks, mut queue_tasks): (Vec<_>, Vec<_>) = queue_tasks
+        .into_iter()
+        .partition(|t| t.status == Status::Draft);
     queue_tasks.sort_by_key(|t| (t.scheduled_at.or(t.created_at), t.id.clone()));
+    draft_tasks.sort_by_key(|t| (Reverse(t.created_at), t.id.clone()));
     running_tasks.sort_by_key(|t| (t.started_at, t.id.clone()));
+    counts.drafts = draft_tasks.len();
     counts.pending = queue_tasks.len();
     counts.running = running_tasks.len();
 
@@ -261,7 +288,7 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
             Status::Failed => counts.failed += 1,
             Status::Cancelled => counts.cancelled += 1,
             Status::NeedsReview => counts.needs_review += 1,
-            Status::Pending | Status::Running => {}
+            Status::Pending | Status::Running | Status::Draft => {}
         }
     }
     archive_tasks.sort_by_key(|t| Reverse(t.finished_at));
@@ -269,7 +296,7 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
         home,
         &config,
         cwd_repo,
-        &[&running_tasks, &queue_tasks, &archive_tasks],
+        &[&running_tasks, &queue_tasks, &draft_tasks, &archive_tasks],
     );
 
     let schedules: Vec<ScheduleRow> =
@@ -298,6 +325,24 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
             })
             .collect();
     counts.schedules = schedules.len();
+
+    let (found, unreadable) = crate::template::list(home);
+    invalid.extend(unreadable.into_iter().map(|(file, error)| InvalidRow {
+        file: contract_tilde(std::path::Path::new(&file)),
+        error,
+    }));
+    let templates: Vec<TemplateRow> = found
+        .iter()
+        .map(|t| TemplateRow {
+            id: t.id.clone(),
+            description: t.description.clone().unwrap_or_default(),
+            summary: summary_of(t.spec.ask(&t.prompt)),
+            repo: t.repo().map(contract_tilde).unwrap_or_default(),
+            agent: t.spec.resolve(&config.defaults).runner().to_string(),
+            command: t.spec.run.is_some(),
+        })
+        .collect();
+    counts.templates = templates.len();
     counts.invalid = invalid.len();
 
     let state = State {
@@ -306,9 +351,11 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
         generated_at: fmt_time(now()),
         counts,
         queue: queue_tasks.iter().map(|t| to_row(t, &config)).collect(),
+        drafts: draft_tasks.iter().map(|t| to_row(t, &config)).collect(),
         running: running_tasks.iter().map(|t| to_row(t, &config)).collect(),
         archive: archive_tasks.iter().map(|t| to_row(t, &config)).collect(),
         schedules,
+        templates,
         invalid,
         runner: RunnerRow {
             alive: home.runner_alive(),
@@ -480,7 +527,14 @@ fn to_row(t: &Task, config: &Config) -> Row {
     Row {
         id: t.id.clone(),
         status: t.status.as_str(),
-        when: at.map(fmt_time).unwrap_or_else(|| "asap".into()),
+        when: at.map(fmt_time).unwrap_or_else(|| {
+            if t.status == Status::Draft {
+                "not queued"
+            } else {
+                "asap"
+            }
+            .into()
+        }),
         when_at: at.map(|at| at.to_rfc3339()),
         ran_secs: t
             .started_at
@@ -706,6 +760,45 @@ mod tests {
         assert!(row.command);
         assert_eq!(row.model, "-");
         assert_eq!(row.summary, "make backup");
+    }
+
+    #[test]
+    fn drafts_and_templates_have_lists_of_their_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home_in(&dir);
+        std::fs::create_dir_all(home.templates()).unwrap();
+        let mut draft = task("later");
+        draft.status = Status::Draft;
+        draft.save(&home.tasks().join("later.md")).unwrap();
+        task("now").save(&home.tasks().join("now.md")).unwrap();
+        std::fs::write(
+            home.templates().join("tpl.md"),
+            "---\nid: tpl\ndescription: A template\n---\n\nDo the thing.\n",
+        )
+        .unwrap();
+        std::fs::write(home.templates().join("broken.md"), "no frontmatter").unwrap();
+
+        let state: serde_json::Value =
+            serde_json::from_str(&build_state_json(&home, None).unwrap()).unwrap();
+        let ids = |list: &str| -> Vec<String> {
+            state[list]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(ids("drafts"), ["later"]);
+        assert_eq!(ids("queue"), ["now"]);
+        assert_eq!(state["drafts"][0]["status"], "draft");
+        assert_eq!(state["drafts"][0]["when"], "not queued");
+        assert_eq!(state["counts"]["drafts"], 1);
+        assert_eq!(state["counts"]["pending"], 1);
+        assert_eq!(ids("templates"), ["tpl"]);
+        assert_eq!(state["templates"][0]["description"], "A template");
+        assert_eq!(state["templates"][0]["repo"], "");
+        // A template that can't be read is reported, not hidden.
+        assert_eq!(state["counts"]["invalid"], 1);
     }
 
     #[test]

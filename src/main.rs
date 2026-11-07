@@ -19,6 +19,8 @@ mod schedule_cmd;
 mod skill;
 mod spec;
 mod task;
+mod template;
+mod template_cmd;
 mod tmux;
 mod update;
 mod update_check;
@@ -29,6 +31,7 @@ mod web;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 
 use crate::home::Home;
@@ -67,6 +70,29 @@ enum Command {
     /// Manage schedules: list, add, edit, pause, resume, delete.
     #[command(subcommand)]
     Schedule(schedule_cmd::ScheduleCmd),
+    /// Templates: tasks to start new tasks from. List, save, delete.
+    #[command(subcommand)]
+    Template(template_cmd::TemplateCmd),
+    /// Queue a draft: it is picked up by the runner from now on.
+    ///
+    /// A draft is a task made with `furmi add --draft` (or Duplicate, or
+    /// Draft in the dashboard) that waits for you to look it over first.
+    Queue {
+        id: String,
+        /// Start time, RFC 3339 (2026-09-28T02:00:00+02:00).
+        #[arg(long, conflicts_with = "delay")]
+        at: Option<chrono::DateTime<chrono::FixedOffset>>,
+        /// Start after a delay, e.g. 2h.
+        #[arg(long = "in", value_parser = humantime::parse_duration)]
+        delay: Option<std::time::Duration>,
+    },
+    /// Copy any task (waiting or finished) into a new draft.
+    Duplicate {
+        id: String,
+        /// Id of the copy [default: derived from the prompt].
+        #[arg(long = "as")]
+        new_id: Option<String>,
+    },
     /// Check task/schedule files against the format. Checks all if none given.
     Validate { files: Vec<PathBuf> },
     /// Enqueue due schedules and run pending tasks in tmux, until interrupted.
@@ -219,6 +245,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         command,
         Command::Ls { .. }
             | Command::Add(_)
+            | Command::Template(_)
             | Command::Run { .. }
             | Command::Web(_)
             | Command::Start(_)
@@ -237,6 +264,23 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         } => cmd::ls(&home, archive, schedules, watch.then_some(interval))?,
         Command::Add(args) => cmd::add(&home, *args)?,
         Command::Schedule(command) => schedule_cmd::run(&home, command)?,
+        Command::Template(command) => template_cmd::run(&home, command)?,
+        Command::Queue { id, at, delay } => {
+            let start = match (at, delay) {
+                (Some(at), _) => edit::Start::At(at),
+                (None, Some(delay)) => edit::Start::At(
+                    task::now()
+                        + chrono::Duration::from_std(delay).context("that delay is too long")?,
+                ),
+                (None, None) => edit::Start::Keep,
+            };
+            control::queue(&home, &id, start)?;
+            println!("Queued `{id}`");
+        }
+        Command::Duplicate { id, new_id } => {
+            let copy = control::duplicate(&home, &id, new_id)?;
+            println!("Saved a draft, `{copy}`. `furmi queue {copy}` starts it.");
+        }
         Command::Validate { files } => return cmd::validate(&home, files),
         Command::Run { once } => run::run(&home, once)?,
         Command::Done { id } => control::done(&home, id)?,

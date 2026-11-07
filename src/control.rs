@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use crate::config::Config;
+use crate::edit::Start;
 use crate::home::Home;
 use crate::run;
 use crate::spec::validate_id;
@@ -207,6 +208,9 @@ pub fn fail(home: &Home, id: Option<String>, reason: Option<String>) -> Result<(
 }
 
 /// Archives a pending or running task as cancelled. `on_finish` doesn't run.
+///
+/// A draft never ran and has nothing to record, so it is discarded: the file
+/// is deleted, and with it the empty folder of a task with no project.
 pub fn cancel(home: &Home, id: Option<String>) -> Result<()> {
     let (config, id) = setup(home, id)?;
     let lock = home.lock()?;
@@ -214,8 +218,14 @@ pub fn cancel(home: &Home, id: Option<String>) -> Result<()> {
     let deferred = match task.status {
         Status::Running => end_session(home, &config, &task)?,
         Status::Pending => None,
+        Status::Draft => {
+            std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+            // Empty only: never a folder something has written to.
+            let _ = std::fs::remove_dir(home.scratch().join(&id));
+            return Ok(());
+        }
         s => bail!(
-            "`{id}` is {}; only pending or running tasks can be cancelled",
+            "`{id}` is {}; only draft, pending or running tasks can be cancelled",
             s.as_str()
         ),
     };
@@ -223,6 +233,58 @@ pub fn cancel(home: &Home, id: Option<String>) -> Result<()> {
     run::archive(home, &path, task, now())?;
     drop(lock);
     kill_deferred(deferred)
+}
+
+/// Queues a draft, so the runner picks it up: as soon as possible, at the
+/// time it already has (`Keep`), or at `start`. It counts as queued from now.
+pub fn queue(home: &Home, id: &str, start: Start) -> Result<()> {
+    home.ensure_initialized()?;
+    let config = Config::load(&home.config_path())?;
+    let _lock = home.lock()?;
+    let (path, mut task) = find(home, id)?;
+    if task.status != Status::Draft {
+        bail!(
+            "`{id}` is {}; only drafts can be queued",
+            task.status.as_str()
+        );
+    }
+    // The config may have changed since the draft was written.
+    let problems = task.problems(&config, Some(&path));
+    if !problems.is_empty() {
+        bail!("can't queue `{id}`: {}", problems.join("; "));
+    }
+    task.status = Status::Pending;
+    task.created_at = Some(now());
+    match start {
+        Start::Keep => {}
+        Start::Asap => task.scheduled_at = None,
+        Start::At(at) => task.scheduled_at = Some(at),
+    }
+    task.save(&path)?;
+    run::log(&format!("{id} queued"));
+    Ok(())
+}
+
+/// Copies any task, waiting or finished, into a new draft. The copy starts
+/// from the task's prompt and options only: nothing of how the original ran.
+/// Returns the copy's id (`new_id`, or one derived from the prompt).
+pub fn duplicate(home: &Home, id: &str, new_id: Option<String>) -> Result<String> {
+    home.ensure_initialized()?;
+    let config = Config::load(&home.config_path())?;
+    let (_, task) = find(home, id)?;
+    let (copy, _) = crate::cmd::create_task(
+        home,
+        &config,
+        crate::cmd::NewTask {
+            prompt: task.prompt.clone(),
+            id: new_id,
+            spec: crate::template::copyable_spec(home, &task),
+            scheduled_at: None,
+            created_by: format!("copy of {id}"),
+            draft: true,
+        },
+    )?;
+    Ok(copy.id)
 }
 
 /// Moves a failed, cancelled or `needs_review` task back to the queue, to
@@ -393,6 +455,48 @@ mod tests {
             "tasks"
         };
         (task.status, place)
+    }
+
+    #[test]
+    fn a_draft_waits_until_it_is_queued_and_discarding_it_leaves_no_trace() {
+        let (_d, home) = home();
+        std::fs::write(home.config_path(), "[defaults]\nagent = \"claude\"\n").unwrap();
+        put(home.tasks(), "d", Status::Draft);
+        put(home.tasks(), "e", Status::Draft);
+
+        // A task that isn't a draft can't be queued; a draft can.
+        put(home.tasks(), "p", Status::Pending);
+        assert!(queue(&home, "p", Start::Keep).is_err());
+        queue(&home, "d", Start::Asap).unwrap();
+        let (status, place) = status_of(&home, "d");
+        assert_eq!((status, place), (Status::Pending, "tasks"));
+        assert!(queue(&home, "d", Start::Keep).is_err(), "queued twice");
+
+        // Discarding deletes the file, rather than archiving a cancelled task.
+        cancel(&home, Some("e".into())).unwrap();
+        assert!(find(&home, "e").is_err());
+        assert!(!home.archive().join("e.md").exists());
+    }
+
+    #[test]
+    fn a_copy_is_a_draft_with_the_prompt_and_nothing_of_the_run() {
+        let (_d, home) = home();
+        std::fs::write(home.config_path(), "[defaults]\nagent = \"claude\"\n").unwrap();
+        put(home.archive(), "old", Status::Failed);
+        let copy = duplicate(&home, "old", None).unwrap();
+        let (_, task) = find(&home, &copy).unwrap();
+        assert_eq!(task.status, Status::Draft);
+        assert_eq!(task.prompt, "do it");
+        assert_eq!(
+            (task.attempts, task.error, task.started_at),
+            (0, None, None)
+        );
+        assert_ne!(copy, "old");
+        assert!(duplicate(&home, "nope", None).is_err());
+        assert_eq!(
+            duplicate(&home, "old", Some("mine".into())).unwrap(),
+            "mine"
+        );
     }
 
     #[test]

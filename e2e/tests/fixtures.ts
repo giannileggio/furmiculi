@@ -276,13 +276,15 @@ export function row(page: Page, id: string) {
   return page.locator("tbody tr", { hasText: id });
 }
 
-type Tab = "queue" | "running" | "archive" | "schedules";
+type Tab = "queue" | "drafts" | "running" | "archive" | "schedules" | "templates";
 // Each list's name in the sidebar: the tab it is, and the word the page uses.
 const VIEW_OF: Record<Tab, string> = {
   queue: "waiting",
+  drafts: "drafts",
   running: "working",
   archive: "finished",
   schedules: "repeating",
+  templates: "templates",
 };
 
 /** A list's entry in the sidebar: click it to open the list. */
@@ -291,7 +293,7 @@ export function tab(page: Page, name: Tab) {
 }
 
 /** A sidebar entry by its own name, for the ones that narrow a tab to a status. */
-export function view(page: Page, name: "waiting" | "working" | "review" | "failed" | "finished" | "repeating" | "stats") {
+export function view(page: Page, name: "waiting" | "drafts" | "templates" | "working" | "review" | "failed" | "finished" | "repeating" | "stats") {
   return page.locator(`#views button[data-view="${name}"]`);
 }
 
@@ -304,7 +306,7 @@ export function count(page: Page, name: Tab) {
  * The id from a "Queued <id>" / "Scheduled <id>" toast. Waits for the toast
  * first: reading it straight after clicking submit races the server's reply.
  */
-export async function createdId(page: Page, verb: "Queued" | "Scheduled"): Promise<string> {
+export async function createdId(page: Page, verb: "Queued" | "Scheduled" | "Saved the draft"): Promise<string> {
   const toast = page.locator("#toast");
   await expect(toast).toContainText(`${verb} `);
   const id = (await toast.textContent())!.replace(`${verb} `, "").trim();
