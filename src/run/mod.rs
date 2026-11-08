@@ -26,7 +26,7 @@ mod usage;
 
 pub use exec::exec;
 pub use finishing::{archive, complete};
-pub use housekeeping::{Health, load_health};
+pub use housekeeping::{Fix, Health, apply_fixes, load_health};
 pub use log::log;
 pub use reaping::{save_log, window_of};
 pub use scheduler::failure_streak;

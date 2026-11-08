@@ -8,8 +8,8 @@ use super::handlers::{
     agents_json, detail_reply, doctor_json, json_err, json_log_with, models_json, mutation_reply,
     perform_action, perform_create, perform_create_schedule, perform_create_template,
     perform_delete_template, perform_duplicate, perform_edit_schedule, perform_edit_task,
-    perform_edit_template, perform_save_template, perform_set_default_agent, perform_set_defaults,
-    perform_set_limits, tail_of, task_view_json, template_detail,
+    perform_edit_template, perform_health_fix, perform_save_template, perform_set_default_agent,
+    perform_set_defaults, perform_set_limits, tail_of, task_view_json, template_detail,
 };
 use super::state::{capacity, repos_json, state_json};
 use super::{Ctx, Reply, json_reply, reply};
@@ -198,6 +198,7 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 mutation_reply(edit::set_schedule_enabled(home, id, true))
             }
             ["api", "schedules", id, "delete"] => mutation_reply(edit::delete_schedule(home, id)),
+            ["api", "health", "fix"] => perform_health_fix(home, body),
             ["api", "defaults"] => mutation_reply(perform_set_defaults(home, body)),
             ["api", "runner", "limits"] => mutation_reply(perform_set_limits(home, body)),
             ["api", "agents", "default"] => mutation_reply(perform_set_default_agent(home, body)),

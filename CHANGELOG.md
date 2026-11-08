@@ -6,6 +6,12 @@ lists what changed between them.
 
 ## Unreleased
 
+- The dashboard's Housekeeping banner now has buttons. A suggestion or a task
+  that hit its requeue cap gets a **Retry** or **Delete branch** button, and
+  **Fix all** in the banner runs every one. Branches go with `git branch -d`,
+  so git still refuses an unmerged one, and only fixes the last pass offered
+  are accepted.
+
 ## 0.8.0
 
 - A dashboard serving other machines no longer refuses a browser with one line

@@ -47,6 +47,53 @@ pub(super) fn perform_action(home: &Home, id: &str, action: &str, body: &str) ->
     }
 }
 
+/// Which items the banner's button asks to fix: `Some(Some(fix))` for the one it
+/// names, `Some(None)` for every one with a fix, `None` for a body that asks
+/// neither. That last case is refused rather than read as "fix everything", so
+/// a malformed or empty body can't change anything.
+fn health_fix_target(body: &str) -> Option<Option<crate::run::Fix>> {
+    #[derive(Deserialize)]
+    struct FixBody {
+        fix: Option<crate::run::Fix>,
+        #[serde(default)]
+        all: bool,
+    }
+    match serde_json::from_str::<FixBody>(body).ok()? {
+        FixBody { fix: Some(fix), .. } => Some(Some(fix)),
+        FixBody {
+            fix: None,
+            all: true,
+        } => Some(None),
+        FixBody {
+            fix: None,
+            all: false,
+        } => None,
+    }
+}
+
+/// The banner's buttons: `{"fix": {...}}` for one item, `{"all": true}` for
+/// every item that has a fix. Answers with how many were fixed.
+pub(super) fn perform_health_fix(home: &Home, body: &str) -> Reply {
+    let Some(only) = health_fix_target(body) else {
+        return json_reply(
+            400,
+            json_err(&anyhow::anyhow!(
+                "expected {{\"fix\": ...}} or {{\"all\": true}}"
+            )),
+        );
+    };
+    match crate::run::apply_fixes(home, only.as_ref()) {
+        Ok(n) => json_reply(
+            200,
+            serde_json::json!({ "ok": true, "fixed": n }).to_string(),
+        ),
+        Err(errors) => json_reply(
+            400,
+            serde_json::json!({ "error": errors.join("; ") }).to_string(),
+        ),
+    }
+}
+
 #[derive(Deserialize, Default)]
 struct NameBody {
     /// What to call the copy; made up from the task if empty.
@@ -573,6 +620,32 @@ mod tests {
 
         let empty: ActionBody = serde_json::from_str("{}").unwrap();
         assert_eq!(empty.reason, None);
+    }
+
+    #[test]
+    fn a_health_fix_body_says_which_item_or_refuses() {
+        let item = r#"{"fix":{"kind":"delete_branch","repo":"/repo","branch":"furmi/t1"}}"#;
+        assert_eq!(
+            health_fix_target(item),
+            Some(Some(crate::run::Fix::DeleteBranch {
+                repo: "/repo".into(),
+                branch: "furmi/t1".into(),
+            }))
+        );
+        assert_eq!(
+            health_fix_target(r#"{"fix":{"kind":"retry","id":"t1"}}"#),
+            Some(Some(crate::run::Fix::Retry { id: "t1".into() }))
+        );
+        assert_eq!(health_fix_target(r#"{"all":true}"#), Some(None));
+
+        // Anything that asks neither is refused, not read as "fix everything".
+        for body in ["", "{}", "not json", r#"{"all":false}"#, r#"{"al":true}"#] {
+            assert_eq!(health_fix_target(body), None, "body: {body}");
+        }
+        let home = Home::resolve(Some(tempfile::tempdir().unwrap().path().to_path_buf())).unwrap();
+        let refused = perform_health_fix(&home, "{}");
+        assert_eq!(refused.status, 400);
+        assert!(refused.body.contains("expected"));
     }
 
     #[test]
