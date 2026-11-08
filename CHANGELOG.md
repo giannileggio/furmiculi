@@ -6,6 +6,14 @@ lists what changed between them.
 
 ## Unreleased
 
+- `furmi models [--agent X] [--refresh]`: what each configured agent's CLI says
+  it can run, from a terminal. It is the same list the dashboard's task form
+  offers (one report, shared with `GET /api/models`), with a plain reason for
+  the agents that have none: no `models_cmd` in `config.toml`, a command that
+  failed, a name the config doesn't define. `--refresh` asks the CLIs again and
+  rewrites `models-cache.json`; without it a cached answer from the last hour is
+  reused.
+
 ## 0.8.0
 
 - A dashboard serving other machines no longer refuses a browser with one line

@@ -2219,6 +2219,120 @@ fn furmi_agents_lists_installs_and_picks_the_default() {
     assert!(stderr(&out).contains("unknown agent"), "{}", stderr(&out));
 }
 
+#[test]
+fn furmi_models_prints_each_agents_list_and_explains_an_empty_one() {
+    let home = tempfile::tempdir().unwrap();
+    let models = home.path().join("models.txt");
+    std::fs::write(&models, "p/one\np/two\n").unwrap();
+    // pi and opencode are overridden so the listing never runs a real CLI.
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            r#"[defaults]
+agent = "asks"
+
+[agents.asks]
+headless = ["cat"]
+interactive = ["cat"]
+model_args = ["--model", "{{model}}"]
+model = "asks/default"
+models_cmd = ["cat", "{path}"]
+
+[agents.mute]
+headless = ["cat"]
+interactive = ["cat"]
+models_cmd = ["cat", "{path}"]
+
+[agents.pi]
+headless = ["cat"]
+interactive = ["cat"]
+models_cmd = ["cat", "{path}"]
+
+[agents.opencode]
+headless = ["cat"]
+interactive = ["cat"]
+models_cmd = ["cat", "{path}"]
+"#,
+            path = models.display()
+        ),
+    )
+    .unwrap();
+
+    // Every configured agent, with the list its CLI named and a reason for
+    // the ones that have none.
+    let out = stdout(&ok(run(furmi(home.path()).arg("models"))));
+    assert!(out.contains("asks") && out.contains("  p/one"), "{out}");
+    assert!(out.contains("  p/two"), "{out}");
+    assert!(out.contains("asked just now"), "{out}");
+    assert!(out.contains("its default is asks/default"), "{out}");
+    assert!(out.contains("no `model_args`"), "{out}");
+    assert!(
+        out.contains("claude") && out.contains("no `models_cmd` in config.toml"),
+        "{out}"
+    );
+    let cache = std::fs::read_to_string(home.path().join("models-cache.json")).unwrap();
+    assert!(cache.contains("asks") && cache.contains("p/one"), "{cache}");
+
+    // One agent, from the answer just cached.
+    let out = stdout(&ok(run(
+        furmi(home.path()).args(["models", "--agent", "asks"])
+    )));
+    assert!(out.contains("from the cache"), "{out}");
+    assert!(out.contains("  p/one"), "{out}");
+    assert!(!out.contains("mute"), "{out}");
+
+    let out = failed(run(
+        furmi(home.path()).args(["models", "--agent", "nonesuch"])
+    ));
+    assert!(stderr(&out).contains("unknown agent"), "{}", stderr(&out));
+}
+
+#[test]
+fn furmi_models_refresh_asks_again_and_rewrites_the_cache() {
+    let home = tempfile::tempdir().unwrap();
+    let models = home.path().join("models.txt");
+    std::fs::write(&models, "p/old\n").unwrap();
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            r#"[agents.asks]
+headless = ["cat"]
+interactive = ["cat"]
+models_cmd = ["cat", "{path}"]
+"#,
+            path = models.display()
+        ),
+    )
+    .unwrap();
+    let cache = home.path().join("models-cache.json");
+    let list = |extra: &[&str]| {
+        let mut cmd = furmi(home.path());
+        cmd.arg("models").arg("--agent").arg("asks").args(extra);
+        stdout(&ok(run(&mut cmd)))
+    };
+
+    assert!(list(&[]).contains("  p/old"));
+    // The CLI changes its answer; the cached one stands until --refresh.
+    std::fs::write(&models, "p/new\n").unwrap();
+    let out = list(&[]);
+    assert!(
+        out.contains("from the cache") && out.contains("  p/old"),
+        "{out}"
+    );
+
+    let out = list(&["--refresh"]);
+    assert!(
+        out.contains("asked just now") && out.contains("  p/new"),
+        "{out}"
+    );
+    assert!(!out.contains("p/old"), "{out}");
+    let saved = std::fs::read_to_string(&cache).unwrap();
+    assert!(
+        saved.contains("p/new") && !saved.contains("p/old"),
+        "{saved}"
+    );
+}
+
 /// A stand-in for `ssh` that runs the remote command here, as if the other
 /// machine were this one with its own furmi home: it skips ssh's options and
 /// the target, then hands the command to `sh`.

@@ -47,7 +47,8 @@ task it can carry out.
   codex" → `--agent codex` (the allowed names are the `[agents.*]` sections
   in config.toml, and `{furmi} agents` shows which are installed — a task
   whose agent isn't installed fails); a named model → `--model` with the
-  model id in the form that agent's CLI expects.
+  model id in the form that agent's CLI expects (`furmi models --agent codex`
+  prints what that CLI says it can run, and why if it names none).
 
 ## 2. Write the prompt
 
