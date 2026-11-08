@@ -282,12 +282,18 @@ pub(super) fn authenticate(
     if !ctx.remote {
         return Access::Open;
     }
+    let path = url.split('?').next().unwrap_or("");
+    // The ant, and its dark twin: artwork already in the repository, and what
+    // the refusal page is decorated with, so it can't sit behind the gate the
+    // page explains.
+    if matches!(path, "/logo.png" | "/logo-dark.png") {
+        return Access::Open;
+    }
     if let Some(supplied) = authorization.and_then(|a| a.strip_prefix("Bearer "))
         && same_token(supplied, &ctx.token)
     {
         return Access::Open;
     }
-    let path = url.split('?').next().unwrap_or("");
     if *method == Method::Get
         && is_page(&segments(path))
         && query_param(url, "token").is_some_and(|t| same_token(t, &ctx.token))
@@ -342,6 +348,21 @@ pub(super) fn session_cookie(id: &str, secure: bool) -> String {
 /// Tells the browser to forget the 30-day cookie older versions set.
 pub(super) fn legacy_cookie_expiry() -> String {
     format!("{LEGACY_TOKEN_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+}
+
+/// Tells the browser to forget a session cookie that names no live session
+/// (idled out, or dropped when the dashboard restarted), so the refusal page
+/// isn't followed by a reload that sends the same dead cookie again.
+pub(super) fn dead_session_cookie_expiry() -> String {
+    format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+}
+
+/// Did the request carry a session cookie at all? A dead one is a different
+/// thing to say than none: "paste it again", not "you never did".
+pub(super) fn had_session(cookie: Option<&str>) -> bool {
+    cookie.is_some_and(|c| {
+        cookie_value(c, SESSION_COOKIE).is_some() || cookie_value(c, LEGACY_TOKEN_COOKIE).is_some()
+    })
 }
 
 /// Was the request made over TLS, going by the proxy's `X-Forwarded-Proto`?
@@ -408,6 +429,45 @@ mod tests {
         assert_eq!(cookie_value("", SESSION_COOKIE), None);
     }
 
+    #[test]
+    fn a_cookie_that_named_a_session_is_told_apart_from_none() {
+        assert!(!had_session(None));
+        assert!(!had_session(Some("other=1")));
+        assert!(had_session(Some("furmi_session=gone")));
+        assert!(had_session(Some("a=1; furmi_session=gone; b=2")));
+        // The retired 30-day cookie is still a cookie to throw away, not a
+        // first visit: the page says "expired", which is what it is.
+        assert!(had_session(Some("furmi_token=old")));
+        assert_eq!(
+            dead_session_cookie_expiry(),
+            "furmi_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+        );
+    }
+
+    #[test]
+    fn the_page_artwork_needs_no_token() {
+        let (_dir, home) = home();
+        let ctx = remote_ctx(&home, "master");
+        let sessions = Sessions::new(SESSION_TTL);
+        let now = Instant::now();
+        for path in ["/logo.png", "/logo-dark.png"] {
+            assert_eq!(
+                authenticate(&ctx, &sessions, &Method::Get, path, None, None, now),
+                Access::Open,
+                "{path}"
+            );
+        }
+        // Only those two, and only those two (a query is ignored, as it is
+        // when the route matches).
+        for path in ["/logo.pngs", "/logo", "/logo.png/"] {
+            assert_eq!(
+                authenticate(&ctx, &sessions, &Method::Get, path, None, None, now),
+                Access::Denied,
+                "{path}"
+            );
+        }
+    }
+
     fn remote_ctx<'a>(home: &'a crate::home::Home, token: &str) -> Ctx<'a> {
         Ctx {
             home,
@@ -417,6 +477,7 @@ mod tests {
             remote: true,
             allowed_hosts: vec!["*".to_string()],
             peer: false,
+            token_from: None,
         }
     }
 

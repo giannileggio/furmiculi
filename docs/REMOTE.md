@@ -49,6 +49,20 @@ again for a new one. Sessions live in the server's memory, so restarting
 `furmi web` ends them all, and that is also how a rotated token file takes
 effect: the old token and every session made with it stop working.
 
+A browser that arrives without a live session — a first visit, a cookie that
+idled out, or a dashboard restarted since — gets a page, not the one-line
+refusal the API gets: a box to paste the token into, `cat
+~/.furmiculi/web-token` for whoever has a shell on the box, and the address
+with `?token=` in it, so nothing has to be typed into the address bar by hand.
+The page never contains the token itself, so being refused tells an attacker
+nothing they didn't already have, and it clears a cookie that names no live
+session so the next reload starts clean. A `Host` that isn't on the allowlist
+is explained the same way, listing the names that are. Only a request that
+asked for HTML (`Accept: text/html`) on a page address gets the page; `curl`,
+a proxy and `/api` callers keep the plain-text 401 and 403. The page's ant is
+served without a session too — it is artwork from the repository, and a
+refusal that can't load its own picture looks like a broken dashboard.
+
 The cookie gets `Secure` when the request arrives over TLS, which the server
 itself doesn't speak: put a TLS-terminating proxy in front (`tailscale serve`,
 Caddy, nginx) that sends `X-Forwarded-Proto: https`. A plain-HTTP bind, which is

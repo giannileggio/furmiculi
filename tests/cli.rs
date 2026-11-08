@@ -931,6 +931,90 @@ fn web_can_serve_any_host_when_asked_to() {
     child.wait().unwrap();
 }
 
+/// A browser refused for want of the token gets a page it can act on: the box
+/// to paste it into, the command that prints it, and no secret in the HTML.
+/// A cookie that outlived its session is a different story, and is dropped.
+#[test]
+fn web_refuses_a_browser_with_a_page_that_says_how_to_get_in() {
+    let home = tempfile::tempdir().unwrap();
+    init(home.path());
+    let token_file = write_token_file(home.path());
+    let port = 18448u16;
+
+    let mut child = furmi(home.path())
+        .args([
+            "web",
+            "--no-open",
+            "--listen",
+            &format!("0.0.0.0:{port}"),
+            "--token-file",
+            &token_file.display().to_string(),
+            "--allowed-host",
+            "toolnet.example",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let html = [("Accept", "text/html,application/xhtml+xml")];
+    let first = http_at("127.0.0.1", port, "GET", "/", "toolnet.example", &html, "");
+    assert!(first.starts_with("HTTP/1.1 401"), "{first}");
+    assert!(first.contains("text/html"), "{first}");
+    assert!(first.contains("Paste the dashboard token"), "{first}");
+    assert!(first.contains("name=\"token\""), "{first}");
+    // The command that prints it, on the box serving the page.
+    assert!(first.contains("cat ~/web-token"), "{first}");
+    // The address it was reached at, ready for the token, and the address bar
+    // is where the form posts back to.
+    assert!(first.contains("http://toolnet.example/?token="), "{first}");
+    assert!(first.contains("action=\"/\""), "{first}");
+    // Never the secret itself.
+    assert!(!first.contains(TEST_TOKEN), "{first}");
+    // A dead session is said out loud, and thrown away.
+    let expired = http_at(
+        "127.0.0.1",
+        port,
+        "GET",
+        "/",
+        "toolnet.example",
+        &[("Cookie", "furmi_session=gone"), ("Accept", "text/html")],
+        "",
+    );
+    assert!(expired.starts_with("HTTP/1.1 401"), "{expired}");
+    assert!(expired.contains("Session expired"), "{expired}");
+    assert!(
+        expired.contains("furmi_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"),
+        "{expired}"
+    );
+    // A deep link keeps its place: the form posts back to that page.
+    let deep = http_at(
+        "127.0.0.1",
+        port,
+        "GET",
+        "/tasks/w1",
+        "toolnet.example",
+        &html,
+        "",
+    );
+    assert!(deep.contains("action=\"/tasks/w1\""), "{deep}");
+    // Asking for a name the dashboard doesn't answer to lists the ones it does.
+    let wrong_host = http_at("127.0.0.1", port, "GET", "/", "evil.example", &html, "");
+    assert!(wrong_host.starts_with("HTTP/1.1 403"), "{wrong_host}");
+    assert!(wrong_host.contains("evil.example"), "{wrong_host}");
+    assert!(wrong_host.contains("toolnet.example"), "{wrong_host}");
+    assert!(!wrong_host.contains(TEST_TOKEN), "{wrong_host}");
+    // A CLI (no `text/html` in Accept) still gets the line it can read.
+    let plain = http_at("127.0.0.1", port, "GET", "/", "toolnet.example", &[], "");
+    assert!(plain.starts_with("HTTP/1.1 401"), "{plain}");
+    assert!(plain.contains("unauthorized"), "{plain}");
+    // (The page's artwork is served without a session too, so the refusal can
+    // be decorated; `web::auth`'s own tests hold that line.)
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
 /// A second `furmi web` on a busy address doesn't just fail: it knows whose
 /// dashboard holds it, says so, and takes over when told to.
 #[test]

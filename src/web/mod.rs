@@ -46,6 +46,7 @@ mod bind;
 mod detach;
 mod events;
 mod handlers;
+mod recovery;
 mod routes;
 mod setup;
 mod state;
@@ -66,12 +67,14 @@ use anyhow::{Context, Result};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 use self::auth::{
-    Access, SESSION_TTL, Sessions, TOKEN_HEADER, authenticate, forwarded_https, hosts_ok,
-    legacy_cookie_expiry, origins_ok, random_token, same_token, session_cookie, stripped_location,
+    Access, SESSION_TTL, Sessions, TOKEN_HEADER, authenticate, dead_session_cookie_expiry,
+    forwarded_https, had_session, hosts_ok, legacy_cookie_expiry, origins_ok, random_token,
+    same_token, session_cookie, stripped_location,
 };
 use self::bind::bind;
 use self::detach::{detach, refuse_token_with_detach};
-use self::routes::route;
+use self::recovery::{Ask, Why};
+use self::routes::{is_page, route};
 use self::setup::{Serving, print_remote, setup};
 
 use crate::home::{Home, Launch, contract_tilde};
@@ -100,6 +103,9 @@ struct Ctx<'a> {
     /// Answering another machine's `furmi node call`: its rows and forms are
     /// this machine's own, never passed on to a third.
     peer: bool,
+    /// Where the bearer came from (`~/.furmiculi/web-token`), for the refusal
+    /// page that has to say where to find it. Never the token itself.
+    token_from: Option<String>,
 }
 
 struct Reply {
@@ -121,6 +127,38 @@ fn reply(status: u16, content_type: &'static str, body: impl Into<String>) -> Re
 
 fn json_reply(status: u16, body: String) -> Reply {
     reply(status, "application/json", body)
+}
+
+const HTML: &str = "text/html; charset=utf-8";
+
+/// The page a refused browser gets instead of a line of plain text, built out
+/// of what the request already said: the address it used, the page it wanted
+/// (so a deep link survives the token), and where the token lives.
+fn recovery_page(ctx: &Ctx, url: &str, host: &Option<String>, https: bool, why: Why<'_>) -> String {
+    let path = url.split('?').next().unwrap_or("/");
+    let action = format!(
+        "/{}",
+        path.split('/')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("/")
+    );
+    recovery::page(&Ask {
+        why,
+        origin: host
+            .as_ref()
+            .map(|h| format!("{}//{h}", if https { "https:" } else { "http:" })),
+        action: &action,
+        token_from: ctx.token_from.as_deref(),
+    })
+}
+
+/// The `Host` refusal, naming the name that was asked for and the ones allowed.
+fn host_refusal<'a>(ctx: &'a Ctx, host: &'a Option<String>) -> Why<'a> {
+    Why::Host {
+        asked: host.as_deref().unwrap_or(""),
+        allowed: &ctx.allowed_hosts,
+    }
 }
 
 pub fn serve(home: &Home, args: WebArgs) -> Result<()> {
@@ -199,6 +237,7 @@ fn run_server(
         remote: serving.remote,
         allowed_hosts: serving.allowed_hosts.clone(),
         peer: false,
+        token_from: serving.token_from.clone(),
     };
     let addr = &serving.addr;
     let url = format!("http://{addr}");
@@ -362,6 +401,7 @@ pub fn call(home: &Home, method: &str, url: &str, body: &str) -> Result<(u16, St
         remote: false,
         allowed_hosts: Vec::new(),
         peer: true,
+        token_from: None,
     };
     let reply = route(&ctx, &method, url, body);
     Ok((reply.status, reply.body))
@@ -388,6 +428,18 @@ fn handle<'scope, 'env>(
     let cookie = header("Cookie");
     let https = forwarded_https(header("X-Forwarded-Proto").as_deref());
     let is_post = *request.method() == Method::Post;
+    // A browser asks for HTML; a CLI, a proxy or the page's own fetch doesn't.
+    // Only the former gets a page it can act on when refused — the rest keeps
+    // the one-line plain text it can parse.
+    let wants_page = !is_post && header("Accept").is_some_and(|a| a.contains("text/html")) && {
+        let path = url.split('?').next().unwrap_or("");
+        is_page(
+            &path
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>(),
+        )
+    };
 
     let access = if host.as_deref().is_some_and(|h| hosts_ok(ctx, h)) {
         authenticate(
@@ -412,16 +464,39 @@ fn handle<'scope, 'env>(
     };
     let result = if !host.as_deref().is_some_and(|h| hosts_ok(ctx, h)) {
         if ctx.remote {
-            reply(403, "text/plain", "forbidden: not an allowed host")
+            if wants_page {
+                reply(
+                    403,
+                    HTML,
+                    recovery_page(ctx, &url, &host, https, host_refusal(ctx, &host)),
+                )
+            } else {
+                reply(403, "text/plain", "forbidden: not an allowed host")
+            }
         } else {
             reply(403, "text/plain", "forbidden: not a loopback host")
         }
     } else if access == Access::Denied {
-        reply(
-            401,
-            "text/plain",
-            "unauthorized: missing or wrong bearer token",
-        )
+        if wants_page {
+            // A cookie that named a session once is a different story from a
+            // browser that never had one, and the dead one is thrown away so a
+            // reload doesn't send it again.
+            if had_session(cookie.as_deref()) {
+                set_cookies.push(dead_session_cookie_expiry());
+            }
+            let why = if had_session(cookie.as_deref()) {
+                Why::ExpiredSession
+            } else {
+                Why::NoSession
+            };
+            reply(401, HTML, recovery_page(ctx, &url, &host, https, why))
+        } else {
+            reply(
+                401,
+                "text/plain",
+                "unauthorized: missing or wrong bearer token",
+            )
+        }
     } else if access == Access::Exchange {
         // The token in the address is traded for a session cookie, and the
         // browser sent on to the same page without it, so it never stays in

@@ -45,6 +45,17 @@ lists what changed between them.
   one. The Templates page also edits a template and writes a new one from
   scratch. A few starter templates are created the first time furmi runs.
 
+- A dashboard serving other machines no longer refuses a browser with one line
+  of plain text. A request that wants a page (no session yet, an expired one,
+  or a `Host` the dashboard doesn't answer to) gets a page that says what's
+  wrong and how to get back in: a box to paste the token into, the `cat`
+  command for the token file on the box, the address with `?token=` already in
+  it, and, for a wrong name, the names it does answer to. The token never
+  appears in it, a dead session cookie is cleared so the next reload starts
+  clean, and `curl`, a proxy and `/api` callers keep the plain-text 401 and
+  403. The page's ant is served without a token, so a refusal looks like the
+  dashboard rather than a broken one.
+
 ## 0.6.0
 
 - The dashboard has a Stats view: how many tasks finished, the success rate,

@@ -77,7 +77,7 @@ pub(super) struct Serving {
     pub(super) allowed_hosts: Vec<String>,
     /// Where the bearer came from (`~/.furmiculi/web-token`, `--token`), for
     /// the line that says how to get it.
-    token_from: Option<String>,
+    pub(super) token_from: Option<String>,
 }
 
 impl Serving {
