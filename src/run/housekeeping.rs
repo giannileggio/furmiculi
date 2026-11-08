@@ -49,6 +49,9 @@ pub struct Health {
     /// The exact command to run, for a suggestion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// What the dashboard's button does instead of that command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<Fix>,
 }
 
 impl Health {
@@ -57,7 +60,73 @@ impl Health {
             level: level.into(),
             message: message.into(),
             command: None,
+            fix: None,
         }
+    }
+}
+
+/// An action the dashboard can run for a health item. Only things that are safe
+/// to repeat and can't lose work: a retry, and `git branch -d` of a merged branch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Fix {
+    Retry { id: String },
+    DeleteBranch { repo: PathBuf, branch: String },
+}
+
+impl Fix {
+    fn apply(&self, home: &Home) -> anyhow::Result<()> {
+        match self {
+            Fix::Retry { id } => control::retry(home, id),
+            Fix::DeleteBranch { repo, branch } => {
+                // Checked again now: the branch may have moved on since the pass.
+                let base = git::main_branch(repo)
+                    .ok_or_else(|| anyhow::anyhow!("{} has no main branch", repo.display()))?;
+                if !branch.starts_with("furmi/") || !git::branch_merged_into(repo, branch, &base) {
+                    anyhow::bail!("{branch} is no longer a merged furmi/* branch");
+                }
+                git::delete_merged_branch(repo, branch)
+            }
+        }
+    }
+}
+
+/// Runs the fix of one health item (`only`), or of every item that has one
+/// (`None`). A fix is run only if the last pass offered it, so the endpoint
+/// can't be used to delete an arbitrary branch. Fixed items leave the list at
+/// once; the next pass rebuilds it. Returns how many were fixed, or the errors.
+pub fn apply_fixes(home: &Home, only: Option<&Fix>) -> Result<usize, Vec<String>> {
+    let mut health = load_health(home);
+    let mut errors = Vec::new();
+    let mut fixed = 0;
+    health.retain(|h| {
+        let Some(fix) = &h.fix else { return true };
+        if only.is_some_and(|o| o != fix) {
+            return true;
+        }
+        match fix.apply(home) {
+            Ok(()) => {
+                log(&format!("housekeeping: fixed from the dashboard: {fix:?}"));
+                fixed += 1;
+                false
+            }
+            Err(e) => {
+                errors.push(format!("{e:#}"));
+                true
+            }
+        }
+    });
+    if only.is_some() && fixed == 0 && errors.is_empty() {
+        errors.push("that is no longer on the list".into());
+    }
+    let _ = fsutil::write_atomic(
+        &home.health_file(),
+        serde_json::to_string(&health).unwrap_or_else(|_| "[]".into()),
+    );
+    if errors.is_empty() {
+        Ok(fixed)
+    } else {
+        Err(errors)
     }
 }
 
@@ -331,6 +400,9 @@ fn requeue_environmental(home: &Home, config: &Config, max: u32) -> Vec<Health> 
                     task.id, task.auto_requeues
                 ),
                 command: Some(format!("furmi retry {}", task.id)),
+                fix: Some(Fix::Retry {
+                    id: task.id.clone(),
+                }),
             });
             continue;
         }
@@ -417,6 +489,10 @@ fn suggest_branch_deletions(home: &Home, config: &Config) -> Vec<Health> {
                 shell_quote(&repo.to_string_lossy()),
                 shell_quote(branch)
             )),
+            fix: Some(Fix::DeleteBranch {
+                repo: repo.clone(),
+                branch: branch.clone(),
+            }),
         })
         .collect();
     if found.len() > MAX_SUGGESTIONS {
@@ -730,6 +806,34 @@ mod tests {
 
         assert!(home.archive().join("t1.md").exists());
         assert!(!home.tasks().join("t1.md").exists());
+    }
+
+    #[test]
+    fn fixing_deletes_only_what_the_last_pass_offered() {
+        let (_d, home) = home();
+        let repo = repo();
+        git_in(repo.path(), &["branch", "furmi/t1"]);
+        git_in(repo.path(), &["branch", "furmi/other"]);
+        archive(&home, repo.path(), "t1", Status::Done, |_| {});
+        let health = suggest_branch_deletions(&home, &Config::default());
+        std::fs::write(home.health_file(), serde_json::to_string(&health).unwrap()).unwrap();
+
+        // A branch nobody offered is refused.
+        let stray = Fix::DeleteBranch {
+            repo: repo.path().to_path_buf(),
+            branch: "furmi/other".into(),
+        };
+        assert!(apply_fixes(&home, Some(&stray)).is_err());
+
+        assert_eq!(apply_fixes(&home, None), Ok(1));
+        let left = Command::new("git")
+            .args(["branch", "--list", "furmi/*"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        let left = String::from_utf8_lossy(&left.stdout);
+        assert!(!left.contains("furmi/t1") && left.contains("furmi/other"));
+        assert!(load_health(&home).is_empty());
     }
 
     #[test]

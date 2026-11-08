@@ -244,6 +244,8 @@
   .notice[hidden] { display: none; }
   #health summary { cursor: pointer; }
   #health ul { margin: 8px 0 0; padding-left: 20px; }
+  #health .fix { margin-left: 8px; }
+  #health .fix-all { margin-left: 12px; }
   #health code { display: block; margin-top: 2px; font-size: 12px; overflow-wrap: anywhere; }
   .empty .big { font-size: 16px; color: var(--text); margin-bottom: 6px; }
   .empty button { margin-top: 12px; }
@@ -2377,15 +2379,32 @@ function renderHealth(items) {
   box.classList.toggle("bad", items.some(h => h.level === "fail"));
   const problems = items.filter(h => h.level !== "info").length;
   const suggestions = items.length - problems;
+  const fixable = items.filter(h => h.fix).length;
   const counts = [];
   if (problems) counts.push(problems === 1 ? "1 problem" : `${problems} problems`);
   if (suggestions) counts.push(suggestions === 1 ? "1 suggestion" : `${suggestions} suggestions`);
   box.innerHTML = items.length === 0 ? "" :
-    `<details><summary><strong>Housekeeping: ${counts.join(", ")}</strong></summary><ul>` +
-    items.map(h => `<li data-level="${escapeHtml(h.level)}">${escapeHtml(h.message)}` +
+    `<details><summary><strong>Housekeeping: ${counts.join(", ")}</strong>` +
+    (fixable ? `<button class="fix-all" data-fix-all>Fix ${fixable === 1 ? "it" : `all ${fixable}`}</button>` : "") +
+    `</summary><ul>` +
+    items.map((h, i) => `<li data-level="${escapeHtml(h.level)}">${escapeHtml(h.message)}` +
+      (h.fix ? `<button class="fix" data-fix="${i}">${FIX_LABELS[h.fix.kind] || "Fix"}</button>` : "") +
       `${h.command ? `<code>${escapeHtml(h.command)}</code>` : ""}</li>`).join("") +
     "</ul></details>";
+  box.onclick = async e => {
+    const one = e.target.closest("[data-fix]"), all = e.target.closest("[data-fix-all]");
+    if (!one && !all) return;
+    e.preventDefault(); // inside <summary>: don't toggle the list
+    const btn = one || all;
+    btn.disabled = true;
+    const { ok, data } = await post("/api/health/fix", one ? { fix: items[+one.dataset.fix].fix } : { all: true });
+    if (!ok) toast(data.error || "couldn't fix that");
+    else toast(data.fixed === 1 ? "Fixed" : `Fixed ${data.fixed}`, true);
+    healthShown = ""; // redraw even if nothing else changed
+    refresh();
+  };
 }
+const FIX_LABELS = { retry: "Retry", delete_branch: "Delete branch" };
 
 // A banner only when something needs attention; the full list is one click away.
 async function checkSetupQuietly() {

@@ -273,6 +273,11 @@ pub fn branch_merged_into(repo: &Path, branch: &str, base: &str) -> bool {
         .is_ok()
 }
 
+/// `git branch -d`: deletes a branch only if git agrees it is merged.
+pub fn delete_merged_branch(repo: &Path, branch: &str) -> Result<()> {
+    git(repo, &["branch", "-d", branch]).map(drop)
+}
+
 /// The repo's main branch: what `origin/HEAD` points at, else `main` or `master`.
 pub fn main_branch(repo: &Path) -> Option<String> {
     if let Ok(out) = git(

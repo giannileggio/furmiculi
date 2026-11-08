@@ -258,7 +258,8 @@ The runner also tidies up after itself, when it starts and then every hour:
 - **Reported in a dashboard banner:** what `furmi doctor` warns about, and
   anything the pass declined to do.
 - **Only ever suggested:** deleting a merged `furmi/*` branch of an archived
-  task. The banner lists the exact command to run.
+  task. The banner has a **Delete branch** button (and **Fix all**), and
+  lists the exact command if you'd rather run it yourself.
 
 While the runner is paused (`furmi pause`) the pass still reports but changes
 nothing. Tune it in `config.toml`, or turn it off:
