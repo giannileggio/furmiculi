@@ -2487,6 +2487,7 @@ function setAgents(list, current) {
 // task has already run with here are offered at once, from the page's own state.
 let modelAnswers = new Map();   // "machine|agent" -> what /api/models said
 let modelAsked = 0;             // so a slow answer can't fill a form that moved on
+let nodeHosts = new Map();      // machine -> what its /api/repos said, for "any machine"
 
 function chosenNode() {
   return $("f-node-wrap").hidden ? "local" : $("f-node").value;
@@ -2496,7 +2497,8 @@ function historyModels(agent) {
   const seen = new Set();
   const rows = (lastState && (lastState.queue || []).concat(lastState.running || [], lastState.archive || [])) || [];
   for (const r of rows) {
-    if (r.command || r.agent !== agent || !r.model || r.model === "-") continue;
+    // No agent: "any machine", where whatever ran them is a fair suggestion.
+    if (r.command || !r.model || r.model === "-" || (agent && r.agent !== agent)) continue;
     seen.add(r.model);
   }
   return [...seen];
@@ -2506,35 +2508,47 @@ function offerModels(names) {
   $("f-models").innerHTML = names.map(m => `<option value="${escapeHtml(m)}"></option>`).join("");
 }
 
+// What one machine's agent can run, asked once and kept for the page.
+async function modelsOn(machine, agent) {
+  const key = `${machine}|${agent}`;
+  const known = modelAnswers.get(key);
+  if (known) return known;
+  const q = machine === "local" ? "" : `&node=${encodeURIComponent(machine)}`;
+  let answer;
+  try {
+    const res = await fetch(`/api/models?agent=${encodeURIComponent(agent)}${q}`, { headers: AUTH() });
+    answer = res.ok ? await res.json() : { models: [], source: "none" };
+  } catch { answer = { models: [], source: "none" }; }
+  modelAnswers.set(key, answer);
+  return answer;
+}
+
 async function refreshModels() {
   const wrap = $("f-model-wrap");
-  const agent = formAgent;
   // A command task has no agent to run a model on.
-  if (!agent || formMode.command) {
+  if (formMode.command) {
+    wrap.hidden = true;
+    $("f-model").value = "";
+    return;
+  }
+  const mine = ++modelAsked;
+  const node = chosenNode();
+  // "Any machine" has no agent of its own: each machine that could take the
+  // task answers for the one it would run it with.
+  if (node === "auto") return anyMachineModels(mine);
+  const agent = formAgent;
+  // A form that offers no agent has nothing to ask.
+  if (!agent) {
     wrap.hidden = true;
     $("f-model").value = "";
     return;
   }
   wrap.hidden = false;
-  const mine = ++modelAsked;
-  const node = chosenNode();
   // What this page already knows, before anything is asked: models its own
   // tasks have run with.
   offerModels(historyModels(agent));
   $("f-model-hint").textContent = "Leave empty for the agent's own model.";
-  // Nothing is placed yet on "any machine", so there's no CLI to ask.
-  if (node === "auto") return;
-  const key = `${node}|${agent}`;
-  let answer = modelAnswers.get(key);
-  if (!answer) {
-    try {
-      const q = node === "local" ? "" : `&node=${encodeURIComponent(node)}`;
-      const res = await fetch(`/api/models?agent=${encodeURIComponent(agent)}${q}`, { headers: AUTH() });
-      answer = res.ok ? await res.json() : { models: [], source: "none" };
-    } catch { answer = { models: [], source: "none" }; }
-    if (mine !== modelAsked) return; // the form moved on while asking
-    modelAnswers.set(key, answer);
-  }
+  const answer = await modelsOn(node, agent);
   if (mine !== modelAsked) return;
   // An agent with no `model_args` can't be handed a model at all.
   if (answer.can_pin === false) {
@@ -2548,6 +2562,47 @@ async function refreshModels() {
     $("f-model-hint").textContent = `Couldn't ask ${agent} which models it has: ${answer.error}`;
   } else if (answer.default) {
     $("f-model-hint").textContent = `Leave empty for the agent's own model (${answer.default}).`;
+  }
+}
+
+// The models on every machine that could take the task, each in the agent that
+// machine would run it with. Which one gets the task is only settled when it is
+// queued (the least busy of them), so all of them are asked at once and the box
+// offers what they can run between them rather than wait on any one answer.
+async function anyMachineModels(mine) {
+  const wrap = $("f-model-wrap");
+  const repo = $("f-repo").value.trim();
+  // A machine with no agent, or with no clone of the project, can't take it.
+  const anywhere = $("f-scratch").checked || repo === "";
+  const hosts = [...nodeHosts].filter(([, h]) =>
+    h.agent && (anywhere || (h.repos || []).some(r => r.remote === repo)));
+  if (hosts.length === 0) {
+    wrap.hidden = true;
+    $("f-model").value = "";
+    return;
+  }
+  const where = [...new Set(hosts.map(([name]) => name === "local" ? "this machine" : name))];
+  const answers = await Promise.all(hosts.map(([name, h]) => modelsOn(name, h.agent)));
+  if (mine !== modelAsked) return; // the form moved on while asking
+  // A model is passed on by the machine running the task, so it is only worth
+  // offering when every machine that could get it can pass one on at all.
+  if (answers.some(a => a.can_pin === false)) {
+    wrap.hidden = true;
+    $("f-model").value = "";
+    return;
+  }
+  wrap.hidden = false;
+  const offered = [...answers.flatMap(a => a.models || []), ...historyModels(null)];
+  offerModels([...new Set(offered)]);
+  const errors = answers.filter(a => a.error).map(a => a.error);
+  if (errors.length === answers.length) {
+    $("f-model-hint").textContent = `Couldn't ask the agent on ${where.join(" and ")} which models it has: ${errors[0]}`;
+  } else if (answers.length === 1 && answers[0].default) {
+    $("f-model-hint").textContent = `Leave empty for the agent's own model (${answers[0].default}).`;
+  } else if (answers.length === 1) {
+    $("f-model-hint").textContent = "Leave empty for the agent's own model.";
+  } else {
+    $("f-model-hint").textContent = `Leave empty for the agent's own model. These are the models on ${where.join(" and ")}, whichever machine gets the task.`;
   }
 }
 
@@ -2587,6 +2642,9 @@ async function onNodeChange() {
       }));
       const seen = new Map();
       for (const d of all) for (const r of d.repos) if (!seen.has(r.remote)) seen.set(r.remote, r);
+      // Which machines could take the task, and the agent each would run it
+      // with: the model box asks them all.
+      nodeHosts = new Map(names.map((n, i) => [n, all[i]]));
       data = { repos: [...seen.values()], agents: [], agent: null };
     } else {
       const res = await fetch(`/api/repos?node=${encodeURIComponent(node)}`, { headers: AUTH() });
@@ -2616,6 +2674,13 @@ $("f-scratch").addEventListener("change", () => {
   syncFormFields();
   // With no project there's no list to wait for.
   if ($("f-scratch").checked) fSubmit.disabled = false;
+  // "Any machine" + a project nobody has is no machine at all.
+  if (chosenNode() === "auto") refreshModels();
+});
+// With "any machine", the project is what decides which machines could take
+// the task, and so whose models these are.
+$("f-repo").addEventListener("change", () => {
+  if (chosenNode() === "auto") refreshModels();
 });
 
 function openForm(kind, v, template) {

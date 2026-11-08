@@ -173,6 +173,15 @@ so is one on an older furmi, which doesn't report its load. Agents aren't
 picked in the form for this choice: each machine uses its own default. `auto`
 is a reserved node name.
 
+The **Model** box follows from that: no machine is picked yet, so it offers what
+*every* machine that could take the task can run, each in the agent that machine
+would use — all of them asked at once, so a slow machine holds nothing up and
+the list fills in as the answers arrive. Models your tasks have run with here
+are offered at once either way. A model is passed on by the machine that ends
+up running the task, so a machine whose default agent can't be handed one (no
+`model_args`) takes the box away rather than let a pin land where it can't be
+used.
+
 A node running an older furmi (before ssh nodes) can't be reached at all;
 upgrade it with `furmi update`.
 
