@@ -25,7 +25,10 @@ export interface Forge {
    * Adds a node that answers from canned JSON instead of a machine, so a test
    * can exercise another machine's rows (see the fake ssh below).
    */
-  fakeNode(name: string, answers: { state: unknown; logs: unknown; models?: unknown }): void;
+  fakeNode(
+    name: string,
+    answers: { state: unknown; logs: unknown; repos?: unknown; models?: unknown },
+  ): void;
   /** What the fake ssh ran on that node, one entry per call (see below). */
   fakeNodeCalls(name: string): string[];
 }
@@ -241,8 +244,11 @@ ${config}
           fs.mkdirSync(dir, { recursive: true });
           fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(answers.state));
           fs.writeFileSync(path.join(dir, "logs.json"), JSON.stringify(answers.logs));
-          if (answers.models !== undefined) {
-            fs.writeFileSync(path.join(dir, "models.json"), JSON.stringify(answers.models));
+          // What the form asks a machine before queueing anything on it.
+          for (const [what, answer] of [["repos", answers.repos], ["models", answers.models]]) {
+            if (answer !== undefined) {
+              fs.writeFileSync(path.join(dir, `${what}.json`), JSON.stringify(answer));
+            }
           }
           addedNodes.push(name);
           fs.writeFileSync(
