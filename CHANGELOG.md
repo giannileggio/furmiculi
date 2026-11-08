@@ -88,6 +88,11 @@ Dashboard
 - Saving another machine's task as a template works.
 - Fixed: a prompt over 16 KB could not be queued from the form (the limit is
   now 1 MB and says so); `n` typed an `n` into the form it opened.
+- The dashboard's Housekeeping banner now has buttons. A suggestion or a task
+  that hit its requeue cap gets a **Retry** or **Delete branch** button, and
+  **Fix all** in the banner runs every one. Branches go with `git branch -d`,
+  so git still refuses an unmerged one, and only fixes the last pass offered
+  are accepted.
 
 Command line
 

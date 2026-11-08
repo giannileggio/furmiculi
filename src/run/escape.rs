@@ -192,6 +192,7 @@ pub(super) fn health(home: &Home, prune: bool) -> Vec<Health> {
                 contract_tilde(&record.repo)
             ),
             command: None,
+            fix: None,
         });
     }
     out.sort_by(|a, b| a.message.cmp(&b.message));
