@@ -38,6 +38,11 @@ test("a command task shows as a command, and its command can be edited", async (
   await expect(page.locator("#f-prompt-label")).toHaveText("What command should it run?");
   await expect(page.locator("#f-prompt")).toHaveValue("echo first");
   await expect(page.locator("#f-agent-wrap")).toBeHidden();
+  // A command runs no agent, so it has no mode to run in. What it does have
+  // is how often it may be retried and how long it gets.
+  await expect(page.locator("#f-mode-wrap")).toBeHidden();
+  await expect(page.locator("#f-retries-wrap")).toBeVisible();
+  await expect(page.locator("#f-timeout-wrap")).toBeVisible();
   await page.locator("#f-prompt").fill("echo second");
   await page.locator("#f-submit").click();
   await expect(page.locator("#toast")).toHaveText("Saved chore");
@@ -131,6 +136,82 @@ test("the form's keyboard shortcut submits and the tabs switch panels", async ({
   await page.locator("#f-prompt").press("Control+Enter");
   await expect(page.locator("#toast")).toContainText("Queued ");
   await expect(count(page, "queue")).toHaveText("2");
+});
+
+test("the form sets how a task runs, and an emptied field follows the defaults", async ({ page, forge }) => {
+  await openDashboard(page, forge);
+  await page.locator("#new-task-open").click();
+
+  // Nothing pinned: every one of these is the defaults' to decide.
+  await expect(page.locator("#f-mode")).toHaveValue("");
+  await expect(page.locator("#f-worktree")).toHaveValue("");
+  await expect(page.locator("#f-branch")).toHaveValue("");
+  await expect(page.locator("#f-retries")).toHaveValue("");
+
+  // A task with no project has no branch and no worktree to set.
+  await page.locator("#f-scratch").check();
+  await expect(page.locator("#f-worktree-wrap")).toBeHidden();
+  await expect(page.locator("#f-branch-wrap")).toBeHidden();
+  await expect(page.locator("#f-timeout-wrap")).toBeVisible();
+  await page.locator("#f-scratch").uncheck();
+  await expect(page.locator("#f-worktree-wrap")).toBeVisible();
+
+  await page.locator("#f-prompt").fill("echo run it differently");
+  await page.locator("#f-mode").selectOption("interactive");
+  await page.locator("#f-worktree").selectOption("yes");
+  await page.locator("#f-branch").fill("fix/login");
+  await page.locator("#f-retries").fill("2");
+  await page.locator("#f-delay").fill("10m");
+  await page.locator("#f-timeout").fill("45m");
+  await page.locator("#f-submit").click();
+  const id = await createdId(page, "Queued");
+
+  let text = fs.readFileSync(forge.taskFile(id)!, "utf8");
+  expect(text).toContain("mode: interactive");
+  expect(text).toContain("worktree: true");
+  expect(text).toContain("branch: fix/login");
+  expect(text).toContain("retries: 2");
+  expect(text).toContain("retry_delay: 10m");
+  expect(text).toContain("timeout: 45m");
+
+  // The edit form starts from what the file pins.
+  await row(page, id).getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#f-mode")).toHaveValue("interactive");
+  await expect(page.locator("#f-worktree")).toHaveValue("yes");
+  await expect(page.locator("#f-branch")).toHaveValue("fix/login");
+  await expect(page.locator("#f-retries")).toHaveValue("2");
+  await expect(page.locator("#f-delay")).toHaveValue("10m");
+  await expect(page.locator("#f-timeout")).toHaveValue("45m");
+
+  // Emptying one unpins it, so `[defaults]` decides again.
+  await page.locator("#f-mode").selectOption("");
+  await page.locator("#f-worktree").selectOption("");
+  await page.locator("#f-branch").fill("");
+  await page.locator("#f-retries").fill("");
+  await page.locator("#f-delay").fill("");
+  await page.locator("#f-timeout").fill("");
+  await page.locator("#f-submit").click();
+  await expect(page.locator("#toast")).toHaveText(`Saved ${id}`);
+  text = fs.readFileSync(forge.taskFile(id)!, "utf8");
+  for (const key of ["mode:", "worktree:", "branch:", "retries:", "retry_delay:", "timeout:"]) {
+    expect(text).not.toContain(key);
+  }
+});
+
+test("a duration the file can't hold is refused, and kept for another try", async ({ page, forge }) => {
+  await openDashboard(page, forge);
+  await page.locator("#new-task-open").click();
+  await page.locator("#f-prompt").fill("echo soon");
+  await page.locator("#f-timeout").fill("whenever");
+  await page.locator("#f-submit").click();
+  await expect(page.locator("#f-error")).toContainText("as a timeout");
+  await expect(page.locator("#new-overlay")).toHaveClass(/active/);
+  await expect(count(page, "queue")).toHaveText("0");
+
+  await page.locator("#f-timeout").fill("30m");
+  await page.locator("#f-submit").click();
+  const id = await createdId(page, "Queued");
+  expect(fs.readFileSync(forge.taskFile(id)!, "utf8")).toContain("timeout: 30m");
 });
 
 // A model is the agent's to know — its CLI's version, the providers signed in —

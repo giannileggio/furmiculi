@@ -81,6 +81,7 @@ test("any task can be duplicated into a draft or saved as a template, then used"
   await expect(page.locator("#new-title")).toHaveText("New task from original");
   await expect(page.locator("#f-prompt")).toHaveValue("echo the original prompt");
   await expect(page.locator("#f-repo")).toHaveValue("~/repo"); // HOME is the test root
+  await expect(page.locator("#f-run-row")).toBeVisible(); // a new task can set them
   await page.locator("#f-draft").click();
   await createdId(page, "Saved the draft");
   await expect(count(page, "drafts")).toHaveText("2");
@@ -125,6 +126,10 @@ test("a template can be edited, and keeps what the form doesn't show", async ({ 
   await expect(page.locator("#f-repo")).toHaveValue(""); // no project, and none forced on it
   await expect(page.locator("#f-start-wrap")).toBeHidden();
   await expect(page.locator("#f-draft")).toBeHidden();
+  // The template form doesn't save the task options a task gets from its
+  // template: only the fields above.
+  await expect(page.locator("#f-run-row")).toBeHidden();
+  await expect(page.locator("#f-limits-row")).toBeHidden();
 
   await page.locator("#f-desc").fill("Tuned again");
   await page.locator("#f-prompt").fill("Second version.");
