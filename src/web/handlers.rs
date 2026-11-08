@@ -432,33 +432,11 @@ pub(super) fn agents_json(home: &Home) -> Result<String> {
 
 /// The models an agent can run, for the task form's suggestions: the ones its
 /// own CLI names (`pi --list-models`), the model it uses when a task pins
-/// none, and whether it can be handed one at all.
+/// none, and whether it can be handed one at all. `furmi models` asks the
+/// same [`crate::models::report`].
 pub(super) fn models_json(home: &Home, agent: Option<&str>, refresh: bool) -> Result<String> {
     let config = Config::load(&home.config_path())?;
-    let name = agent.map(str::trim).filter(|a| !a.is_empty());
-    let Some((name, agent)) = name.and_then(|n| config.agents.get_key_value(n)) else {
-        // No agent named (a form that doesn't offer a choice): nothing to ask.
-        return Ok(serde_json::json!({
-            "agent": name,
-            "can_pin": false,
-            "default": null,
-            "models": [],
-            "source": "none",
-        })
-        .to_string());
-    };
-    let listed = crate::models::list(home, name, agent, refresh);
-    Ok(serde_json::json!({
-        "agent": name,
-        // An agent with no `model_args` can't be handed a model at all: the
-        // form hides the field rather than let it fail on submit.
-        "can_pin": !agent.model_args.is_empty(),
-        "default": agent.model,
-        "models": listed.models,
-        "source": listed.source,
-        "error": listed.error,
-    })
-    .to_string())
+    Ok(crate::models::report(home, &config, agent, refresh).to_json())
 }
 
 /// The setup check: what `furmi doctor` looks at, for the dashboard.

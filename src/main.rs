@@ -10,6 +10,7 @@ mod fsutil;
 mod git;
 mod home;
 mod models;
+mod models_cmd;
 mod nodes;
 mod notify;
 mod restart;
@@ -156,6 +157,13 @@ enum Command {
         #[command(subcommand)]
         action: Option<AgentsAction>,
     },
+    /// Print the models each configured agent's CLI says it can run (the list
+    /// the dashboard's task form offers), and keep the answers in
+    /// models-cache.json.
+    ///
+    /// --refresh asks the CLIs again and rewrites the cache; without it an
+    /// answer from the last hour is reused. One agent at a time with --agent.
+    Models(models_cmd::ModelsArgs),
     /// Stop the dashboard and the runner, whichever of `furmi start`,
     /// `furmi web` and `furmi run` began them. Tasks already running keep
     /// going; start again to resume the queue.
@@ -251,6 +259,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             | Command::Start(_)
             | Command::Status
             | Command::Agents { .. }
+            | Command::Models(_)
     ) {
         cmd::ensure_ready(&home)?;
     }
@@ -298,6 +307,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             None => cmd::agents(&home)?,
             Some(AgentsAction::Use { name }) => cmd::use_agent(&home, &name)?,
         },
+        Command::Models(args) => models_cmd::models(&home, args)?,
         Command::Stop => {
             // A `furmi start` dashboard stops the runner it began as it goes,
             // so ask for the runner only if there was one to begin with.

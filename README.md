@@ -153,6 +153,10 @@ furmi stop              # stop the dashboard and the runner (work already underw
 furmi restart           # stop them and start them again the way they were started, on the installed binary
 furmi agents            # which coding agents are installed, and how to install the rest
 furmi agents use codex   # make one the default for new tasks
+furmi models            # what each configured agent's CLI says it can run (--agent name: one)
+                        # and why: no models_cmd, a failed command, the cached answer
+furmi models --refresh  # ask the CLIs again and rewrite models-cache.json, the
+                        # list the dashboard's Model box offers
 
 furmi ls                # queue
 furmi ls --schedules    # schedules with their next run
@@ -359,7 +363,9 @@ project, when it starts, or what happens when it's done (not once it has
 started: cancel it and add a new one). Its **Model** box is the same as
 `furmi add --model`: empty means the agent's own model, and the suggestions are
 the ones that agent's CLI names itself (`pi --list-models`, `opencode models`),
-kept for an hour, plus any model a task of yours has already run with. Agents
+kept for an hour, plus any model a task of yours has already run with. `furmi
+models` prints that same list, and why an agent has none, from a terminal
+(`--refresh` asks the CLIs again and rewrites the cache). Agents
 with no way to list models (claude, codex, gemini, hermes) get a box you can
 type into and no suggestions, and an agent with no `model_args` gets no box at
 all: it can't be handed a model. **+ New task** with "How often?" set to

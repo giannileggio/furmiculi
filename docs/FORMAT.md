@@ -335,7 +335,9 @@ and reads the answer, one name per line already as `provider/model`
 model (`pi --list-models`). The presets fill it in only where the CLI has
 such a command — pi and opencode. The answer is kept for an hour in
 `models-cache.json` beside the tasks, and a failing command falls back to the
-last answer it gave. Without it the box still takes any model you type.
+last answer it gave. `furmi models` prints the same answers from a terminal
+(`--agent pi`, `--refresh` to ask again and rewrite the cache; deleting the
+file clears it). Without `models_cmd` the box still takes any model you type.
 
 ### The dashboard
 
