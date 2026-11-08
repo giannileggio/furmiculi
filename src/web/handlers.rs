@@ -10,9 +10,9 @@ use super::{Reply, json_reply};
 use crate::cmd::{NewTask, create_task};
 use crate::config::Config;
 use crate::control;
-use crate::edit::{self, ScheduleEdit, Start, TaskEdit, on_finish_str};
+use crate::edit::{self, Choice, ScheduleEdit, SpecChoices, Start, TaskEdit, on_finish_str};
 use crate::home::{Home, contract_tilde};
-use crate::spec::OnFinish;
+use crate::spec::{Mode, OnFinish};
 use crate::task::Task;
 use crate::template::{self, Template};
 
@@ -77,15 +77,18 @@ pub(super) fn template_detail(home: &Home, id: &str) -> Result<serde_json::Value
     let config = Config::load(&home.config_path())?;
     let t = Template::find(home, id)?;
     let eff = t.spec.resolve(&config.defaults);
-    Ok(serde_json::json!({
-        "id": t.id,
-        "description": t.description,
-        "prompt": t.spec.ask(&t.prompt),
-        "command": t.spec.run.is_some(),
-        "repo": t.repo().map(contract_tilde).unwrap_or_default(),
-        "on_finish": on_finish_str(eff.on_finish),
-        "agent": eff.agent,
-    }))
+    Ok(edit::with_pinned(
+        serde_json::json!({
+            "id": t.id,
+            "description": t.description,
+            "prompt": t.spec.ask(&t.prompt),
+            "command": t.spec.run.is_some(),
+            "repo": t.repo().map(contract_tilde).unwrap_or_default(),
+            "on_finish": on_finish_str(eff.on_finish),
+            "agent": eff.agent,
+        }),
+        &t.spec,
+    ))
 }
 
 /// The template form, for creating and editing alike.
@@ -125,6 +128,88 @@ pub(super) fn perform_delete_template(home: &Home, id: &str) -> Result<()> {
     template::delete(home, id)
 }
 
+/// The options a form can pin on a task or schedule, as text. A field sent
+/// empty is unpinned, so `[defaults]` applies; one the form doesn't carry at
+/// all is left as it is.
+#[derive(Deserialize, Default)]
+struct SpecFields {
+    #[serde(default, deserialize_with = "opt_text")]
+    branch: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
+    mode: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
+    worktree: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
+    retries: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
+    retry_delay: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
+    timeout: Option<String>,
+}
+
+/// A form field as text, whether it was sent as a string or as a JSON number
+/// (`retries` is a count, and either is what a caller would write).
+fn opt_text<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    use serde::Deserialize;
+    match Option::<serde_json::Value>::deserialize(d)? {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s)),
+        Some(serde_json::Value::Number(n)) => Ok(Some(n.to_string())),
+        Some(other) => Err(serde::de::Error::custom(format!(
+            "expected a value as text, not `{other}`"
+        ))),
+    }
+}
+
+/// A text field as a choice: absent leaves it, empty unpins it, else its own
+/// value (parsed by `parse`).
+fn choice<T>(text: Option<String>, parse: impl Fn(&str) -> Result<T>) -> Result<Choice<T>> {
+    match text.as_deref().map(str::trim) {
+        None => Ok(Choice::Leave),
+        Some("") => Ok(Choice::Clear),
+        Some(text) => Ok(Choice::Pin(parse(text)?)),
+    }
+}
+
+/// The form's fields as the spec choices they ask for, validated the way
+/// `furmi add` validates the flags they stand for.
+fn spec_choices(fields: SpecFields) -> Result<SpecChoices> {
+    Ok(SpecChoices {
+        branch: choice(fields.branch, |b| Result::Ok(b.to_string()))?,
+        mode: choice(fields.mode, parse_mode)?,
+        worktree: choice(fields.worktree, parse_worktree)?,
+        retries: choice(fields.retries, parse_retries)?,
+        retry_delay: choice(fields.retry_delay, |t| parse_duration("retry_delay", t))?,
+        timeout: choice(fields.timeout, |t| parse_duration("timeout", t))?,
+    })
+}
+
+fn parse_mode(text: &str) -> Result<Mode> {
+    match text {
+        "headless" => Ok(Mode::Headless),
+        "interactive" => Ok(Mode::Interactive),
+        other => anyhow::bail!("unknown mode `{other}`: use headless or interactive"),
+    }
+}
+
+fn parse_worktree(text: &str) -> Result<bool> {
+    match text {
+        "yes" | "true" | "on" => Ok(true),
+        "no" | "false" | "off" => Ok(false),
+        other => anyhow::bail!("`{other}` is neither yes nor no"),
+    }
+}
+
+fn parse_retries(text: &str) -> Result<u32> {
+    text.parse()
+        .map_err(|_| anyhow::anyhow!("retries must be a whole number, not `{text}`"))
+}
+
+fn parse_duration(field: &str, text: &str) -> Result<std::time::Duration> {
+    humantime::parse_duration(text)
+        .map_err(|e| anyhow::anyhow!("can't read `{text}` as a {field}: {e}"))
+}
+
 /// The "New task" form.
 #[derive(Deserialize)]
 struct NewTaskBody {
@@ -155,11 +240,14 @@ struct NewTaskBody {
     /// Pin a model for this task; empty or absent means the agent's own.
     #[serde(default)]
     model: Option<String>,
+    #[serde(flatten)]
+    spec: SpecFields,
 }
 
 /// Queues the task described by the form, as `furmi add` would. Returns its id.
 pub(super) fn perform_create(home: &Home, cwd_repo: Option<&str>, body: &str) -> Result<String> {
     let form: NewTaskBody = serde_json::from_str(body).context("couldn't read the form")?;
+    let choices = spec_choices(form.spec)?;
     let remote = form
         .remote
         .as_deref()
@@ -214,6 +302,9 @@ pub(super) fn perform_create(home: &Home, cwd_repo: Option<&str>, body: &str) ->
     if form.on_finish.is_some() {
         spec.on_finish = form.on_finish;
     }
+    // What the form shows replaces the template's own; an empty field is "not
+    // pinned", so `[defaults]` applies where it said something.
+    edit::apply_spec_choices(&mut spec, choices);
     // The form's one text box holds a command task's command.
     let mut prompt = form.prompt;
     if command {
@@ -276,10 +367,13 @@ struct EditTaskBody {
     /// own", `None` (a form without the field) leaves it as it is.
     #[serde(default)]
     model: Option<String>,
+    #[serde(flatten)]
+    spec: SpecFields,
 }
 
 pub(super) fn perform_edit_task(home: &Home, id: &str, body: &str) -> Result<()> {
     let form: EditTaskBody = serde_json::from_str(body).context("couldn't read the form")?;
+    let choices = spec_choices(form.spec)?;
     edit::edit_task(
         home,
         id,
@@ -290,6 +384,7 @@ pub(super) fn perform_edit_task(home: &Home, id: &str, body: &str) -> Result<()>
             on_finish: form.on_finish,
             agent: form.agent,
             model: form.model,
+            choices,
         },
     )
 }
@@ -311,6 +406,8 @@ struct ScheduleBody {
     /// Empty clears it (the agent's own model then applies); absent leaves it.
     #[serde(default)]
     model: Option<String>,
+    #[serde(flatten)]
+    spec: SpecFields,
 }
 
 fn schedule_form(
@@ -320,6 +417,7 @@ fn schedule_form(
     allow_remote: bool,
 ) -> Result<ScheduleEdit> {
     let form: ScheduleBody = serde_json::from_str(body).context("couldn't read the form")?;
+    let choices = spec_choices(form.spec)?;
     if form.remote.is_some() && !allow_remote {
         anyhow::bail!("a schedule's project is changed by its folder, not by git remote");
     }
@@ -336,6 +434,7 @@ fn schedule_form(
         on_finish: form.on_finish,
         agent: form.agent,
         model: form.model,
+        choices,
     })
 }
 
@@ -566,6 +665,19 @@ pub(super) fn task_view_json(home: &Home, id: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// An initialized home, and a repo it can run tasks in.
+    fn setup() -> (tempfile::TempDir, tempfile::TempDir, Home) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        for d in home.dirs() {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(home.config_path(), "[defaults]\nagent = \"claude\"\n").unwrap();
+        (dir, repo, home)
+    }
+
     #[test]
     fn action_body_parses_reason_or_defaults() {
         let with: ActionBody = serde_json::from_str(r#"{"reason":"bad approach"}"#).unwrap();
@@ -573,6 +685,158 @@ mod tests {
 
         let empty: ActionBody = serde_json::from_str("{}").unwrap();
         assert_eq!(empty.reason, None);
+    }
+
+    #[test]
+    fn the_form_pins_how_a_task_runs_and_gives_it_back_to_the_defaults() {
+        let (_dir, repo, home) = setup();
+        let path = repo.path().display().to_string();
+        let saved =
+            |id: &str| crate::task::Task::load(&home.tasks().join(format!("{id}.md"))).unwrap();
+
+        // `retries` as a number, the rest as the form's own text.
+        let form = format!(
+            r#"{{"prompt":"do it","repo":"{path}","mode":"interactive",
+                "branch":"fix/login","worktree":"yes","retries":2,
+                "retry_delay":"10m","timeout":"45m"}}"#
+        );
+        let id = perform_create(&home, None, &form).unwrap();
+        let spec = saved(&id).spec;
+        assert_eq!(spec.mode, Some(Mode::Interactive));
+        assert_eq!(spec.branch.as_deref(), Some("fix/login"));
+        assert_eq!(spec.worktree, Some(true));
+        assert_eq!(spec.retries, Some(2));
+        assert_eq!(spec.retry_delay, Some(std::time::Duration::from_secs(600)));
+        assert_eq!(spec.timeout, Some(std::time::Duration::from_secs(45 * 60)));
+
+        // The edit form starts from what the file pins.
+        let detail = edit::task_detail(&home, &id).unwrap();
+        assert_eq!(detail["mode"], "interactive");
+        assert_eq!(detail["branch"], "fix/login");
+        assert_eq!(detail["worktree"], true);
+        assert_eq!(detail["retries"], 2);
+        assert_eq!(detail["retry_delay"], "10m");
+        assert_eq!(detail["timeout"], "45m");
+
+        // A form that doesn't carry the fields leaves them as they are.
+        let without = format!(r#"{{"prompt":"do it","repo":"{path}"}}"#);
+        perform_edit_task(&home, &id, &without).unwrap();
+        assert_eq!(saved(&id).spec.mode, Some(Mode::Interactive));
+
+        // Empty means "not pinned": each field goes back to `[defaults]`.
+        let cleared = format!(
+            r#"{{"prompt":"do it","repo":"{path}","mode":"","branch":"",
+                "worktree":"","retries":"","retry_delay":"","timeout":""}}"#
+        );
+        perform_edit_task(&home, &id, &cleared).unwrap();
+        let spec = saved(&id).spec;
+        assert_eq!(spec.mode, None);
+        assert_eq!(spec.branch, None);
+        assert_eq!(spec.worktree, None);
+        assert_eq!(spec.retries, None);
+        assert_eq!(spec.retry_delay, None);
+        assert_eq!(spec.timeout, None);
+
+        // A waiting task can be pinned again from the form's values.
+        let again = format!(
+            r#"{{"prompt":"do it","repo":"{path}","worktree":"no","retries":"0","timeout":"5m"}}"#
+        );
+        perform_edit_task(&home, &id, &again).unwrap();
+        let spec = saved(&id).spec;
+        assert_eq!(spec.worktree, Some(false));
+        assert_eq!(spec.retries, Some(0));
+        assert_eq!(spec.timeout, Some(std::time::Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn bad_task_options_are_refused_the_way_furmi_add_refuses_them() {
+        let (_dir, repo, home) = setup();
+        let path = repo.path().display().to_string();
+        let note_git = tempfile::tempdir().unwrap();
+        let note_git = note_git.path().display().to_string();
+        let form =
+            |repo: &str, extra: &str| format!(r#"{{"prompt":"do it","repo":"{repo}"{extra}}}"#);
+        let refused = |repo: &str, extra: &str, expected: &str| {
+            let err = perform_create(&home, None, &form(repo, extra)).unwrap_err();
+            let message = format!("{err:#}");
+            assert!(message.contains(expected), "{extra}: {message}");
+        };
+
+        refused(&path, r#","mode":"sometimes""#, "unknown mode");
+        refused(
+            &path,
+            r#","retries":"many""#,
+            "retries must be a whole number",
+        );
+        refused(&path, r#","retry_delay":"soon""#, "as a retry_delay");
+        refused(&path, r#","timeout":"whenever""#, "as a timeout");
+        refused(&path, r#","worktree":"maybe""#, "neither yes nor no");
+        refused(&path, r#","branch":"not a branch""#, "invalid branch name");
+        // A worktree only makes sense in a git repo, here asked of a plain folder.
+        refused(&note_git, r#","worktree":"yes""#, "is not a git repository");
+        // `pr` needs somewhere to make the request from.
+        refused(
+            &path,
+            r#","on_finish":"pr","worktree":"no","branch":"""#,
+            "needs a branch or a worktree",
+        );
+        assert_eq!(crate::cmd::md_files(&home.tasks()).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_schedule_pins_the_same_options_and_gives_them_back() {
+        let (_dir, repo, home) = setup();
+        let path = repo.path().display().to_string();
+        let saved = |id: &str| {
+            crate::schedule::Schedule::load(&home.schedules().join(format!("{id}.md")))
+                .unwrap()
+                .spec
+        };
+
+        let form = format!(
+            r#"{{"prompt":"nightly","repo":"{path}","cron":"0 3 * * *","mode":"headless",
+                "worktree":"no","branch":"","retries":1,"retry_delay":"1m","timeout":"30m"}}"#
+        );
+        let id = perform_create_schedule(&home, None, &form).unwrap();
+        let spec = saved(&id);
+        assert_eq!(spec.mode, Some(Mode::Headless));
+        assert_eq!(spec.worktree, Some(false));
+        assert_eq!(spec.retries, Some(1));
+        assert_eq!(spec.retry_delay, Some(std::time::Duration::from_secs(60)));
+        assert_eq!(spec.timeout, Some(std::time::Duration::from_secs(1800)));
+        assert_eq!(edit::schedule_detail(&home, &id).unwrap()["timeout"], "30m");
+
+        let cleared = format!(
+            r#"{{"prompt":"nightly","repo":"{path}","cron":"0 3 * * *",
+                "mode":"","worktree":"","branch":"","retries":"","retry_delay":"","timeout":""}}"#
+        );
+        perform_edit_schedule(&home, &id, &cleared).unwrap();
+        let spec = saved(&id);
+        assert_eq!(spec.mode, None);
+        assert_eq!(spec.worktree, None);
+        assert_eq!(spec.retries, None);
+        assert_eq!(spec.retry_delay, None);
+        assert_eq!(spec.timeout, None);
+
+        let bad =
+            format!(r#"{{"prompt":"nightly","repo":"{path}","cron":"0 3 * * *","mode":"nope"}}"#);
+        let err = perform_edit_schedule(&home, &id, &bad).unwrap_err();
+        assert!(format!("{err:#}").contains("unknown mode"));
+        assert_eq!(saved(&id).mode, None);
+    }
+
+    #[test]
+    fn a_scratch_task_keeps_its_folder_and_its_own_workspace() {
+        let (_dir, _repo, home) = setup();
+        let form = r#"{"prompt":"look into it","scratch":true,"retries":3,"timeout":"20m"}"#;
+        let id = perform_create(&home, None, form).unwrap();
+        let task = crate::task::Task::load(&home.tasks().join(format!("{id}.md"))).unwrap();
+        assert_eq!(task.spec.worktree, Some(false));
+        assert_eq!(task.spec.retries, Some(3));
+        assert_eq!(
+            task.spec.timeout,
+            Some(std::time::Duration::from_secs(1200))
+        );
     }
 
     #[test]

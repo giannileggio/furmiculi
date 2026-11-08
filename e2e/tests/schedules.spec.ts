@@ -98,3 +98,41 @@ test("the search box is in the toolbar, says what it searches, and reads what th
   await expect(page.locator("#panel-schedules")).toContainText("Nothing matches");
   await expect(page.locator("#toolbar-count")).toHaveText("0 of 1");
 });
+
+test("a schedule sets how it runs, and an emptied field follows the defaults", async ({ page, forge }) => {
+  await openDashboard(page, forge);
+  await page.locator("#new-task-open").click();
+  await page.locator("#f-prompt").fill("echo nightly");
+  await page.locator("#f-repeat").selectOption("daily");
+  await page.locator("#f-mode").selectOption("headless");
+  await page.locator("#f-worktree").selectOption("no");
+  await page.locator("#f-retries").fill("1");
+  await page.locator("#f-delay").fill("1m");
+  await page.locator("#f-timeout").fill("30m");
+  await page.locator("#f-submit").click();
+  const id = await createdId(page, "Scheduled");
+  const file = path.join(forge.home, "schedules", `${id}.md`);
+
+  let text = fs.readFileSync(file, "utf8");
+  expect(text).toContain("mode: headless");
+  expect(text).toContain("worktree: false");
+  expect(text).toContain("retries: 1");
+  expect(text).toContain("retry_delay: 1m");
+  expect(text).toContain("timeout: 30m");
+
+  // The edit form starts from the file; anything left empty unpins its field.
+  await tab(page, "schedules").click();
+  await row(page, id).getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#f-timeout")).toHaveValue("30m");
+  await expect(page.locator("#f-retries")).toHaveValue("1");
+  await page.locator("#f-timeout").fill("");
+  await page.locator("#f-retries").fill("");
+  await page.locator("#f-submit").click();
+  await expect(page.locator("#toast")).toHaveText("Saved the schedule");
+
+  text = fs.readFileSync(file, "utf8");
+  expect(text).not.toContain("timeout:");
+  expect(text).not.toContain("retries:");
+  expect(text).toContain("mode: headless"); // untouched
+  expect(text).toContain("worktree: false");
+});

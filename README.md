@@ -292,7 +292,8 @@ What `furmi` does so that a bad day doesn't lose work:
 `furmi web` serves a local dashboard (queue, running, archive, schedules and stats,
 pushed live over SSE as it changes) — a Sidekiq-style view of the same state
 `furmi ls` prints. **+ New task** queues work from a form (what to do, which
-project, when to start, what to do with the result), calling the same code as
+project, when to start, how it runs, what to do with the result), calling the
+same code as
 `furmi add`; `furmi start` is `furmi web` plus a runner that stops with it.
 Either one with `-d`/`--detach` keeps serving in the background (it logs to
 `~/.furmiculi/web.log`) and gives you the prompt back, so closing the terminal
@@ -355,19 +356,24 @@ or an SSH tunnel (`ssh -L 7433:127.0.0.1:7433 your-box`) in front of it. See
 queue and manage tasks on any of them (see the same page).
 
 A task that is still *Waiting* has an **Edit** button: change what it does, the
-project, when it starts, or what happens when it's done (not once it has
-started: cancel it and add a new one). Its **Model** box is the same as
+project, when it starts, what happens when it's done, and how it runs (not once
+it has started: cancel it and add a new one). Its **Model** box is the same as
 `furmi add --model`: empty means the agent's own model, and the suggestions are
 the ones that agent's CLI names itself (`pi --list-models`, `opencode models`),
 kept for an hour, plus any model a task of yours has already run with. Agents
 with no way to list models (claude, codex, gemini, hermes) get a box you can
 type into and no suggestions, and an agent with no `model_args` gets no box at
-all: it can't be handed a model. **+ New task** with "How often?" set to
+all: it can't be handed a model. **Mode**, **Workspace** (its own worktree, or
+the project folder itself), **Branch**, **Retries**, **Wait between retries**
+and **Give up after** are the file's own fields, like `furmi add --mode
+--branch --no-worktree --retries --retry-delay --timeout`: a value pins it, and
+an empty one follows `[defaults]`. They are there for a new task, an edit and a
+schedule alike. **+ New task** with "How often?" set to
 anything but "Just once" creates a schedule, which appears under *Repeating*
 with **Edit**, **Pause**/**Resume** and **Delete**. Changing a schedule's time or
 resuming it starts counting from now, so it never fires for a slot that passed
-meanwhile. The dashboard writes the same Markdown files you would, so
-fields it doesn't show (`allow_overlap`, `retries`...) are kept.
+meanwhile. The dashboard writes the same Markdown files you would, so fields it
+doesn't show (a schedule's `allow_overlap`, say, or a task's `remote`) are kept.
 The dashboard uses plainer words than the files do: *Waiting*, *Working*,
 *Finished*, *Repeating*, *Needs review* (`pending`, `running`, the archive,
 schedules, `needs_review`), and a failed task shows why it failed. Each task

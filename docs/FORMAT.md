@@ -249,11 +249,12 @@ differences from a task:
 | `furmi add --template <id>`    | A new task from it. The prompt and options are the template's, and anything given on the command line replaces them. `--draft` saves it for review. |
 
 The dashboard's Templates page lists them, starts a task from one in its New
-task form, edits one (its description, prompt, project, agent and what happens
-at the end; options the form doesn't show, such as `model`, are kept), writes a
-new one from scratch, and saves any task as a template from its detail view. A
-template can also be written by hand: put the file in `templates/` and run
-`furmi validate`.
+task form (the form shows the options the template sets, and an empty one is
+left to `[defaults]`), edits one (its description, prompt, project, agent and
+what happens at the end; options the form doesn't show, such as `model`,
+`branch`, `mode` or `retries`, are kept), writes a new one from scratch, and
+saves any task as a template from its detail view. A template can also be
+written by hand: put the file in `templates/` and run `furmi validate`.
 
 The first time furmi runs in a home with no `templates/` folder, it creates
 one with a few starter templates. Delete or change them freely: they aren't

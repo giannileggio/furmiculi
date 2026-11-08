@@ -688,6 +688,40 @@
           <small id="f-model-hint">Leave empty for the agent's own model.</small>
         </label>
       </div>
+      <div class="row" id="f-run-row">
+        <label id="f-mode-wrap">Mode
+          <select id="f-mode">
+            <option value="">As in the defaults</option>
+            <option value="headless">Headless: on its own</option>
+            <option value="interactive">Interactive: in a terminal</option>
+          </select>
+        </label>
+        <label id="f-worktree-wrap">Workspace
+          <select id="f-worktree">
+            <option value="">As in the defaults</option>
+            <option value="yes">Its own git worktree</option>
+            <option value="no">The project folder itself</option>
+          </select>
+        </label>
+        <label id="f-branch-wrap">Branch
+          <input id="f-branch" class="mono" autocomplete="off" spellcheck="false"
+            placeholder="furmi/&lt;id&gt;">
+        </label>
+      </div>
+      <div class="row" id="f-limits-row">
+        <label id="f-retries-wrap">Retries
+          <input type="number" min="0" id="f-retries" autocomplete="off" placeholder="as in the defaults">
+          <small>Extra attempts after one fails.</small>
+        </label>
+        <label id="f-delay-wrap">Wait between retries
+          <input id="f-delay" class="mono" size="8" autocomplete="off" placeholder="as in the defaults">
+          <small>Durations look like <code>30s</code>, <code>5m</code>, <code>2h</code>.</small>
+        </label>
+        <label id="f-timeout-wrap">Give up after
+          <input id="f-timeout" class="mono" size="8" autocomplete="off" placeholder="as in the defaults">
+          <small>Per attempt.</small>
+        </label>
+      </div>
       <div class="buttons">
         <span class="error" id="f-error"></span>
         <button type="button" class="btn secondary" id="new-cancel">Cancel</button>
@@ -2182,9 +2216,9 @@ async function copyTask(id, action) {
   refresh();
 }
 
-// A template starts the New task form, filled in. What the form asks is the
-// prompt, the project, the agent and what happens at the end; the rest of the
-// template (model, branch...) is carried by its id.
+// A template starts the New task form, filled in: what the form asks (the
+// prompt, the project, the agent, the model, and how the task runs) comes from
+// the template, which the new task is still made from by id.
 async function useTemplate(id) {
   try {
     const res = await fetch(`/api/templates/${encodeURIComponent(id)}`, { headers: AUTH() });
@@ -2466,6 +2500,15 @@ function syncFormFields() {
     : repeat === "once" ? "Queue task" : "Create schedule";
   // Only a new one-off task can be saved for later.
   $("f-draft").hidden = !(kind === "new" && repeat === "once");
+  // How it runs: the spec's own options. A template's form doesn't save them,
+  // a command task runs no agent and so has no mode, and a task with no
+  // project has neither a branch nor a worktree.
+  const showsSpec = !isTemplate;
+  $("f-mode-wrap").hidden = !showsSpec || !!formMode.command;
+  $("f-branch-wrap").hidden = !showsSpec || $("f-scratch").checked;
+  $("f-worktree-wrap").hidden = !showsSpec || $("f-scratch").checked;
+  $("f-run-row").hidden = !showsSpec || (!!formMode.command && $("f-scratch").checked);
+  $("f-limits-row").hidden = !showsSpec;
 }
 
 // Only worth asking when there's a real choice of agent.
@@ -2644,6 +2687,14 @@ function openForm(kind, v, template) {
   // The model the file pins, not the one it will run with: an empty box means
   // "the agent's own", so prefilling the agent's default would pin it.
   $("f-model").value = (v && v.model) || "";
+  // As `model`: only what the file pins, so an empty field means "as in the
+  // defaults" (or, for a new task from a template, what the template says).
+  $("f-branch").value = (v && v.branch) || "";
+  $("f-mode").value = (v && v.mode) || "";
+  $("f-worktree").value = !v || v.worktree == null ? "" : v.worktree ? "yes" : "no";
+  $("f-retries").value = v && v.retries != null ? String(v.retries) : "";
+  $("f-delay").value = (v && v.retry_delay) || "";
+  $("f-timeout").value = (v && v.timeout) || "";
 
   setAgents(command ? [] : info.agents, v && v.agent ? v.agent : info.agent);
 
@@ -2843,6 +2894,16 @@ newForm.addEventListener("submit", async (e) => {
     // `null` leaves an existing model alone; "" clears it, back to the agent's.
     model: $("f-model-wrap").hidden ? null : $("f-model").value.trim(),
   };
+  // The task's own options: a value pins it, empty unpins it (so the defaults
+  // apply), and a null (a field the form doesn't show) leaves it as it is.
+  const spec = {
+    branch: $("f-branch-wrap").hidden ? null : $("f-branch").value.trim(),
+    mode: $("f-mode-wrap").hidden ? null : $("f-mode").value,
+    worktree: $("f-worktree-wrap").hidden ? null : $("f-worktree").value,
+    retries: $("f-retries-wrap").hidden ? null : $("f-retries").value.trim(),
+    retry_delay: $("f-delay-wrap").hidden ? null : $("f-delay").value.trim(),
+    timeout: $("f-timeout-wrap").hidden ? null : $("f-timeout").value.trim(),
+  };
   const cron = cronFor(repeat, $("f-time").value, $("f-day").value, $("f-cron").value);
   try {
     let path, body, done;
@@ -2852,15 +2913,15 @@ newForm.addEventListener("submit", async (e) => {
       done = (d) => kind === "template" ? `Saved the template ${formMode.id}` : `Created the template ${d.id}`;
     } else if (kind === "task") {
       path = `/api/tasks/${encodeURIComponent(formMode.id)}/edit`;
-      body = { ...common, start: $("f-start").value };
+      body = { ...common, ...spec, start: $("f-start").value };
       done = () => `Saved ${formMode.id}`;
     } else if (kind === "schedule") {
       path = `/api/schedules/${encodeURIComponent(formMode.id)}/edit`;
-      body = { ...common, cron };
+      body = { ...common, ...spec, cron };
       done = () => `Saved the schedule`;
     } else if (repeat === "once") {
       path = "/api/tasks";
-      body = { ...common, start: $("f-start").value };
+      body = { ...common, ...spec, start: $("f-start").value };
       if ($("f-scratch").checked) { body.scratch = true; body.repo = ""; }
       if (draft) body.draft = true;
       if (formMode.template) body.template = formMode.template;
@@ -2869,7 +2930,7 @@ newForm.addEventListener("submit", async (e) => {
         : body.node === "auto" && d.node ? `Queued ${d.id} on ${d.node === "local" ? "this machine" : d.node}` : `Queued ${d.id}`;
     } else {
       path = "/api/schedules";
-      body = { ...common, cron };
+      body = { ...common, ...spec, cron };
       if (!$("f-node-wrap").hidden) body.node = $("f-node").value;
       done = (d) => { showTab("schedules"); return body.node === "auto" && d.node ? `Scheduled ${d.id} on ${d.node === "local" ? "this machine" : d.node}` : `Scheduled ${d.id}`; };
     }
