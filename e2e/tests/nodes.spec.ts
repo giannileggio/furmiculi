@@ -53,3 +53,77 @@ test("another machine's task opens its log from that machine", async ({ page, fo
   await expect(page.locator("#logs-title")).toHaveText("remote-task@box");
   await expect(page.locator("#logs-body")).toContainText("hello-from-the-other-machine");
 });
+
+// ---- "Any machine (least busy)" and its model box
+//
+// Which machine gets the task is only settled when it is queued, and each
+// machine has its own agent with its own CLI. So the model box asks every
+// machine that could take the task, in the agent that machine would run it
+// with, and offers what they can run between them.
+const PROJECT = "github.com/me/app";
+
+/** A machine with nothing on it: enough to be merged into the page's state. */
+function idleState() {
+  return {
+    home: "~/home",
+    generated_at: new Date().toISOString(),
+    counts: { pending: 0, running: 0, done: 0, failed: 0, cancelled: 0, needs_review: 0, schedules: 0, invalid: 0 },
+    queue: [],
+    running: [],
+    archive: [],
+    schedules: [],
+    invalid: [],
+    runner: { alive: true, last_tick: null },
+    form: { repos: [], agents: [], agent: null, on_finish: "none" },
+  };
+}
+
+/** A machine with a clone of the project and one agent, answering as it would. */
+function machine(agent: string, models: string[], canPin = true) {
+  return {
+    state: idleState(),
+    logs: { log: "", truncated: false },
+    repos: {
+      repos: [{ remote: PROJECT, path: "~/app" }],
+      agents: [agent],
+      agent,
+      running: 0,
+      max_parallel: 2,
+    },
+    models: {
+      agent,
+      can_pin: canPin,
+      default: canPin ? models[0] : null,
+      models,
+      source: canPin ? "cli" : "none",
+    },
+  };
+}
+
+test("with 'any machine' the model box offers what every machine that could take it can run", async ({ page, forge }) => {
+  forge.fakeNode("box", machine("claude", ["claude-sonnet-4", "claude-opus-4"]));
+  forge.fakeNode("mini", machine("codex", ["gpt-5", "gpt-5-mini"]));
+  await openDashboard(page, forge);
+  await page.locator("#new-task-open").click();
+  await page.locator("#f-node").selectOption("auto");
+
+  // The form starts from the project both machines have...
+  await expect(page.locator("#f-repo")).toHaveValue(PROJECT);
+  // ...and offers the models of both, since either could get the task.
+  await expect(page.locator("#f-model-wrap")).toBeVisible();
+  await expect(page.locator('#f-models option[value="claude-opus-4"]')).toHaveCount(1);
+  await expect(page.locator('#f-models option[value="gpt-5-mini"]')).toHaveCount(1);
+  await expect(page.locator("#f-model-hint")).toContainText("box and mini");
+});
+
+test("with 'any machine' a machine that can't be handed a model takes the box away", async ({ page, forge }) => {
+  // Aider has no `model_args`: a pinned model would make the task unrunnable on
+  // whichever machine got it, so the box goes rather than offer one that may
+  // land where it can't be passed on.
+  forge.fakeNode("box", machine("claude", ["claude-sonnet-4"]));
+  forge.fakeNode("mini", machine("aider", [], false));
+  await openDashboard(page, forge);
+  await page.locator("#new-task-open").click();
+  await page.locator("#f-node").selectOption("auto");
+  await expect(page.locator("#f-model-wrap")).toBeHidden();
+});

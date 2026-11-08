@@ -25,7 +25,10 @@ export interface Forge {
    * Adds a node that answers from canned JSON instead of a machine, so a test
    * can exercise another machine's rows (see the fake ssh below).
    */
-  fakeNode(name: string, answers: { state: unknown; logs: unknown }): void;
+  fakeNode(
+    name: string,
+    answers: { state: unknown; logs: unknown; repos?: unknown; models?: unknown },
+  ): void;
 }
 
 /** Most of the dashboard's own output kept for a failure report. */
@@ -115,6 +118,7 @@ case "$remote" in
   *"/logs"*) file="$dir/logs.json" ;;
   *"/api/state"*) file="$dir/state.json" ;;
   *"/api/repos"*) file="$dir/repos.json" ;;
+  *"/api/models"*) file="$dir/models.json" ;;
   *) file="$dir/error.json" ;;
 esac
 if [ ! -f "$file" ]; then
@@ -231,6 +235,12 @@ ${config}
           fs.mkdirSync(dir, { recursive: true });
           fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(answers.state));
           fs.writeFileSync(path.join(dir, "logs.json"), JSON.stringify(answers.logs));
+          // What the form asks a machine before queueing anything on it.
+          for (const [what, answer] of [["repos", answers.repos], ["models", answers.models]]) {
+            if (answer !== undefined) {
+              fs.writeFileSync(path.join(dir, `${what}.json`), JSON.stringify(answer));
+            }
+          }
           addedNodes.push(name);
           fs.writeFileSync(
             path.join(home, "nodes.toml"),

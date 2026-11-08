@@ -6,6 +6,15 @@ lists what changed between them.
 
 ## Unreleased
 
+- Choosing **Any machine (least busy)** in the dashboard's task form suggests
+  models again. The box used to be left out of it: no machine is picked until
+  the task is queued, so there was no CLI to ask. Now every machine that could
+  take the task is asked for what the agent it would run with can run, all at
+  once (nothing waits on a slow machine, and a project narrows it to the
+  machines that have a clone), and the box offers what they can between them. A
+  machine whose default agent can't be handed a model takes the box away, so a
+  pinned model can't land somewhere it can't be used.
+
 ## 0.8.0
 
 - A dashboard serving other machines no longer refuses a browser with one line
