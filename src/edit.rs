@@ -17,7 +17,7 @@ use chrono::{DateTime, FixedOffset};
 use crate::config::Config;
 use crate::home::{Home, contract_tilde, expand_tilde};
 use crate::schedule::Schedule;
-use crate::spec::{OnFinish, TaskSpec, slugify, validate_id};
+use crate::spec::{Mode, OnFinish, TaskSpec, slugify, validate_id};
 use crate::task::{Status, Task, now};
 
 /// When a task should start, as the forms say it.
@@ -43,6 +43,38 @@ pub fn parse_start(text: Option<&str>) -> Result<Start> {
     }
 }
 
+/// One of a spec's own options as a form carries it: not sent (leave it as it
+/// is), sent empty (unpin it, so `[defaults]` applies), or sent with a value
+/// (pin that one).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum Choice<T> {
+    #[default]
+    Leave,
+    Clear,
+    Pin(T),
+}
+
+impl<T> Choice<T> {
+    fn apply(self, field: &mut Option<T>) {
+        match self {
+            Choice::Leave => {}
+            Choice::Clear => *field = None,
+            Choice::Pin(value) => *field = Some(value),
+        }
+    }
+}
+
+/// The options a form can pin beyond the ones it has a field of its own for.
+#[derive(Debug, Default, PartialEq)]
+pub struct SpecChoices {
+    pub branch: Choice<String>,
+    pub mode: Choice<Mode>,
+    pub worktree: Choice<bool>,
+    pub retries: Choice<u32>,
+    pub retry_delay: Choice<Duration>,
+    pub timeout: Choice<Duration>,
+}
+
 /// What the task form edits. `on_finish` and `agent` left as `None` stay as
 /// they are.
 pub struct TaskEdit {
@@ -56,6 +88,7 @@ pub struct TaskEdit {
     /// `None` leaves the model as it is, `Some("")` clears it (the agent's own
     /// model applies), anything else pins that one.
     pub model: Option<String>,
+    pub choices: SpecChoices,
 }
 
 /// What the schedule form edits.
@@ -69,6 +102,7 @@ pub struct ScheduleEdit {
     pub agent: Option<String>,
     /// As `TaskEdit::model`.
     pub model: Option<String>,
+    pub choices: SpecChoices,
 }
 
 fn load_config(home: &Home) -> Result<Config> {
@@ -97,21 +131,45 @@ pub fn task_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
     let config = load_config(home)?;
     let (_, task) = load_pending(home, id)?;
     let eff = task.spec.resolve(&config.defaults);
-    Ok(serde_json::json!({
-        "id": task.id,
-        "title": task.spec.display_title(),
-        "prompt": task.spec.ask(&task.prompt),
-        "command": task.spec.run.is_some(),
-        "repo": contract_tilde(&eff.repo),
-        "on_finish": on_finish_str(eff.on_finish),
-        "agent": eff.agent,
-        // The model the file pins, not the one that will run: an empty field in
-        // the form must mean "keep using the agent's own", not re-pin it.
-        "model": task.spec.model,
-        "starts": task.scheduled_at.map(crate::cmd::fmt_time),
-        "has_run": task.attempts > 0,
-        "draft": task.status == Status::Draft,
-    }))
+    Ok(with_pinned(
+        serde_json::json!({
+            "id": task.id,
+            "title": task.spec.display_title(),
+            "prompt": task.spec.ask(&task.prompt),
+            "command": task.spec.run.is_some(),
+            "repo": contract_tilde(&eff.repo),
+            "on_finish": on_finish_str(eff.on_finish),
+            "agent": eff.agent,
+            // The model the file pins, not the one that will run: an empty field in
+            // the form must mean "keep using the agent's own", not re-pin it.
+            "model": task.spec.model,
+            "starts": task.scheduled_at.map(crate::cmd::fmt_time),
+            "has_run": task.attempts > 0,
+            "draft": task.status == Status::Draft,
+        }),
+        &task.spec,
+    ))
+}
+
+/// What the spec itself pins, for a form: only the pinned values, so a field
+/// left empty in the form means "not pinned, `[defaults]` applies".
+pub fn with_pinned(mut detail: serde_json::Value, spec: &TaskSpec) -> serde_json::Value {
+    let pinned = serde_json::json!({
+        "branch": spec.branch,
+        "mode": spec.mode.map(mode_str),
+        "worktree": spec.worktree,
+        "retries": spec.retries,
+        "retry_delay": spec.retry_delay.map(duration_str),
+        "timeout": spec.timeout.map(duration_str),
+    });
+    if let (Some(map), serde_json::Value::Object(pinned)) = (detail.as_object_mut(), pinned) {
+        map.extend(pinned);
+    }
+    detail
+}
+
+fn duration_str(d: Duration) -> String {
+    crate::duration::format(d)
 }
 
 fn load_pending(home: &Home, id: &str) -> Result<(PathBuf, Task)> {
@@ -164,6 +222,7 @@ pub fn edit_task(home: &Home, id: &str, edit: TaskEdit) -> Result<()> {
     }
     apply_choices(&mut task.spec, edit.on_finish, edit.agent);
     apply_model(&mut task.spec, edit.model);
+    apply_spec_choices(&mut task.spec, edit.choices);
 
     let mut problems = task.problems(&config, Some(&path));
     if task.prompt.is_empty() && task.spec.run.is_none() {
@@ -194,6 +253,17 @@ fn apply_title(spec: &mut TaskSpec, title: Option<String>) {
     if let Some(title) = title {
         spec.title = TaskSpec::clean_title(Some(&title));
     }
+}
+
+/// The options the form carries as text: what it sent a value for is pinned,
+/// what it sent empty is unpinned, and what it left out stays as it is.
+pub(crate) fn apply_spec_choices(spec: &mut TaskSpec, choices: SpecChoices) {
+    choices.branch.apply(&mut spec.branch);
+    choices.mode.apply(&mut spec.mode);
+    choices.worktree.apply(&mut spec.worktree);
+    choices.retries.apply(&mut spec.retries);
+    choices.retry_delay.apply(&mut spec.retry_delay);
+    choices.timeout.apply(&mut spec.timeout);
 }
 
 /// The form's model box: empty means the agent's own model, so it clears the
@@ -231,6 +301,13 @@ pub fn on_finish_str(on_finish: OnFinish) -> &'static str {
     }
 }
 
+pub fn mode_str(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Headless => "headless",
+        Mode::Interactive => "interactive",
+    }
+}
+
 // --- schedules ---------------------------------------------------------------
 
 fn schedule_path(home: &Home, id: &str) -> Result<PathBuf> {
@@ -246,18 +323,21 @@ pub fn schedule_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
     let config = load_config(home)?;
     let s = Schedule::load(&schedule_path(home, id)?)?;
     let eff = s.spec.resolve(&config.defaults);
-    Ok(serde_json::json!({
-        "id": s.id,
-        "title": s.spec.display_title(),
-        "prompt": s.spec.ask(&s.prompt),
-        "command": s.spec.run.is_some(),
-        "cron": s.cron,
-        "enabled": s.enabled,
-        "repo": contract_tilde(&eff.repo),
-        "on_finish": on_finish_str(eff.on_finish),
-        "agent": eff.agent,
-        "model": s.spec.model,
-    }))
+    Ok(with_pinned(
+        serde_json::json!({
+            "id": s.id,
+            "title": s.spec.display_title(),
+            "prompt": s.spec.ask(&s.prompt),
+            "command": s.spec.run.is_some(),
+            "cron": s.cron,
+            "enabled": s.enabled,
+            "repo": contract_tilde(&eff.repo),
+            "on_finish": on_finish_str(eff.on_finish),
+            "agent": eff.agent,
+            "model": s.spec.model,
+        }),
+        &s.spec,
+    ))
 }
 
 /// Adds a schedule, with an id taken from the first line of its prompt.
@@ -266,6 +346,7 @@ pub fn create_schedule(home: &Home, new: ScheduleEdit) -> Result<String> {
     apply_title(&mut spec, new.title.clone());
     apply_choices(&mut spec, new.on_finish, new.agent);
     apply_model(&mut spec, new.model);
+    apply_spec_choices(&mut spec, new.choices);
     add_schedule(home, None, new.cron, false, spec, new.prompt)
 }
 
@@ -364,6 +445,7 @@ pub fn edit_schedule(home: &Home, id: &str, edit: ScheduleEdit) -> Result<()> {
         s.spec.repo = path_of(&edit.repo)?;
         apply_choices(&mut s.spec, edit.on_finish, edit.agent);
         apply_model(&mut s.spec, edit.model);
+        apply_spec_choices(&mut s.spec, edit.choices);
         Ok(())
     })
 }
@@ -510,6 +592,7 @@ mod tests {
             on_finish: None,
             agent: None,
             model: None,
+            choices: SpecChoices::default(),
         }
     }
 
@@ -757,6 +840,7 @@ mod tests {
             on_finish: None,
             agent: None,
             model: None,
+            choices: SpecChoices::default(),
         }
     }
 
