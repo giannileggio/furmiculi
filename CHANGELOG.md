@@ -6,6 +6,10 @@ lists what changed between them.
 
 ## Unreleased
 
+- The dashboard's sidebar has two sections: **Queue** for the lists work moves
+  through, and **Library** for the ones kept for later. Drafts and Templates
+  moved down to Library, where nothing is running and nothing is waiting.
+
 ## 0.8.0
 
 - A dashboard serving other machines no longer refuses a browser with one line
