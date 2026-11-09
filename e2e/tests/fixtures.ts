@@ -25,7 +25,9 @@ export interface Forge {
    * Adds a node that answers from canned JSON instead of a machine, so a test
    * can exercise another machine's rows (see the fake ssh below).
    */
-  fakeNode(name: string, answers: { state: unknown; logs: unknown }): void;
+  fakeNode(name: string, answers: { state: unknown; logs: unknown; models?: unknown }): void;
+  /** What the fake ssh ran on that node, one entry per call (see below). */
+  fakeNodeCalls(name: string): string[];
 }
 
 /** Most of the dashboard's own output kept for a failure report. */
@@ -101,7 +103,9 @@ function git(cwd: string, ...args: string[]) {
  * end: `furmi` is pointed at it with `FURMI_SSH` and it prints what
  * `furmi node call` on that machine would, out of the answers
  * `Forge.fakeNode` wrote under $FAKE_SSH_DIR/<target>. The ssh target is the
- * argument before furmi's remote command, which is the last one.
+ * argument before furmi's remote command, which is the last one. Every remote
+ * command is also appended to that folder's `calls`, so a test can see what
+ * the dashboard actually asked the machine (a rewritten query, say).
  */
 const FAKE_SSH = `#!/bin/sh
 remote=""
@@ -111,10 +115,12 @@ for arg in "$@"; do
   remote="$arg"
 done
 dir="$FAKE_SSH_DIR/$target"
+printf '%s\\n' "$remote" >> "$dir/calls"
 case "$remote" in
   *"/logs"*) file="$dir/logs.json" ;;
   *"/api/state"*) file="$dir/state.json" ;;
   *"/api/repos"*) file="$dir/repos.json" ;;
+  *"/api/models"*) file="$dir/models.json" ;;
   *) file="$dir/error.json" ;;
 esac
 if [ ! -f "$file" ]; then
@@ -231,11 +237,19 @@ ${config}
           fs.mkdirSync(dir, { recursive: true });
           fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(answers.state));
           fs.writeFileSync(path.join(dir, "logs.json"), JSON.stringify(answers.logs));
+          if (answers.models !== undefined) {
+            fs.writeFileSync(path.join(dir, "models.json"), JSON.stringify(answers.models));
+          }
           addedNodes.push(name);
           fs.writeFileSync(
             path.join(home, "nodes.toml"),
             addedNodes.map((n) => `[[node]]\nname = "${n}"\nssh = "${n}"\n`).join(""),
           );
+        },
+        fakeNodeCalls: (name) => {
+          const file = path.join(fakeNodes, name, "calls");
+          if (!fs.existsSync(file)) return [];
+          return fs.readFileSync(file, "utf8").split("\n").filter((line) => line !== "");
         },
       });
       // A dashboard that died on its own takes the page with it, and the test

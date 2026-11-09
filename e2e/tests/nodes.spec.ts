@@ -53,3 +53,27 @@ test("another machine's task opens its log from that machine", async ({ page, fo
   await expect(page.locator("#logs-title")).toHaveText("remote-task@box");
   await expect(page.locator("#logs-body")).toContainText("hello-from-the-other-machine");
 });
+
+test("a model question for another machine goes there without its node", async ({ page, forge }) => {
+  // Which models a machine can run is that machine's answer: the hub asks its
+  // own `/api/models` there, so `agent=` and `refresh=` have to arrive while
+  // `node=` must not (that node's route ignores it and would answer for itself).
+  forge.fakeNode("box", {
+    state: {},
+    logs: {},
+    models: { agent: "stub", can_pin: true, default: null, models: ["remote/one"], source: "agent" },
+  });
+
+  // The ask the form makes, and the forced refresh the route also takes.
+  for (const query of ["agent=stub&node=box", "agent=stub&node=box&refresh=1"]) {
+    const res = await page.request.get(`${forge.url}/api/models?${query}`);
+    expect(res.ok()).toBe(true);
+    expect((await res.json()).models).toEqual(["remote/one"]);
+  }
+
+  const asked = forge.fakeNodeCalls("box").filter((call) => call.includes("/api/models"));
+  expect(asked).toHaveLength(2);
+  expect(asked[0]).toContain("/api/models?agent=stub");
+  expect(asked[1]).toContain("/api/models?agent=stub&refresh=1");
+  for (const call of asked) expect(call).not.toContain("node=");
+});
