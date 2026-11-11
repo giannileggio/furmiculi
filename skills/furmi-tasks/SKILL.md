@@ -33,13 +33,15 @@ task it can carry out.
   one or two questions before you queue it. A vague task wastes a whole run.
 - **When**: now (the default), at a given time, after a delay, or on a
   recurring schedule (see section 4).
-- **Queue it, or save a draft?** A queued task starts as soon as the runner
-  sees it, and the user can't look it over first. A **draft** is saved but
-  doesn't run until the user queues it (in the dashboard, or with
+- **Queue now, queue later, or save a draft?** A queued task starts as soon as
+  the runner sees it, and the user can't look it over first. A **draft** is
+  saved but doesn't run until the user queues it (in the dashboard, or with
   `furmi queue <id>`). This is the user's call, not yours: unless they have
-  already said ("queue it", "let me review it first") or told you to always do
-  one or the other, ask once, before you create anything. Don't choose for them.
-  Recurring schedules are created as asked; this is about one-off tasks.
+  already said ("queue it", "at 2am", "let me review it first") or told you to
+  always do one or the other, ask once, in one question, before you create
+  anything: **draft**, **enqueue now**, or **enqueue later** (then ask when,
+  and use `--at` or `--in`). Don't choose for them. Recurring schedules are
+  created as asked; this is about one-off tasks.
 - **Only set fields the user asked for.** Anything you leave out falls back
   to `[defaults]` in `~/.furmiculi/config.toml`, which is what the user expects.
   Examples: "open a PR" → `--on-finish pr`; "I'll drive it" →
@@ -67,6 +69,13 @@ Don't invent requirements the user didn't ask for. Don't mention furmi; the
 runner handles branches, worktrees, commits and PRs as configured.
 
 ## 3. Create the task with `furmi add`
+
+**Show the task before you create it.** Print the repo, the options you chose
+(`id`, `branch`, `--on-finish`, `--agent`, ...) and the full prompt from step 2,
+exactly as it will be stored, and get the user's answer to the draft / now /
+later question (step 1) in the same turn. Apply any edits they ask for, show it
+again if it changed, and run `furmi add` only after that. Skipping the preview
+is fine only when the user explicitly said to just add it.
 
 Always use `furmi add`, never a hand-written file in `~/.furmiculi/tasks/`. It
 validates the task before creating it, picks a unique id, and stores
