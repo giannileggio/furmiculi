@@ -66,7 +66,9 @@ test("a model question for another machine goes there without its node", async (
 
   // The ask the form makes, and the forced refresh the route also takes.
   for (const query of ["agent=stub&node=box", "agent=stub&node=box&refresh=1"]) {
-    const res = await page.request.get(`${forge.url}/api/models?${query}`);
+    const res = await page.request.get(`${forge.url}/api/models?${query}`, {
+      headers: { Authorization: `Bearer ${forge.token}` },
+    });
     expect(res.ok()).toBe(true);
     expect((await res.json()).models).toEqual(["remote/one"]);
   }

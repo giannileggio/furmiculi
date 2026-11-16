@@ -1,5 +1,5 @@
 //! Who may talk to the dashboard: the bearer token a remote bind needs, the
-//! `Host` allowlist, the `Origin` and per-run token a POST needs, and the
+//! `Host` allowlist, the `Origin` and token a POST needs, and the
 //! short-lived session cookie that saves a remote browser from carrying the
 //! token in the URL.
 
@@ -279,9 +279,6 @@ pub(super) fn authenticate(
     cookie: Option<&str>,
     now: Instant,
 ) -> Access {
-    if !ctx.remote {
-        return Access::Open;
-    }
     let path = url.split('?').next().unwrap_or("");
     // The ant, and its dark twin: artwork already in the repository, and what
     // the refusal page is decorated with, so it can't sit behind the gate the
@@ -544,23 +541,26 @@ mod tests {
         assert_eq!(get(Some("Bearer master")), Access::Open);
         assert_eq!(get(Some("Bearer wrong")), Access::Denied);
         assert_eq!(get(Some("master")), Access::Denied);
+    }
 
+    #[test]
+    fn loopback_needs_the_token_too() {
+        // Another local user can reach 127.0.0.1 as easily as you can, so the
+        // loopback bind is gated like any other: no token, no answer.
+        let (_dir, home) = home();
         let loopback = Ctx {
             remote: false,
-            ..remote_ctx(&home, "x")
+            ..remote_ctx(&home, "secret")
         };
-        assert_eq!(
-            authenticate(
-                &loopback,
-                &sessions,
-                &Method::Get,
-                "/api/state",
-                None,
-                None,
-                now
-            ),
-            Access::Open
-        );
+        let sessions = Sessions::new(SESSION_TTL);
+        let now = Instant::now();
+        let get =
+            |url, authz| authenticate(&loopback, &sessions, &Method::Get, url, authz, None, now);
+        assert_eq!(get("/api/state", None), Access::Denied);
+        assert_eq!(get("/api/state", Some("Bearer wrong")), Access::Denied);
+        assert_eq!(get("/api/state", Some("Bearer secret")), Access::Open);
+        assert_eq!(get("/?token=secret", None), Access::Exchange);
+        assert_eq!(get("/?token=wrong", None), Access::Denied);
     }
 
     #[test]

@@ -173,8 +173,8 @@ impl Default for Housekeeping {
 }
 
 /// The dashboard, as `furmi web` / `furmi start` serve it. All optional: with
-/// nothing set the dashboard listens on loopback, where the per-run token and
-/// loopback checks are enough. A wide `listen` additionally needs
+/// nothing set the dashboard listens on loopback, where the token file (made
+/// on first use) and loopback checks guard it. A wide `listen` additionally needs
 /// `allowed_hosts` and a `token_file` (or the same as flags) — `furmi web
 /// --setup` fills all three in once.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]

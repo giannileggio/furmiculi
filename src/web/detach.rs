@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 
 use super::bind::same_port;
 use super::open_browser;
-use super::setup::{Serving, WebArgs, print_remote};
+use super::setup::{Serving, WebArgs, print_access};
 
 use crate::control;
 use crate::home::{Home, contract_tilde};
@@ -118,9 +118,7 @@ pub(super) fn detach(
         .unwrap_or_else(|| serving.addr.clone());
     let tty = std::io::stdout().is_terminal();
     println!("Dashboard: http://{addr}  (in the background; `furmi stop` stops it)");
-    if serving.remote {
-        print_remote(serving, serving.bearer.as_deref().unwrap_or_default(), tty);
-    }
+    print_access(serving, serving.bearer.as_deref().unwrap_or_default(), tty);
     if with_runner {
         // The child spawns the runner just before it binds; give its lock a
         // moment to appear so the answer here is the real one.

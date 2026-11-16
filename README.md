@@ -195,7 +195,7 @@ furmi status            # is the runner alive? queue, failing schedules
 furmi doctor            # check tmux/git/agents/config/task files; non-zero on problems
 furmi service systemd   # units that keep the runner and the dashboard up (or: launchd)
 
-furmi web               # dashboard at http://127.0.0.1:7433, until Ctrl-C
+furmi web               # dashboard at http://127.0.0.1:7433 (token in ~/.furmiculi/web-token), until Ctrl-C
 furmi web -d            # ...in the background, like `furmi start -d`
 furmi web --setup       # change where it serves (asked once anyway, see below)
 furmi web --port 8080   # a different port
@@ -424,8 +424,10 @@ It only binds to
 `127.0.0.1`, so anyone who can reach it could already run `furmi` locally
 themselves; there's no login. But a web page you visit can send requests to
 `127.0.0.1` too, so the server only answers loopback `Host` names (against DNS
-rebinding) and accepts actions only with a random per-run token that just the
-dashboard page itself can read (against cross-site forgery). A task or
+rebinding) and accepts actions only with a token: the one in
+`~/.furmiculi/web-token`, which only your user can read (against cross-site
+forgery, and against other local users). `furmi web` opens the browser with
+the token already in the link. A task or
 schedule file that can't be parsed shows up in a warning box instead of
 breaking the page.
 

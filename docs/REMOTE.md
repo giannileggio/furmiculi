@@ -1,9 +1,11 @@
 # Serving the dashboard to other machines
 
 By default `furmi web` and `furmi start` bind to 127.0.0.1 only: the dashboard
-exists in your machine's loopback, checked with a loopback `Host` requirement
-(which defeats DNS rebinding), a per-run token POSTs must carry, and a loopback
-`Origin`. On a box without a screen there's nothing to open 127.0.0.1, so the
+exists in your machine's loopback. Every request must carry the token in
+`~/.furmiculi/web-token` (made the first time, 0600), so another user on the
+machine who can reach the port is refused too. The loopback `Host` requirement
+(which defeats DNS rebinding) and the token POSTs must send in a header, with a
+loopback `Origin`, stay on top of that. On a box without a screen there's nothing to open 127.0.0.1, so the
 dashboard can serve your other machines instead.
 
 The **first** `furmi web` asks about that, once:
@@ -68,8 +70,8 @@ itself doesn't speak: put a TLS-terminating proxy in front (`tailscale serve`,
 Caddy, nginx) that sends `X-Forwarded-Proto: https`. A plain-HTTP bind, which is
 what a LAN or tailnet address without a proxy is, can't have `Secure`; the
 session is still short-lived and `HttpOnly`, but anyone who can watch the
-network can read it. The per-run token and Origin checks POSTs already had stay
-in place on top of that. (Older versions kept the token itself in a 30-day
+network can read it. The token and Origin checks POSTs already had stay in
+place on top of that. (Older versions kept the token itself in a 30-day
 cookie; the first page load after upgrading tells the browser to delete it.)
 The URL with the token in it is printed only on a terminal; a unit's journal
 gets `?token=<the token>` instead, so the secret doesn't sit in logs.

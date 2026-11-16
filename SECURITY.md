@@ -37,8 +37,10 @@ What it *uses*:
   Anyone who can write those files can already run commands as you, so don't
   accept task files from people you wouldn't give a shell.
 - **The dashboard is local by default.** `furmi web` / `furmi start` bind
-  127.0.0.1 and additionally require a loopback `Host` (against DNS
-  rebinding) and a per-run token on actions (against cross-site forgery).
+  127.0.0.1 and require the token in `~/.furmiculi/web-token` on every
+  request, so other local users can't drive it either. A loopback `Host` is
+  also required (against DNS rebinding), and actions need the token again in
+  a header (against cross-site forgery).
 - **Serving other machines is opt-in**, and then the bearer token is the gate:
   a `--allowed-host '*'` entry means any `Host` is accepted and the token is
   the only thing left. It speaks plain HTTP — put `tailscale serve` or an SSH

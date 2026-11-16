@@ -70,8 +70,9 @@ pub(crate) struct WebArgs {
 pub(super) struct Serving {
     pub(super) addr: String,
     pub(super) remote: bool,
-    /// Shared secret for a remote bind; None on the loopback default, where
-    /// the per-run token in the page is the only secret.
+    /// The shared secret every request carries. Both binds have one: on the
+    /// loopback default it is `~/.furmiculi/web-token` too, so any local user
+    /// who can reach the port still needs to read that file.
     pub(super) bearer: Option<String>,
     /// Exact `Host` allowlist for a remote bind.
     pub(super) allowed_hosts: Vec<String>,
@@ -97,14 +98,18 @@ impl Serving {
     /// host. `with_token` puts the secret in the query string: only do that
     /// on a terminal, never into a log file or the journal.
     pub(super) fn open_url(&self, token: &str, with_token: bool) -> Option<String> {
-        let url = match self.allowed_hosts.first()? {
-            // Any Host is accepted, so there's no one name to print: say where
-            // to put the box's name (or IP) instead.
-            any if is_any_host(any) => {
-                let port = split_authority(&self.addr).1.unwrap_or("7433");
-                format!("http://<this box's tailnet name or IP>:{port}")
+        let url = if !self.remote {
+            format!("http://{}", self.addr)
+        } else {
+            match self.allowed_hosts.first()? {
+                // Any Host is accepted, so there's no one name to print: say
+                // where to put the box's name (or IP) instead.
+                any if is_any_host(any) => {
+                    let port = split_authority(&self.addr).1.unwrap_or("7433");
+                    format!("http://<this box's tailnet name or IP>:{port}")
+                }
+                host => url_for(host, &self.addr),
             }
-            host => url_for(host, &self.addr),
         };
         Some(if with_token {
             format!("{url}/?token={token}")
@@ -134,7 +139,16 @@ pub(super) fn setup(home: &Home, args: &WebArgs) -> Result<Serving> {
     if asks(args, &web, std::io::stdin().is_terminal(), config_broken) {
         web = interactive_setup(home, args, &web)?;
     }
-    resolve(args, &web)
+    let mut serving = resolve(args, &web)?;
+    if serving.bearer.is_none() {
+        // Loopback with no token configured: the home's own token file, made
+        // the first time (0600), the same secret a wide bind would use.
+        let path = home.root().join("web-token");
+        ensure_token_file(&path)?;
+        serving.bearer = Some(read_token_file(&path)?);
+        serving.token_from = Some(contract_tilde(&path));
+    }
+    Ok(serving)
 }
 
 /// Does this run ask the setup questions? Once, ever, on a terminal: either
@@ -176,12 +190,14 @@ fn resolve(args: &WebArgs, web: &Web) -> Result<Serving> {
     let remote = !is_loopback_authority(host_of(&addr));
     let (bearer, token_from) = token_of(args, web)?;
     if !remote {
+        // The default token (the file in the home) is filled in by `setup`,
+        // which is the one place that may create it.
         return Ok(Serving {
             addr,
             remote: false,
-            bearer: None,
+            bearer,
             allowed_hosts: Vec::new(),
-            token_from: None,
+            token_from,
         });
     }
     let Some(bearer) = bearer else {
@@ -434,6 +450,28 @@ fn host_of(addr: &str) -> &str {
 /// Where a browser on another machine reaches a wide bind, and with what: the
 /// token goes in the URL only on a terminal, so a unit's journal or a log file
 /// never keeps the secret around.
+/// How to open the dashboard, for whichever bind this is.
+pub(super) fn print_access(serving: &Serving, token: &str, tty: bool) {
+    if serving.remote {
+        print_remote(serving, token, tty);
+    } else {
+        print_local(serving, token, tty);
+    }
+}
+
+/// The loopback bind's line: a link that carries the token once (on a
+/// terminal only), and where the token lives for everything else.
+fn print_local(serving: &Serving, token: &str, tty: bool) {
+    if let Some(open) = serving.open_url(token, tty) {
+        println!("Open it with the token in the link (once; the page keeps a cookie after):");
+        println!("  {open}");
+    }
+    println!(
+        "  Token in {}",
+        serving.token_from.as_deref().unwrap_or("--token")
+    );
+}
+
 pub(super) fn print_remote(serving: &Serving, token: &str, tty: bool) {
     if let Some(open) = serving.open_url(token, tty) {
         println!("Serving other machines. Open this once, and the page keeps a cookie:");

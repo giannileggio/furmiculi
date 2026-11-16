@@ -576,6 +576,26 @@ fn http_at(
     use std::net::TcpStream;
     use std::time::{Duration, Instant};
 
+    // A loopback dashboard this file gated answers only with its token; a
+    // test that wants to send none (or a wrong one) brings its own header.
+    let gated = gated_token(port);
+    let mut headers: Vec<(String, String)> = headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    if let Some(t) = &gated
+        && !headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("Authorization"))
+    {
+        headers.push(("Authorization".into(), format!("Bearer {t}")));
+    }
+    let headers: Vec<(&str, &str)> = headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let headers = &headers[..];
+
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match TcpStream::connect((ip, port)) {
@@ -629,12 +649,43 @@ fn http_post(port: u16, token: &str, path: &str, body: &str) -> String {
     )
 }
 
-/// The per-run token `furmi web` embeds in the dashboard page.
+/// The loopback dashboards this file has gated, with the token each one needs
+/// (the one in its home's `web-token`).
+static GATED: std::sync::Mutex<Vec<(u16, String)>> = std::sync::Mutex::new(Vec::new());
+
+fn gated_token(port: u16) -> Option<String> {
+    GATED
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(p, _)| *p == port)
+        .map(|(_, t)| t.clone())
+}
+
+/// Call right after starting a loopback `furmi web` in `home`: waits for the
+/// token file it makes at startup and remembers the token for `port`, so
+/// requests to it carry the token. Returns the token.
+fn gate(port: u16, home: &Path) -> String {
+    let file = home.join("web-token");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let token = loop {
+        match std::fs::read_to_string(&file) {
+            Ok(t) if !t.trim().is_empty() => break t.trim().to_string(),
+            _ if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20))
+            }
+            _ => panic!("no token file at {}", file.display()),
+        }
+    };
+    GATED.lock().unwrap().push((port, token.clone()));
+    token
+}
+
+/// The token a gated dashboard needs (see [`gate`]); also waits until it
+/// answers.
 fn page_token(port: u16) -> String {
-    let index = http_get(port, "/");
-    let marker = "name=\"furmi-token\" content=\"";
-    let start = index.find(marker).expect("token meta tag") + marker.len();
-    index[start..start + 32].to_string()
+    let _ = http_get(port, "/api/state");
+    gated_token(port).expect("gate() the dashboard first")
 }
 
 #[test]
@@ -651,6 +702,7 @@ fn web_actions_mutate_tasks_through_the_api() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
     let token = page_token(port); // also waits for the server to come up
 
     let cancel = http_post(port, &token, "/api/tasks/w1/cancel", "");
@@ -718,6 +770,7 @@ fn another_machines_log_stream_is_served_from_that_machine() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
     let _token = page_token(port); // also waits for the server to come up
 
     // This used to be answered here, with "invalid id `demo-task@box`": the
@@ -747,6 +800,7 @@ fn web_refuses_cross_site_and_rebound_requests() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
     let token = page_token(port);
     let path = "/api/tasks/w1/cancel";
     let own_host = format!("127.0.0.1:{port}");
@@ -1030,6 +1084,7 @@ fn web_takes_over_an_address_its_own_dashboard_holds() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
     let page = http_get(port, "/");
     assert!(page.starts_with("HTTP/1.1 200"), "{page}");
 
@@ -1048,6 +1103,7 @@ fn web_takes_over_an_address_its_own_dashboard_holds() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
     let page = http_get(port, "/");
     assert!(page.starts_with("HTTP/1.1 200"), "{page}");
     // The dashboard it replaced is gone, not merely unbound.
@@ -1439,6 +1495,7 @@ fn web_survives_a_corrupt_task_file() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
     http_get(port, "/");
 
     let state = http_get(port, "/api/state");
@@ -1465,6 +1522,7 @@ fn web_serves_the_dashboard_and_state() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
 
     let index = http_get(port, "/");
     assert!(index.starts_with("HTTP/1.1 200"));
@@ -1496,6 +1554,7 @@ fn web_new_task_form_queues_a_task() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
     let token = page_token(port);
 
     // Started inside a repo, so the form suggests it.
@@ -1639,6 +1698,7 @@ fn start_detached_serves_in_the_background_until_stop() {
         furmi(home.path()).args(["start", "--detach", "--port", &port_arg])
     ));
     let text = stdout(&out);
+    gate(port, home.path());
     assert!(text.contains("Dashboard: http://127.0.0.1:18348"), "{text}");
     assert!(text.contains("in the background"), "{text}");
     assert!(text.contains("Runner started"), "{text}");
@@ -1700,6 +1760,7 @@ fn start_runs_the_runner_and_the_dashboard_together() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
     page_token(port); // waits for the dashboard
 
     // The runner comes up a moment after the page does.
@@ -1780,6 +1841,7 @@ fn restart_replaces_the_dashboard_and_the_runner_on_the_same_port() {
         "--port",
         &port.to_string(),
     ])));
+    gate(port, home.path());
     let status = wait_for_runner(home.path(), true);
     // Each says which version it is running, and it is this one.
     let version = format!("[furmi {}]", env!("CARGO_PKG_VERSION"));
@@ -1929,6 +1991,7 @@ fn web_can_start_and_stop_the_runner_and_run_the_setup_check() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
     let token = page_token(port);
     assert!(http_get(port, "/api/state").contains("\"alive\":false"));
 
@@ -1980,6 +2043,7 @@ fn web_edits_waiting_tasks_and_refuses_started_ones() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
     let token = page_token(port);
 
     let detail = http_get(port, "/api/tasks/w1");
@@ -2052,6 +2116,7 @@ fn web_manages_schedules_end_to_end() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
     let token = page_token(port);
     let form = |prompt: &str, cron: &str| {
         serde_json::json!({ "prompt": prompt, "repo": repo.path(), "cron": cron, "on_finish": "pr" })
@@ -2139,6 +2204,7 @@ fn web_lists_agents_and_sets_the_default() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    gate(port, home.path());
     let token = page_token(port);
 
     let agents = http_get(port, "/api/agents");

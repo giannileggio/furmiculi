@@ -11,7 +11,10 @@ const FURMI_BIN =
 
 /** A running dashboard plus the throwaway state behind it. */
 export interface Forge {
+  /** The dashboard's address, without the token. */
   url: string;
+  /** The token every request needs (`~/.furmiculi/web-token`). */
+  token: string;
   home: string;
   /** The git repo tasks run in. */
   repo: string;
@@ -221,8 +224,10 @@ ${config}
 
     try {
       const url = await waitForUrl(server, output);
+      const token = fs.readFileSync(path.join(home, "web-token"), "utf8").trim();
       await use({
         url,
+        token,
         home,
         repo,
         furmi,
@@ -279,7 +284,8 @@ ${config}
 
 /** The dashboard page with its first state load done. */
 export async function openDashboard(page: Page, forge: Forge) {
-  await page.goto(forge.url);
+  // The link `furmi web` opens: the token in it, traded for a session cookie.
+  await page.goto(`${forge.url}/?token=${forge.token}`);
   // The home is shown with `~` for $HOME, which the fixture points at the
   // temp root; this also proves the first /api/state load has rendered.
   await expect(page.locator("#home")).toHaveText("~/home");

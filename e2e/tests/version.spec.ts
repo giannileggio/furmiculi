@@ -13,7 +13,8 @@ test("a page from before an upgrade offers a reload, which brings the new one", 
   const version = forge.furmi("--version").trim().split(" ").pop()!;
   // The page as an older server sent it; everything after it comes from the
   // real, newer server, which is what a page left open across an upgrade sees.
-  const index = new URL("/", forge.url).href;
+  // The page's own address, whatever its query string (the token).
+  const index = (url: URL) => url.pathname === "/";
   await page.route(index, async (route) => {
     const response = await route.fetch();
     const body = await response.text();

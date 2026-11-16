@@ -11,13 +11,13 @@
 //! /api/runner/{start,stop,pause,resume}`, and `GET /api/doctor` and `/api/agents` (plus
 //! `POST /api/agents/default`) for the setup views.
 //!
-//! Two ways to listen, both guarded:
+//! Two ways to listen, both gated by the same bearer token:
 //!
-//! - **Loopback (the default, `127.0.0.1:<port>`).** A web page you visit can
-//!   still send requests there, so every request must carry a loopback `Host`
-//!   (defeats DNS rebinding), and POSTs a per-run token that only the
-//!   dashboard page itself can read (defeats cross-site forgery) and a
-//!   loopback `Origin`, if any.
+//! - **Loopback (the default, `127.0.0.1:<port>`).** Every request must carry
+//!   the token in `~/.furmiculi/web-token`, so another local user who can
+//!   reach the port can't drive the dashboard. Every request also needs a
+//!   loopback `Host` (defeats DNS rebinding), and POSTs a loopback `Origin`
+//!   (if any) plus the token in `X-Furmi-Token` (defeats cross-site forgery).
 //! - **Remote (`--listen` with a non-loopback address, e.g. `0.0.0.0:7433`).**
 //!   For a headless box reached from browsers on other machines (a tailnet).
 //!   Every request — not just POSTs — must carry a shared bearer token
@@ -26,7 +26,7 @@
 //!   session cookie and redirects to the address without it, so the token
 //!   never stays in the history or the bar (and a refresh still works).
 //!   Every `Host` must match one exact `--allowed-host` entry (defeats
-//!   DNS rebinding over the wide bind). The per-run POST token and Origin
+//!   DNS rebinding over the wide bind). The POST token and Origin
 //!   checks stay on top of the bearer gate. A non-loopback bind refuses to
 //!   start without a token and an allowlist.
 //!
@@ -75,7 +75,7 @@ use self::bind::bind;
 use self::detach::{detach, refuse_token_with_detach};
 use self::recovery::{Ask, Why};
 use self::routes::{is_page, route};
-use self::setup::{Serving, print_remote, setup};
+use self::setup::{Serving, print_access, setup};
 
 use crate::home::{Home, Launch, contract_tilde};
 use crate::run;
@@ -210,9 +210,10 @@ fn run_server(
     // middle of a request.
     run::install_shutdown_handler();
     let server = Arc::new(server);
-    // On a remote bind the shared secret is the token: the page holds it in
-    // memory (from `?token=` on first load) and sends it as both the bearer
-    // and the POST token. On loopback it stays the per-run random token.
+    // The shared secret is the token: the page holds it in memory (from
+    // `?token=` on first load, which is traded for a session) and sends it as
+    // both the bearer and the POST token. `setup` always fills it in; the
+    // random fallback only exists so a missing one fails closed.
     let token = match &serving.bearer {
         Some(b) => b.clone(),
         None => random_token()?,
@@ -224,14 +225,9 @@ fn run_server(
     let ctx = Ctx {
         home,
         // A remote page gets its own session's token, filled in per request.
-        index: {
-            let page = INDEX_HTML.replace("__FURMI_VERSION__", crate::version::CURRENT);
-            if serving.remote {
-                page
-            } else {
-                page.replace("__FURMI_TOKEN__", &token)
-            }
-        },
+        // The token placeholder is filled in per request (see `handle`): a
+        // page gets its session's token, never the master one.
+        index: INDEX_HTML.replace("__FURMI_VERSION__", crate::version::CURRENT),
         token,
         cwd_repo,
         remote: serving.remote,
@@ -243,12 +239,15 @@ fn run_server(
     let url = format!("http://{addr}");
     let tty = std::io::stdout().is_terminal();
     println!("Dashboard: {url}  (Ctrl-C to stop)");
-    if serving.remote {
-        print_remote(serving, &ctx.token, tty);
-    }
-    // A wide bind has no local browser worth opening; loopback does.
-    if !args.no_open && !serving.remote && tty {
-        open_browser(&url);
+    print_access(serving, &ctx.token, tty);
+    // A wide bind has no local browser worth opening; loopback does, with the
+    // token in the link so the page opens signed in.
+    if let Some(link) = serving.open_url(&ctx.token, true)
+        && !args.no_open
+        && !serving.remote
+        && tty
+    {
+        open_browser(&link);
     }
 
     // Unblock every worker once the handler has seen a signal (`unblock`
@@ -544,7 +543,7 @@ fn handle<'scope, 'env>(
         if is_index {
             result.body = result.body.replace("__FURMI_TOKEN__", page_token);
         }
-    } else if is_index && ctx.remote {
+    } else if is_index {
         // A bearer-authenticated page load: the master token it already has.
         result.body = result.body.replace("__FURMI_TOKEN__", &ctx.token);
     }

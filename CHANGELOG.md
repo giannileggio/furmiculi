@@ -9,6 +9,12 @@ lists what changed between them.
 - The dashboard's sidebar has two sections: **Queue** for the lists work moves
   through, and **Library** for the ones kept for later. Drafts and Templates
   moved down to Library, where nothing is running and nothing is waiting.
+- The loopback dashboard (`furmi web`, the default) now needs the token in
+  `~/.furmiculi/web-token` on every request, like a dashboard serving other
+  machines does, so other local users can no longer drive it. The file is made
+  the first time (0600). `furmi web` opens the browser with the token in the
+  link, and `furmi start -d` prints it. The token is stable across restarts
+  now, where the loopback one used to change every run.
 
 ## 0.8.0
 

@@ -409,7 +409,11 @@ fn web_check(config: &Config) -> Check {
              {} (every request carries the token it writes)",
             crate::web::url_for(&tailnet.name, "0.0.0.0:7433")
         )),
-        None => Check::Ok("dashboard: this machine only (http://127.0.0.1:7433)".into()),
+        None => Check::Ok(
+            "dashboard: this machine only (http://127.0.0.1:7433; open it with `furmi web`, \
+             or sign in with the token in ~/.furmiculi/web-token)"
+                .into(),
+        ),
     }
 }
 

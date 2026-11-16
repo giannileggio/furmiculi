@@ -57,6 +57,9 @@ test("the dashboard refuses actions without its page token", async ({ page, forg
   await expect(page.locator("tbody tr", { hasText: "target" }).locator(".badge")).toHaveText("Waiting");
 
   // Another site's page can't read the token out of the dashboard either.
-  const res = await page.request.get(forge.url, { headers: { Host: "evil.example" } });
+  // With the token in hand, so it is the Host check that refuses it.
+  const res = await page.request.get(`${forge.url}/?token=${forge.token}`, {
+    headers: { Host: "evil.example" },
+  });
   expect(res.status()).toBeGreaterThanOrEqual(400);
 });
