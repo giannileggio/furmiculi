@@ -553,6 +553,7 @@ pub(super) fn agents_json(home: &Home) -> Result<String> {
         "max_parallel": config.runner.max_parallel,
         "max_parallel_per_repo": config.runner.max_parallel_per_repo,
         "poll_interval": humantime::format_duration(config.runner.poll_interval).to_string(),
+        "daily_token_budget": config.runner.daily_token_budget.unwrap_or(0),
         "defaults": {
             "mode": config.defaults.mode,
             "worktree": config.defaults.worktree,

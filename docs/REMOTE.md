@@ -2,9 +2,14 @@
 
 By default `furmi web` and `furmi start` bind to 127.0.0.1 only: the dashboard
 exists in your machine's loopback, checked with a loopback `Host` requirement
-(which defeats DNS rebinding), a per-run token POSTs must carry, and a loopback
-`Origin`. On a box without a screen there's nothing to open 127.0.0.1, so the
-dashboard can serve your other machines instead.
+(which defeats DNS rebinding), a sign-in, a per-session token POSTs must carry,
+and a loopback `Origin`. The sign-in is a secret in `~/.furmiculi/.local-token`
+(0600) that `furmi open` hands to your browser once; the browser then stays
+signed in for 30 days, kept across restarts in `.web-sessions`. It is there
+because any program on the machine can connect to a loopback port, and the page
+can queue a task, which runs as you. `[web] trust_local = true` turns it off.
+On a box without a screen there's nothing to open 127.0.0.1, so the dashboard
+can serve your other machines instead.
 
 The **first** `furmi web` asks about that, once:
 
@@ -30,7 +35,9 @@ After that, a plain `furmi web` — no flags, no questions — does the same thi
 every time, and `furmi start`/`furmi service` follow the same table.
 `furmi doctor` prints the URL to open.
 
-Open the URL it prints once, with the token in the query string:
+Open the URL it prints once, with the token in the query string (or open the
+address without it and paste the token into the form the page shows, which
+posts it, so it never sits in an address):
 
 ```
 http://box.tailnet.ts.net:7433/?token=<the token in ~/.furmiculi/web-token>
@@ -42,6 +49,7 @@ history or a bookmark) and an `HttpOnly`, `SameSite=Strict` cookie,
 `furmi_session`, holding a random session id, not the token. The page is
 served its session's own token to send with every request, not the master one.
 
+Setup has **Sign out** and **Sign out everywhere** (`POST /api/session/end`).
 A session lasts 15 minutes past its last request; every request, and a
 keepalive the open page sends every 5 minutes, pushes it out again. Close the
 tab and it is gone a quarter of an hour later; open the URL with the token

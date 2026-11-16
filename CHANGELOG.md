@@ -6,6 +6,79 @@ lists what changed between them.
 
 ## Unreleased
 
+Security
+
+- A dashboard on this machine now asks each browser to sign in once. Its page
+  carries the token that lets it queue a task, and any program on the machine,
+  of any user, could fetch that page from 127.0.0.1 and queue work that runs as
+  you. The secret is a file only you can read (`.local-token`); `furmi start`
+  opens the browser signed in, `furmi open` does it for one already running,
+  and a browser stays signed in for 30 days, across restarts. `[web]
+  trust_local = true` brings back the old behaviour.
+- The sign-in form posts the token instead of putting it in the address, a
+  session can be ended (Setup has Sign out and Sign out everywhere), the
+  page's script runs under a per-response nonce instead of `'unsafe-inline'`,
+  responses say `Referrer-Policy: no-referrer`, and a short `--token` is warned
+  about.
+- A new data folder is created 0700, and `furmi doctor` flags one that other
+  users can read.
+- Tasks no longer inherit furmi's own notification tokens, and `[runner]
+  strip_env` names more variables to keep from them. A prompt that starts with
+  `-` can't be read as an option by the agent's own parser, and `{prompt_file}`
+  gives a launcher the prompt in a 0600 file instead of on its command line.
+- `on_finish` refuses to commit a new file that looks like a secret (`.env`, a
+  private key, ...) or is over 10 MB, and leaves the work where it is
+  (`commit_guard = false` under `[defaults]` turns it off).
+- `install.sh` checks the installer against the release's `sha256.sum` when
+  it is listed there and takes `FURMI_VERSION`; CI lints it, and a CodeQL
+  workflow analyzes the code and the workflows.
+
+Agents and tasks
+
+- Headless agents had no approval flags, so one that asks before editing
+  finished its first task having changed nothing. `furmi init` now asks how far
+  the default agent may go, `furmi agents allow <agent> <ask|edits|all>` and
+  Setup change it, the answer lives under `[unattended]`, and `furmi doctor`
+  warns while it is unanswered.
+- New task fields, also options of `furmi add`: `base` (what a new branch
+  starts from, fetched first), `setup` (a command run in the workspace before
+  the first attempt), `after` (tasks that must finish as done first) and
+  `priority`. `[defaults]` takes `base` and `setup`; the dashboard's form has
+  them under More options.
+- `[runner] daily_token_budget` holds the queue once today's finished tasks have
+  used that many tokens; `furmi status` and Setup show it.
+- A task opened from `on_finish: pr` records its pull request, which the task
+  view links to.
+
+Dashboard
+
+- A task's view shows the end of what a failed run printed, what its branch
+  changed, the pull request, and what it waits for.
+- The log viewer follows colour codes, wraps or doesn't, copies and downloads,
+  has an attempt picker and a Jump to the latest button.
+- Times read as "3 min ago" or "in 2 h", with the exact time under them and on
+  hover. A tab in the background shows a count in its title and icon, and Setup
+  can turn on browser notifications for tasks that end while it is hidden.
+- Questions are asked in the page rather than in the browser's own dialogs,
+  default to the safe answer, and Dropping a waiting task can be undone.
+  Dialogs take focus, keep Tab inside and hand focus back.
+- Setup is wider and says things plainly: how far each agent may go,
+  notifications (with a test message), a daily token budget, the other
+  machines, and signing out. Repeating shows each schedule's last run and has a
+  Run now button (also `furmi schedule run`). A link to a task opens the list
+  that holds it; one to a missing task, or an address that isn't there, says so
+  and leads back. The header keeps Setup on a phone.
+- Saving another machine's task as a template works.
+- Fixed: a prompt over 16 KB could not be queued from the form (the limit is
+  now 1 MB and says so); `n` typed an `n` into the form it opened.
+
+Command line
+
+- `furmi add "- a list"` and `--prompt "- ..."` are accepted; a lone mistyped
+  flag is still an error.
+- `furmi ls --json` and `furmi status --json`, `furmi completions <shell>`, a
+  `--help` that groups the commands, and shorter project paths in `furmi ls`.
+
 - The dashboard's sidebar has two sections: **Queue** for the lists work moves
   through, and **Library** for the ones kept for later. Drafts and Templates
   moved down to Library, where nothing is running and nothing is waiting.

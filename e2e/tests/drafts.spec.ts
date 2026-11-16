@@ -37,11 +37,9 @@ test("a draft made on the command line shows up, and discarding it deletes it", 
   await tab(page, "drafts").click();
   await expect(row(page, "from-cli").locator(".badge")).toHaveText("Draft");
 
-  page.once("dialog", (d) => {
-    expect(d.message()).toContain("Discard the draft");
-    void d.accept();
-  });
   await row(page, "from-cli").getByRole("button", { name: "Discard" }).click();
+  await expect(page.locator("#ask-title")).toContainText("Discard the draft");
+  await page.locator("#ask-ok").click();
   await expect(row(page, "from-cli")).toHaveCount(0);
   expect(forge.taskFile("from-cli")).toBeUndefined();
 });
@@ -104,8 +102,8 @@ test("a starter template needs a project, which the form asks for", async ({ pag
 test("a template can be deleted from its page", async ({ page, forge }) => {
   await openDashboard(page, forge);
   await tab(page, "templates").click();
-  page.once("dialog", (d) => void d.accept());
   await row(page, "review-the-diff").getByRole("button", { name: "Delete" }).click();
+  await page.locator("#ask-ok").click();
   await expect(row(page, "review-the-diff")).toHaveCount(0);
   expect(fs.existsSync(`${forge.home}/templates/review-the-diff.md`)).toBe(false);
 });

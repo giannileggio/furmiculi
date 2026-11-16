@@ -346,6 +346,67 @@ fn ls_once(home: &Home, archive: bool, schedules: bool) -> Result<()> {
     Ok(())
 }
 
+/// `furmi ls --json`: the same tasks, one object each, for scripts.
+pub fn ls_json(home: &Home, archive: bool) -> Result<()> {
+    home.ensure_initialized()?;
+    let config = Config::load(&home.config_path())?;
+    let dir = if archive {
+        home.archive()
+    } else {
+        home.tasks()
+    };
+    let (tasks, warnings) = load_tasks(&dir)?;
+    for w in warnings {
+        eprintln!("warning: {w}");
+    }
+    let rows: Vec<_> = tasks
+        .iter()
+        .map(|t| {
+            let eff = t.spec.resolve(&config.defaults);
+            serde_json::json!({
+                "id": t.id,
+                "status": t.status.as_str(),
+                "repo": contract_tilde(&eff.repo),
+                "branch": t.effective_branch(&config),
+                "agent": eff.agent,
+                "model": t.model_in_use(&config).0,
+                "command": eff.run.is_some(),
+                "on_finish": crate::edit::on_finish_str(eff.on_finish),
+                "attempts": t.attempts,
+                "after": t.spec.after,
+                "priority": eff.priority,
+                "created_at": t.created_at.map(|at| at.to_rfc3339()),
+                "scheduled_at": t.scheduled_at.map(|at| at.to_rfc3339()),
+                "started_at": t.started_at.map(|at| at.to_rfc3339()),
+                "finished_at": t.finished_at.map(|at| at.to_rfc3339()),
+                "exit_code": t.exit_code,
+                "error": t.error,
+                "tokens_in": t.tokens_in,
+                "tokens_out": t.tokens_out,
+                "pr_url": t.pr_url,
+                "file": dir.join(format!("{}.md", t.id)),
+            })
+        })
+        .collect();
+    println!("{}", serde_json::to_string_pretty(&rows)?);
+    Ok(())
+}
+
+/// A long path made to fit a table column: the end of it, which is what tells
+/// projects apart, behind an ellipsis.
+pub fn shorten_path(path: &str, max: usize) -> String {
+    let chars: Vec<char> = path.chars().collect();
+    if chars.len() <= max {
+        return path.to_string();
+    }
+    let tail: String = chars[chars.len() - (max - 1)..].iter().collect();
+    // Start at a folder boundary when there is one close by.
+    match tail.find('/') {
+        Some(at) if at < max / 3 => format!("…{}", &tail[at..]),
+        _ => format!("…{tail}"),
+    }
+}
+
 /// The tasks in `dir`, oldest first, plus a warning for each file that
 /// couldn't be read.
 pub fn load_tasks(dir: &Path) -> Result<(Vec<Task>, Vec<String>)> {
@@ -376,7 +437,7 @@ pub fn task_rows(config: &Config, tasks: &[Task]) -> Vec<Vec<String>> {
             t.id.clone(),
             t.status.as_str().into(),
             when,
-            contract_tilde(&eff.repo),
+            shorten_path(&contract_tilde(&eff.repo), 36),
             t.effective_branch(config).unwrap_or_else(|| "-".into()),
             match (eff.runner(), t.model_in_use(config).0) {
                 ("-", _) => "-".into(),

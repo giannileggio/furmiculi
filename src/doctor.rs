@@ -20,6 +20,52 @@ const STALE_AFTER_POLLS: u32 = 4;
 
 /// What's going on right now: runner liveness, queue counts, tokens used today, and
 /// schedules that keep failing.
+/// `furmi status --json`: what `furmi status` says, for scripts.
+pub fn status_json(home: &Home) -> Result<()> {
+    home.ensure_initialized()?;
+    let config = Config::load(&home.config_path())?;
+    let state = RunnerState::load(home);
+    let count = |dir: std::path::PathBuf, status: crate::task::Status| {
+        md_files(&dir)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|p| Task::load(p).ok())
+            .filter(|t| t.status == status)
+            .count()
+    };
+    use crate::task::Status;
+    let dashboard = home.dashboard();
+    let value = serde_json::json!({
+        "version": CURRENT,
+        "runner": {
+            "running": home.runner_alive(),
+            "pid": state.as_ref().map(|s| s.pid),
+            "paused": home.is_paused(),
+            "last_pass": state.as_ref().and_then(|s| s.last_tick_at).map(|at| at.to_rfc3339()),
+            "last_error": state.and_then(|s| s.last_error),
+        },
+        "dashboard": {
+            "running": dashboard.is_some(),
+            "pid": dashboard.as_ref().map(|(pid, _)| pid),
+            "address": dashboard.map(|(_, addr)| addr),
+        },
+        "queue": {
+            "drafts": count(home.tasks(), Status::Draft),
+            "pending": count(home.tasks(), Status::Pending),
+            "running": count(home.tasks(), Status::Running),
+        },
+        "archive": {
+            "done": count(home.archive(), Status::Done),
+            "failed": count(home.archive(), Status::Failed),
+            "cancelled": count(home.archive(), Status::Cancelled),
+            "needs_review": count(home.archive(), Status::NeedsReview),
+        },
+        "budget": crate::run::budget(home, &config, crate::task::now()),
+    });
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
 pub fn status(home: &Home) -> Result<()> {
     home.ensure_initialized()?;
     let config = Config::load(&home.config_path())?;

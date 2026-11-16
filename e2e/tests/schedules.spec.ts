@@ -65,14 +65,12 @@ test("a schedule can be created, edited, paused, resumed and deleted", async ({ 
   await expect(r).toContainText("*/20 * * * *");
 
   // Delete asks first.
-  page.once("dialog", (d) => void d.dismiss());
   await r.getByRole("button", { name: "Delete" }).click();
+  await page.locator("#ask-cancel").click();
   await expect(r).toBeVisible();
-  page.once("dialog", (d) => {
-    expect(d.message()).toContain(id);
-    void d.accept();
-  });
   await r.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator("#ask-title")).toContainText(id);
+  await page.locator("#ask-ok").click();
   await expect(page.getByText("No repeating tasks yet.")).toBeVisible();
   expect(fs.existsSync(file)).toBe(false);
 });

@@ -2868,3 +2868,163 @@ fn a_new_home_is_private_and_doctor_flags_one_that_is_not() {
     let out = run(furmi(&home).arg("doctor"));
     assert!(stdout(&out).contains("chmod 700"), "{}", stdout(&out));
 }
+
+#[test]
+fn ls_and_status_can_be_read_by_a_script() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    add(home.path(), repo.path(), "a-task", "do it");
+
+    let ls = stdout(&ok(run(furmi(home.path()).args(["ls", "--json"]))));
+    let tasks: serde_json::Value = serde_json::from_str(&ls).expect(&ls);
+    assert_eq!(tasks[0]["id"], "a-task");
+    assert_eq!(tasks[0]["status"], "pending");
+    assert_eq!(tasks[0]["priority"], 0);
+
+    let status = stdout(&ok(run(furmi(home.path()).args(["status", "--json"]))));
+    let status: serde_json::Value = serde_json::from_str(&status).expect(&status);
+    assert_eq!(status["runner"]["running"], false);
+    assert_eq!(status["queue"]["pending"], 1);
+    assert_eq!(status["archive"]["done"], 0);
+}
+
+#[test]
+fn completions_and_the_grouped_help_are_there() {
+    let home = tempfile::tempdir().unwrap();
+    let script = stdout(&ok(run(furmi(home.path()).args(["completions", "bash"]))));
+    assert!(
+        script.contains("_furmi"),
+        "{}",
+        &script[..200.min(script.len())]
+    );
+    let help = stdout(&ok(run(furmi(home.path()).arg("--help"))));
+    for heading in [
+        "Everyday:",
+        "One task:",
+        "Repeating and reusing:",
+        "Set up and look after:",
+    ] {
+        assert!(help.contains(heading), "{help}");
+    }
+}
+
+#[test]
+fn a_schedule_can_be_run_now_and_stays_as_it_was() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    let repo_arg = repo.path().display().to_string();
+    ok(run(furmi(home.path()).args([
+        "schedule",
+        "add",
+        "--cron",
+        "0 3 * * *",
+        "--repo",
+        &repo_arg,
+        "--no-worktree",
+        "--id",
+        "nightly",
+        "tidy up",
+    ])));
+    let before = std::fs::read_to_string(home.path().join("schedules/nightly.md")).unwrap();
+    let out = stdout(&ok(run(
+        furmi(home.path()).args(["schedule", "run", "nightly"])
+    )));
+    assert!(out.contains("Queued `nightly-"), "{out}");
+    let tasks: Vec<_> = std::fs::read_dir(home.path().join("tasks"))
+        .unwrap()
+        .collect();
+    assert_eq!(tasks.len(), 1);
+    let file = std::fs::read_to_string(tasks[0].as_ref().unwrap().path()).unwrap();
+    assert!(file.contains("created_by: schedule:nightly"), "{file}");
+    assert_eq!(
+        std::fs::read_to_string(home.path().join("schedules/nightly.md")).unwrap(),
+        before
+    );
+    failed(run(furmi(home.path()).args(["schedule", "run", "nope"])));
+}
+
+#[test]
+fn web_settings_permissions_and_notifications_round_trip_through_config() {
+    let home = tempfile::tempdir().unwrap();
+    init(home.path());
+    let port = 18393u16;
+    let mut child = furmi(home.path())
+        .args(["web", "--port", &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let token = page_token(port);
+
+    // claude is a real preset here, so it asks how far it may go; the answer
+    // is kept in [unattended] and nothing else in config.toml is lost.
+    let before = std::fs::read_to_string(home.path().join("config.toml")).unwrap();
+    let agents = http_get(port, "/api/agents");
+    assert!(agents.contains("\"unattended\":\"unset\""), "{agents}");
+    let allowed = http_post(
+        port,
+        &token,
+        "/api/agents/allow",
+        r#"{"agent":"claude","level":"edits"}"#,
+    );
+    assert!(allowed.starts_with("HTTP/1.1 200"), "{allowed}");
+    let after = std::fs::read_to_string(home.path().join("config.toml")).unwrap();
+    assert!(
+        after.contains("[unattended]\nclaude = \"edits\""),
+        "{after}"
+    );
+    assert!(
+        after.starts_with(before.trim_end()),
+        "the rest of config.toml is kept"
+    );
+    let refused = http_post(
+        port,
+        &token,
+        "/api/agents/allow",
+        r#"{"agent":"claude","level":"everything"}"#,
+    );
+    assert!(refused.starts_with("HTTP/1.1 400"), "{refused}");
+
+    let saved = http_post(
+        port,
+        &token,
+        "/api/notify",
+        r#"{"on":["failed"],"ntfy_url":"https://ntfy.example","ntfy_topic":"t","telegram_chat_id":""}"#,
+    );
+    assert!(saved.starts_with("HTTP/1.1 200"), "{saved}");
+    let settings = http_get(port, "/api/settings");
+    assert!(settings.contains("\"ntfy_topic\":\"t\""), "{settings}");
+    assert!(settings.contains("\"failed\""), "{settings}");
+    // Nothing secret is ever in what the page can read.
+    assert!(
+        !settings.to_lowercase().contains("token\":\""),
+        "{settings}"
+    );
+
+    let bad = http_post(
+        port,
+        &token,
+        "/api/notify",
+        r#"{"on":["failed"],"ntfy_url":"ftp://x","ntfy_topic":"t"}"#,
+    );
+    assert!(bad.starts_with("HTTP/1.1 400"), "{bad}");
+
+    // A browser that asks for an address that isn't there gets a page.
+    let missing = http(
+        port,
+        "GET",
+        "/nope",
+        &format!("127.0.0.1:{port}"),
+        &[("Accept", "text/html")],
+        "",
+    );
+    assert!(
+        missing.starts_with("HTTP/1.1 404") && missing.contains("Back to the dashboard"),
+        "{missing}"
+    );
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}

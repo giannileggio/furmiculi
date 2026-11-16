@@ -32,13 +32,66 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 use crate::home::Home;
 
+/// What `furmi --help` shows: the commands in the order someone needs them,
+/// with a line each. `furmi help <command>` has the whole story, and a test
+/// keeps this list and the commands from drifting apart.
+const HELP: &str = "\
+{about-with-newline}
+{usage-heading} {usage}
+
+Everyday:
+  add         Queue a task: a prompt for an agent, or --run for a shell command
+  start       Run the queue and open the dashboard (-d keeps it in the background)
+  ls          See the queue (--archive for finished work, --json for scripts)
+  open        Open the running dashboard in your browser, signed in
+  status      Is the runner alive, and what is queued
+  stop        Stop the dashboard and the runner (work underway keeps going)
+
+One task:
+  queue       Let the runner have a draft
+  duplicate   Copy any task into a new draft
+  logs        Print a task's output
+  attach      Watch a running task in tmux
+  done        Finish a task: runs its when-done step and archives it
+  fail        Give up on a task without retrying
+  cancel      Drop a draft, waiting or running task
+  retry       Put a failed or cancelled task back in the queue
+
+Repeating and reusing:
+  schedule    Tasks that queue themselves on a cron schedule
+  template    Tasks to start new ones from
+
+Several machines:
+  node        Show other machines' queues in this dashboard
+
+Set up and look after:
+  agents      Which coding agents are installed, the default, how far each may go
+  doctor      Check that tasks can run here
+  validate    Check the task and schedule files
+  clean       Remove the worktrees and logs of finished tasks
+  update      Install a new release
+  restart     Start the dashboard and runner again on the installed binary
+  service     Units that keep the runner and dashboard up (systemd, launchd)
+  pause       Hold the runner: nothing new starts (`resume` undoes it)
+  resume      Let the runner start work again
+  init        Create the data folder and the files agents use
+  completions Print a shell completion script
+
+Underneath:
+  run         The runner, in the foreground
+  web         The dashboard, in the foreground
+
+`furmi help <command>` explains one in full.
+
+{options}";
+
 /// Queue and run coding-agent tasks defined as Markdown files.
 #[derive(Parser)]
-#[command(name = "furmi", version)]
+#[command(name = "furmi", version, help_template = HELP)]
 struct Cli {
     /// Data folder [default: $FURMI_HOME or ~/.furmiculi]
     #[arg(long, global = true)]
@@ -64,6 +117,9 @@ enum Command {
         /// Refresh interval when watching, e.g. 2s.
         #[arg(long, value_parser = humantime::parse_duration, default_value = "2s")]
         interval: std::time::Duration,
+        /// Print the tasks as JSON, for scripts, instead of a table.
+        #[arg(long, conflicts_with_all = ["watch", "schedules"])]
+        json: bool,
     },
     /// Create a new task file.
     Add(Box<cmd::AddArgs>),
@@ -182,7 +238,16 @@ enum Command {
     /// instead.
     Restart,
     /// Show whether the runner is alive, the queue and failing schedules.
-    Status,
+    Status {
+        /// Print it as JSON, for scripts.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print a completion script for your shell (bash, zsh, fish, ...).
+    ///
+    /// For example `furmi completions zsh > ~/.zfunc/_furmi`, or
+    /// `source <(furmi completions bash)`.
+    Completions { shell: clap_complete::Shell },
     /// Install a new release over this one, keeping the same install.
     ///
     /// Only for installs made by the release installer, which is what leaves
@@ -266,7 +331,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             | Command::Run { .. }
             | Command::Web(_)
             | Command::Start(_)
-            | Command::Status
+            | Command::Status { .. }
             | Command::Agents { .. }
     ) {
         cmd::ensure_ready(&home)?;
@@ -278,7 +343,14 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             schedules,
             watch,
             interval,
-        } => cmd::ls(&home, archive, schedules, watch.then_some(interval))?,
+            json,
+        } => {
+            if json {
+                cmd::ls_json(&home, archive)?
+            } else {
+                cmd::ls(&home, archive, schedules, watch.then_some(interval))?
+            }
+        }
         Command::Add(args) => cmd::add(&home, *args)?,
         Command::Schedule(command) => schedule_cmd::run(&home, command)?,
         Command::Template(command) => template_cmd::run(&home, command)?,
@@ -310,7 +382,15 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Clean(args) => clean::clean(&home, args)?,
         Command::Web(args) => web::serve(&home, args)?,
         Command::Start(args) => web::start(&home, args)?,
-        Command::Status => doctor::status(&home)?,
+        Command::Status { json: true } => doctor::status_json(&home)?,
+        Command::Status { json: false } => doctor::status(&home)?,
+        Command::Completions { shell } => {
+            // Into a buffer first: a reader that stops early (`| head`) is
+            // not a crash.
+            let mut script = Vec::new();
+            clap_complete::generate(shell, &mut Cli::command(), "furmi", &mut script);
+            let _ = std::io::Write::write_all(&mut std::io::stdout(), &script);
+        }
         Command::Agents { action } => match action {
             None => cmd::agents(&home)?,
             Some(AgentsAction::Use { name }) => cmd::use_agent(&home, &name)?,
@@ -361,4 +441,27 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Exec { id, status_file } => return run::exec(&home, &id, &status_file),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_command_is_in_the_grouped_help_and_nothing_else_is() {
+        let listed: Vec<&str> = HELP
+            .lines()
+            .filter(|l| l.starts_with("  ") && !l.starts_with("   "))
+            .filter_map(|l| l.split_whitespace().next())
+            .collect();
+        let mut real: Vec<String> = Cli::command()
+            .get_subcommands()
+            .filter(|c| !c.is_hide_set() && c.get_name() != "help")
+            .map(|c| c.get_name().to_string())
+            .collect();
+        real.sort();
+        let mut shown: Vec<String> = listed.iter().map(|s| s.to_string()).collect();
+        shown.sort();
+        assert_eq!(shown, real, "src/main.rs's HELP and the commands disagree");
+    }
 }

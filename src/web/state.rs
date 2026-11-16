@@ -64,6 +64,8 @@ struct Row {
     /// Why a waiting task hasn't started, when it is waiting on other tasks.
     #[serde(skip_serializing_if = "Option::is_none")]
     waits: Option<String>,
+    /// How many attempts it has had, for the log viewer's picker.
+    attempts: u32,
     /// Tasks it runs after, and its place in the queue (0 unless set).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     after: Vec<String>,
@@ -601,6 +603,7 @@ fn to_row(t: &Task, config: &Config) -> Row {
         model_source,
         error: t.error.clone().filter(|e| !e.trim().is_empty()),
         waits: None,
+        attempts: t.attempts,
         after: t.spec.after.clone(),
         priority: t.spec.priority.unwrap_or(0),
     }

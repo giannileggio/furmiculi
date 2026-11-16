@@ -80,22 +80,18 @@ test("a running task can be marked done or failed from its row, and dropped befo
   await row(page, "finish-me").getByRole("button", { name: "Mark done" }).click();
 
   // "Mark failed" asks for a reason, which is kept on the task.
-  page.once("dialog", (d) => {
-    expect(d.type()).toBe("prompt");
-    void d.accept("changed my mind");
-  });
   await row(page, "quit-me").getByRole("button", { name: "Mark failed" }).click();
+  await page.locator("#ask-input").fill("changed my mind");
+  await page.locator("#ask-ok").click();
 
-  // Dismissing the reason prompt leaves the task alone.
-  page.once("dialog", (d) => void d.dismiss());
+  // Cancelling the question leaves the task alone.
   await row(page, "drop-me").getByRole("button", { name: "Mark failed" }).click();
+  await page.locator("#ask-cancel").click();
   await expect(row(page, "drop-me").locator(".badge")).toHaveText("Working");
 
-  page.once("dialog", (d) => {
-    expect(d.message()).toContain("drop-me");
-    void d.accept("");
-  });
   await row(page, "drop-me").getByRole("button", { name: "Mark failed" }).click();
+  await expect(page.locator("#ask-title")).toContainText("drop-me");
+  await page.locator("#ask-ok").click();
 
   await expect(count(page, "running")).toHaveText("0");
   await tab(page, "archive").click();
