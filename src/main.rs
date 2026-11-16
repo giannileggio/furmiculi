@@ -222,6 +222,15 @@ enum Command {
 enum AgentsAction {
     /// Make an agent the default for tasks that don't name one.
     Use { name: String },
+    /// Say how far an agent may go when nobody is there to answer its
+    /// permission prompts: `edits` (edit files in the task's workspace),
+    /// `all` (edit and run anything, no sandbox) or `ask` (add no flags, so
+    /// it stops at the first prompt).
+    Allow {
+        name: String,
+        #[arg(value_parser = ["ask", "edits", "all"])]
+        level: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -305,6 +314,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Agents { action } => match action {
             None => cmd::agents(&home)?,
             Some(AgentsAction::Use { name }) => cmd::use_agent(&home, &name)?,
+            Some(AgentsAction::Allow { name, level }) => cmd::allow_agent(&home, &name, &level)?,
         },
         Command::Open { print } => web::open(&home, print)?,
         Command::Stop => {

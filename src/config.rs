@@ -17,6 +17,10 @@ max_parallel = 3            # tasks running at once, overall
 max_parallel_per_repo = 1   # tasks running at once in the same repo
 tmux_session = "furmi"      # one session, one window per task
 poll_interval = "30s"       # how often `furmi run` rescans the folders
+# strip_env = ["GITHUB_TOKEN"]   # variables tasks don't inherit (furmi's own
+#                                # notification tokens never reach them)
+# daily_token_budget = 5000000   # hold the queue once today's tasks used this
+#                                # many tokens; running ones still finish
 
 # Fallbacks for any field a task or schedule doesn't set.
 [defaults]
@@ -27,6 +31,11 @@ on_finish = "none"          # none | commit | push | pr
 retries = 1                 # extra attempts after a failure
 retry_delay = "5m"
 timeout = "2h"
+commit_guard = true         # on_finish won't commit a `.env`, a private key or a 10 MB file
+# base = "origin/main"      # what a task's new branch starts from (fetched
+#                           # first); unset: whatever the repo has checked out
+# setup = "npm ci"          # run in each task's workspace before its first
+#                           # attempt; $FURMI_REPO is the repo it came from
 
 # How to launch each agent, as argv lists (no shell involved).
 # Placeholders: {prompt} {id}. `model_args` is appended only when a task (or
@@ -39,11 +48,14 @@ timeout = "2h"
 # `provider  model` table. Only where the CLI can answer; leave it out and the
 # form still takes any model you type. Answers are kept an hour.
 #
-# Headless runs can't answer permission prompts: add each agent's
-# auto-approve flags (e.g. claude "--permission-mode", "acceptEdits";
-# codex "--full-auto"; gemini "--yolo"; hermes "--yolo") to suit your trust
-# level. hermes' one-shot `-z` bypasses approvals on its own, so it needs
-# nothing extra.
+# Headless runs can't answer permission prompts, so an agent that asks stops
+# there. `[unattended]` below says how far each may go; flags you put on a
+# `headless` line yourself take its place. hermes' one-shot `-z` and pi don't
+# ask, and opencode reads its permissions from its own config.
+#
+# {prompt} is one argument. For a prompt too big or too private for a command
+# line (`ps` shows it), {prompt_file} is the path of a file holding it, e.g.
+#   headless = ["sh", "-c", "claude -p < {prompt_file}"]
 #
 # claude's headless preset asks for `--output-format json`, and pi's for
 # `--mode json`: furmi parses those for token usage (see
@@ -81,6 +93,16 @@ headless = ["pi", "--mode", "json", "{prompt}"]
 interactive = ["pi", "{prompt}"]
 model_args = ["--model", "{model}"]
 models_cmd = ["pi", "--list-models"]
+
+# How far each agent may go when nobody is there to answer its prompts:
+#   "edits"  edit files in the task's workspace; commands still need approval
+#   "all"    edit and run anything, with no approval and no sandbox
+#   "ask"    add nothing (the agent stops at its first prompt)
+# `furmi agents allow <agent> <level>` and the dashboard's Setup write this.
+# [unattended]
+# claude = "edits"   # --permission-mode acceptEdits   | all: --dangerously-skip-permissions
+# codex = "edits"    # --full-auto                     | all: --dangerously-bypass-approvals-and-sandbox
+# gemini = "edits"   # --approval-mode auto_edit       | all: --yolo
 
 # The runner tidies up after itself, at start and then every `interval`: it
 # removes the clean worktrees of done tasks, trims old attempt logs, requeues
@@ -141,6 +163,171 @@ pub struct Config {
     pub web: Web,
     pub notify: crate::notify::Notify,
     pub housekeeping: Housekeeping,
+    /// `[unattended]`: how far each agent may go without asking when nobody
+    /// is there to answer, by agent name (see [`Leash`]).
+    pub unattended: BTreeMap<String, Leash>,
+}
+
+/// How far an agent may go without asking, in a headless run. An agent's own
+/// permission prompt can't be answered there, so one that would ask simply
+/// stops: the task ends having changed nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Leash {
+    /// Nothing is added: the agent asks, and so does nothing unattended.
+    Ask,
+    /// It may edit files in its workspace; commands still need approval.
+    Edits,
+    /// It may edit and run anything, with no approval and no sandbox.
+    All,
+}
+
+impl Leash {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Leash::Ask => "ask",
+            Leash::Edits => "edits",
+            Leash::All => "all",
+        }
+    }
+
+    pub fn parse(text: &str) -> Result<Self> {
+        match text {
+            "ask" => Ok(Leash::Ask),
+            "edits" => Ok(Leash::Edits),
+            "all" => Ok(Leash::All),
+            other => bail!("`{other}` isn't one of ask, edits, all"),
+        }
+    }
+}
+
+/// The flags that let each preset act unattended: `(agent, edits, all)`.
+/// Agents not listed need none: hermes' one-shot `-z` and pi don't ask, and
+/// opencode takes its permissions from its own config file.
+const UNATTENDED_FLAGS: &[(&str, &[&str], &[&str])] = &[
+    (
+        "claude",
+        &["--permission-mode", "acceptEdits"],
+        &["--dangerously-skip-permissions"],
+    ),
+    (
+        "codex",
+        &["--full-auto"],
+        &["--dangerously-bypass-approvals-and-sandbox"],
+    ),
+    ("gemini", &["--approval-mode", "auto_edit"], &["--yolo"]),
+];
+
+/// Flags that mean the agent's own argv already says how far it may go, so
+/// furmi adds nothing and warns about nothing.
+const APPROVAL_FLAGS: &[&str] = &[
+    "--permission-mode",
+    "--dangerously-skip-permissions",
+    "--allowedTools",
+    "--allowed-tools",
+    "--full-auto",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--sandbox",
+    "--ask-for-approval",
+    "--approval-mode",
+    "--yolo",
+];
+
+/// Where an agent stands on acting unattended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unattended {
+    /// This agent doesn't ask (or furmi doesn't know its flags).
+    NotNeeded,
+    /// Its `headless` argv carries approval flags of its own.
+    Custom,
+    /// `[unattended]` says how far it may go.
+    Set(Leash),
+    /// It would ask, and nothing says what to answer: it will stop there.
+    Unset,
+}
+
+impl Unattended {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Unattended::NotNeeded => "not_needed",
+            Unattended::Custom => "custom",
+            Unattended::Set(leash) => leash.as_str(),
+            Unattended::Unset => "unset",
+        }
+    }
+}
+
+/// The flags furmi knows for `name`, as `(edits, all)`.
+pub fn unattended_flags(name: &str) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    UNATTENDED_FLAGS
+        .iter()
+        .find(|(n, ..)| *n == name)
+        .map(|(_, edits, all)| (*edits, *all))
+}
+
+impl Config {
+    pub fn unattended(&self, name: &str) -> Unattended {
+        let Some(agent) = self.agents.get(name) else {
+            return Unattended::NotNeeded;
+        };
+        if agent
+            .headless
+            .iter()
+            .any(|a| APPROVAL_FLAGS.contains(&a.as_str()))
+        {
+            return Unattended::Custom;
+        }
+        // The flags are the preset program's: an agent called `claude` that
+        // runs something else is none of furmi's business.
+        let is_preset = agent
+            .headless
+            .first()
+            .is_some_and(|p| Path::new(p).file_name().and_then(|f| f.to_str()) == Some(name));
+        if unattended_flags(name).is_none() || !is_preset {
+            return Unattended::NotNeeded;
+        }
+        match self.unattended.get(name) {
+            Some(leash) => Unattended::Set(*leash),
+            None => Unattended::Unset,
+        }
+    }
+
+    /// What to add to `name`'s headless argv so it can act unattended.
+    pub fn unattended_args(&self, name: &str) -> Vec<String> {
+        let flags = match (self.unattended(name), unattended_flags(name)) {
+            (Unattended::Set(Leash::Edits), Some((edits, _))) => edits,
+            (Unattended::Set(Leash::All), Some((_, all))) => all,
+            _ => return Vec::new(),
+        };
+        flags.iter().map(|f| f.to_string()).collect()
+    }
+}
+
+/// Sets how far `name` may go unattended, in `[unattended]` of the config
+/// file, leaving the rest of the file as it was.
+pub fn set_unattended(path: &Path, name: &str, leash: Leash) -> Result<()> {
+    let config = Config::load(path)?;
+    match config.unattended(name) {
+        Unattended::NotNeeded if !config.agents.contains_key(name) => {
+            let known: Vec<_> = config.agents.keys().map(String::as_str).collect();
+            bail!("unknown agent `{name}` (configured: {})", known.join(", "));
+        }
+        Unattended::NotNeeded => bail!(
+            "`{name}` needs nothing here: it doesn't ask before acting, or furmi doesn't know \
+             its flags (add them to its `headless` line in config.toml)"
+        ),
+        Unattended::Custom => bail!(
+            "`{name}`'s `headless` line in config.toml already carries its own approval \
+             flags; change them there"
+        ),
+        _ => {}
+    }
+    set_keys(
+        path,
+        "unattended",
+        &[(name, toml_str(leash.as_str()))],
+        |c| c.unattended.get(name) == Some(&leash),
+    )
 }
 
 /// `[housekeeping]`: the runner's low-frequency tidy-up pass (see
@@ -209,6 +396,13 @@ pub struct Runner {
     pub tmux_session: String,
     #[serde(with = "humantime_serde")]
     pub poll_interval: Duration,
+    /// Environment variables kept from the agents and commands tasks run, on
+    /// top of furmi's own secrets (its notification tokens), which never
+    /// reach them. For a token the runner's shell has and a task shouldn't.
+    pub strip_env: Vec<String>,
+    /// Stop starting tasks once today's finished tasks have used this many
+    /// tokens (in and out together). Unset: no limit. Running tasks finish.
+    pub daily_token_budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -223,6 +417,13 @@ pub struct Defaults {
     pub retry_delay: Duration,
     #[serde(with = "humantime_serde")]
     pub timeout: Duration,
+    /// What a task's new branch starts from when it doesn't say (`origin/main`).
+    pub base: Option<String>,
+    /// A shell command run in each task's workspace before its first attempt.
+    pub setup: Option<String>,
+    /// Refuse `on_finish` when the commit would take a file that looks like a
+    /// secret (`.env`, a private key) or a very large one.
+    pub commit_guard: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -250,6 +451,8 @@ impl Default for Runner {
             max_parallel_per_repo: 1,
             tmux_session: "furmi".into(),
             poll_interval: Duration::from_secs(30),
+            strip_env: Vec::new(),
+            daily_token_budget: None,
         }
     }
 }
@@ -264,6 +467,9 @@ impl Default for Defaults {
             retries: 1,
             retry_delay: Duration::from_secs(5 * 60),
             timeout: Duration::from_secs(2 * 60 * 60),
+            base: None,
+            setup: None,
+            commit_guard: true,
         }
     }
 }
@@ -277,6 +483,7 @@ impl Default for Config {
             web: Web::default(),
             notify: Default::default(),
             housekeeping: Housekeeping::default(),
+            unattended: BTreeMap::new(),
         }
     }
 }
@@ -378,6 +585,12 @@ pub struct AgentStatus {
     pub is_default: bool,
     /// A command that installs it, for the built-in presets.
     pub install: Option<&'static str>,
+    /// Where it stands on acting unattended: `not_needed`, `custom`, `unset`,
+    /// or the level set (`ask`, `edits`, `all`).
+    pub unattended: &'static str,
+    /// The flags each level adds, for the setup views to show.
+    pub edits_flags: Option<String>,
+    pub all_flags: Option<String>,
 }
 
 /// Every configured agent, built-in presets first in their usual order.
@@ -400,6 +613,9 @@ pub fn agent_statuses(config: &Config) -> Vec<AgentStatus> {
                     .iter()
                     .find(|(n, _)| n == name)
                     .map(|(_, cmd)| *cmd),
+                unattended: config.unattended(name).as_str(),
+                edits_flags: unattended_flags(name).map(|(edits, _)| edits.join(" ")),
+                all_flags: unattended_flags(name).map(|(_, all)| all.join(" ")),
                 name: name.clone(),
                 program,
             }
@@ -1065,5 +1281,60 @@ mod tests {
     #[test]
     fn rejects_typos() {
         assert!(Config::parse("[runner]\nmax_paralel = 2\n").is_err());
+    }
+
+    #[test]
+    fn unattended_levels_add_each_presets_own_flags() {
+        use super::{Config, Leash, Unattended};
+        let c =
+            Config::parse("[unattended]\nclaude = \"edits\"\ncodex = \"all\"\ngemini = \"ask\"\n")
+                .unwrap();
+        assert_eq!(c.unattended("claude"), Unattended::Set(Leash::Edits));
+        assert_eq!(
+            c.unattended_args("claude"),
+            ["--permission-mode", "acceptEdits"]
+        );
+        assert_eq!(
+            c.unattended_args("codex"),
+            ["--dangerously-bypass-approvals-and-sandbox"]
+        );
+        assert!(c.unattended_args("gemini").is_empty());
+        // Agents that don't ask need nothing, and nothing warns about them.
+        assert_eq!(c.unattended("pi"), Unattended::NotNeeded);
+        assert_eq!(Config::default().unattended("claude"), Unattended::Unset);
+
+        // Flags already on the headless line are the user's own: nothing is
+        // added on top, whatever [unattended] says.
+        let own = Config::parse(
+            "[unattended]\nclaude = \"all\"\n[agents.claude]\n\
+             headless = [\"claude\", \"-p\", \"{prompt}\", \"--permission-mode\", \"plan\"]\n\
+             interactive = [\"claude\"]\n",
+        )
+        .unwrap();
+        assert_eq!(own.unattended("claude"), Unattended::Custom);
+        assert!(own.unattended_args("claude").is_empty());
+
+        // An agent that only shares a preset's name isn't given its flags.
+        let other = Config::parse(
+            "[agents.claude]\nheadless = [\"sh\", \"-c\", \"{prompt}\"]\ninteractive = [\"sh\"]\n",
+        )
+        .unwrap();
+        assert_eq!(other.unattended("claude"), Unattended::NotNeeded);
+    }
+
+    #[test]
+    fn set_unattended_writes_the_table_and_keeps_the_rest() {
+        use super::{Config, Leash};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, super::default_config_toml(Some("claude"))).unwrap();
+        super::set_unattended(&path, "claude", Leash::Edits).unwrap();
+        super::set_unattended(&path, "claude", Leash::All).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("\n[unattended]\n").count(), 1, "{text}");
+        let c = Config::load(&path).unwrap();
+        assert_eq!(c.unattended.get("claude"), Some(&Leash::All));
+        assert_eq!(c.defaults.agent.as_deref(), Some("claude"));
+        assert!(super::set_unattended(&path, "pi", Leash::All).is_err());
     }
 }

@@ -67,6 +67,11 @@ fn setup(home: &Home, agent: Option<String>, global_skill: Option<Option<bool>>)
         crate::fsutil::write_atomic(&config, default_config_toml(agent.as_deref()))?;
         skill::note(format_args!("wrote {}", config.display()));
     }
+    if let Ok(config) = Config::load(&config)
+        && let Some(agent) = config.defaults.agent.clone()
+    {
+        ask_unattended(home, &agent)?;
+    }
     template::install_starters(home)?;
     skill::install_in_home(home)?;
     if let Some(choice) = global_skill {
@@ -150,6 +155,73 @@ pub fn use_agent(home: &Home, name: &str) -> Result<()> {
                 .unwrap_or_default()
         );
     }
+    Ok(())
+}
+
+/// `furmi agents allow <name> <level>`: how far an agent may go unattended.
+pub fn allow_agent(home: &Home, name: &str, level: &str) -> Result<()> {
+    let leash = crate::config::Leash::parse(level)?;
+    crate::config::set_unattended(&home.config_path(), name, leash)?;
+    let flags = crate::config::unattended_flags(name).map(|(edits, all)| match leash {
+        crate::config::Leash::Edits => edits.join(" "),
+        crate::config::Leash::All => all.join(" "),
+        crate::config::Leash::Ask => String::new(),
+    });
+    match (leash, flags) {
+        (crate::config::Leash::Ask, _) => println!(
+            "`{name}` gets no approval flags: unattended, it will stop at its first permission prompt."
+        ),
+        (_, Some(flags)) => println!(
+            "`{name}` now runs unattended tasks with `{flags}`. Tasks already running aren't affected."
+        ),
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Asks, once and only on a terminal, how far the default agent may go when
+/// nobody is there to answer it. Without an answer an agent that asks before
+/// editing would finish its first task having changed nothing.
+fn ask_unattended(home: &Home, agent: &str) -> Result<()> {
+    use crate::config::{Leash, Unattended};
+    let config = Config::load(&home.config_path())?;
+    if config.unattended(agent) != Unattended::Unset {
+        return Ok(());
+    }
+    let Some((edits, all)) = crate::config::unattended_flags(agent) else {
+        return Ok(());
+    };
+    if !std::io::stdin().is_terminal() {
+        println!(
+            "Note: unattended, `{agent}` stops at its first permission prompt. \
+             `furmi agents allow {agent} edits` (or `all`) lets it work."
+        );
+        return Ok(());
+    }
+    println!(
+        "\nTasks run with nobody there to answer {agent}'s permission prompts. How far may it go?"
+    );
+    println!(
+        "  1) edit files in the task's own workspace   ({})",
+        edits.join(" ")
+    );
+    println!(
+        "  2) edit and run anything, no sandbox        ({})",
+        all.join(" ")
+    );
+    println!("  3) neither: it will stop and wait (or I'll set its flags in config.toml)");
+    let leash = loop {
+        match skill::prompt("Choose [1]: ")?.as_str() {
+            "" | "1" => break Leash::Edits,
+            "2" => break Leash::All,
+            "3" => break Leash::Ask,
+            _ => println!("  1, 2 or 3"),
+        }
+    };
+    crate::config::set_unattended(&home.config_path(), agent, leash)?;
+    println!(
+        "Saved under [unattended] in config.toml; `furmi agents allow {agent} <level>` changes it."
+    );
     Ok(())
 }
 
@@ -408,6 +480,20 @@ pub struct AddArgs {
     /// are used, and anything given here replaces them.
     #[arg(long)]
     template: Option<String>,
+    /// What the task's new branch starts from, e.g. `origin/main` (fetched
+    /// first). Default: whatever the repo has checked out.
+    #[arg(long)]
+    base: Option<String>,
+    /// A shell command to run in the task's workspace before its first
+    /// attempt, e.g. `npm ci`. `$FURMI_REPO` is the repo it came from.
+    #[arg(long)]
+    setup: Option<String>,
+    /// Start only after this task has finished as done. Repeatable.
+    #[arg(long, value_name = "ID")]
+    after: Vec<String>,
+    /// Start before waiting tasks with a lower number (default 0).
+    #[arg(long, allow_hyphen_values = true)]
+    priority: Option<i32>,
 }
 
 /// Everything needed to queue a task, from the CLI or the dashboard.
@@ -539,6 +625,10 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
             .or_else(|| base.and_then(|s| s.retry_delay)),
         timeout: args.timeout.or_else(|| base.and_then(|s| s.timeout)),
         run: args.run.or_else(|| base.and_then(|s| s.run.clone())),
+        base: args.base.or_else(|| base.and_then(|s| s.base.clone())),
+        setup: args.setup.or_else(|| base.and_then(|s| s.setup.clone())),
+        after: args.after,
+        priority: args.priority.or_else(|| base.and_then(|s| s.priority)),
     };
     let scheduled_at = match (args.at, args.delay) {
         (Some(at), _) => Some(at),

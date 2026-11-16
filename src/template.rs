@@ -391,6 +391,10 @@ Review the changes on this branch.
                 retry_delay: None,
                 timeout: None,
                 run: None,
+                base: None,
+                setup: None,
+                after: Vec::new(),
+                priority: None,
             },
             "Fix it.".into(),
         );

@@ -61,6 +61,13 @@ struct Row {
     summary: String,
     /// Why a failed (or otherwise unfinished) task ended up that way.
     error: Option<String>,
+    /// Why a waiting task hasn't started, when it is waiting on other tasks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    waits: Option<String>,
+    /// Tasks it runs after, and its place in the queue (0 unless set).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    after: Vec<String>,
+    priority: i32,
 }
 
 #[derive(Serialize)]
@@ -148,6 +155,9 @@ struct State {
     form: FormInfo,
     /// Problems and suggestions from the runner's last housekeeping pass.
     health: Vec<crate::run::Health>,
+    /// Today's token use against the budget, when one is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    budget: Option<crate::run::Budget>,
 }
 
 /// Loads every file in `paths`, setting aside the ones that don't parse
@@ -350,7 +360,13 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
         home: contract_tilde(home.root()),
         generated_at: fmt_time(now()),
         counts,
-        queue: queue_tasks.iter().map(|t| to_row(t, &config)).collect(),
+        queue: queue_tasks
+            .iter()
+            .map(|t| Row {
+                waits: crate::run::blocked_by(home, t),
+                ..to_row(t, &config)
+            })
+            .collect(),
         drafts: draft_tasks.iter().map(|t| to_row(t, &config)).collect(),
         running: running_tasks.iter().map(|t| to_row(t, &config)).collect(),
         archive: archive_tasks.iter().map(|t| to_row(t, &config)).collect(),
@@ -366,6 +382,7 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
         },
         form,
         health: crate::run::load_health(home),
+        budget: crate::run::budget(home, &config, now()),
     };
     Ok(serde_json::to_string(&state)?)
 }
@@ -551,6 +568,9 @@ fn to_row(t: &Task, config: &Config) -> Row {
         model,
         model_source,
         error: t.error.clone().filter(|e| !e.trim().is_empty()),
+        waits: None,
+        after: t.spec.after.clone(),
+        priority: t.spec.priority.unwrap_or(0),
     }
 }
 
@@ -631,6 +651,10 @@ mod tests {
             retry_delay: None,
             timeout: None,
             run: None,
+            base: None,
+            setup: None,
+            after: Vec::new(),
+            priority: None,
         };
         Task::new(id.into(), spec, "do it".into())
     }
@@ -723,6 +747,10 @@ mod tests {
             retry_delay: None,
             timeout: None,
             run: None,
+            base: None,
+            setup: None,
+            after: Vec::new(),
+            priority: None,
         };
         let mut task = Task::new("t".into(), spec, "do it".into());
         let config = Config::default();
@@ -815,6 +843,10 @@ mod tests {
             retry_delay: None,
             timeout: None,
             run: None,
+            base: None,
+            setup: None,
+            after: Vec::new(),
+            priority: None,
         };
         let mut task = Task::new("t".into(), spec, "do it".into());
         let config = Config::default();
@@ -853,6 +885,10 @@ mod tests {
             retry_delay: None,
             timeout: None,
             run: None,
+            base: None,
+            setup: None,
+            after: Vec::new(),
+            priority: None,
         };
         let mut task = Task::new("t".into(), spec, "do it".into());
         let mut config = Config::default();

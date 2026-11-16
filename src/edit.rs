@@ -266,6 +266,10 @@ pub(crate) fn blank_spec(repo: PathBuf) -> TaskSpec {
         retry_delay: None,
         timeout: None,
         run: None,
+        base: None,
+        setup: None,
+        after: Vec::new(),
+        priority: None,
     }
 }
 
@@ -437,6 +441,10 @@ mod tests {
             retry_delay: None,
             timeout: None,
             run: None,
+            base: None,
+            setup: None,
+            after: Vec::new(),
+            priority: None,
         }
     }
 

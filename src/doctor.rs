@@ -71,6 +71,21 @@ pub fn status(home: &Home) -> Result<()> {
         ),
     }
 
+    if let Ok(config) = Config::load(&home.config_path())
+        && let Some(b) = crate::run::budget(home, &config, crate::task::now())
+    {
+        println!(
+            "budget     {} of {} tokens used today{}",
+            b.spent,
+            b.limit,
+            if b.held {
+                ": the queue is held until tomorrow (runner.daily_token_budget)"
+            } else {
+                ""
+            }
+        );
+    }
+
     if let Some(summary) = crate::version::stale_summary(&crate::version::running(home), CURRENT) {
         println!(
             "version    furmi {CURRENT} is installed; {summary}: `furmi restart` starts them \
@@ -317,6 +332,12 @@ pub fn checks(home: &Home) -> Vec<Check> {
         match program {
             Some(p) if on_path(p) || std::path::Path::new(p).is_file() => {
                 add(Check::Ok(format!("agent `{name}`: `{p}` is installed")));
+                if config.unattended(name) == crate::config::Unattended::Unset {
+                    add(Check::Warn(format!(
+                        "agent `{name}` will stop at its first permission prompt when it runs \
+                         unattended: `furmi agents allow {name} edits` (or `all`) lets it work"
+                    )));
+                }
             }
             Some(p) => add(Check::Warn(format!(
                 "agent `{name}`: `{p}` is not on $PATH"
