@@ -190,6 +190,7 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
             ["api", "templates", id, "edit"] => {
                 mutation_reply(perform_edit_template(home, id, body))
             }
+            ["api", "templates", id, "run"] => created_reply(edit::enqueue_template_now(home, id)),
             ["api", "templates", id, "delete"] => mutation_reply(perform_delete_template(home, id)),
             ["api", "schedules"] => {
                 match perform_create_schedule(home, ctx.cwd_repo.as_deref(), body) {
@@ -212,6 +213,7 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
             ["api", "schedules", id, "resume"] => {
                 mutation_reply(edit::set_schedule_enabled(home, id, true))
             }
+            ["api", "schedules", id, "run"] => created_reply(edit::enqueue_schedule_now(home, id)),
             ["api", "schedules", id, "delete"] => mutation_reply(edit::delete_schedule(home, id)),
             ["api", "defaults"] => mutation_reply(perform_set_defaults(home, body)),
             ["api", "runner", "limits"] => mutation_reply(perform_set_limits(home, body)),
@@ -219,10 +221,6 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
             ["api", "agents", "allow"] => mutation_reply(perform_allow_agent(home, body)),
             ["api", "notify"] => mutation_reply(perform_set_notify(home, body)),
             ["api", "notify", "test"] => mutation_reply(perform_test_notify(home)),
-            ["api", "schedules", id, "run"] => created_reply(
-                crate::config::Config::load(&home.config_path())
-                    .and_then(|config| crate::run::run_now(home, &config, id)),
-            ),
             ["api", "tasks"] => match perform_create(home, ctx.cwd_repo.as_deref(), body) {
                 Ok(id) => json_reply(
                     200,

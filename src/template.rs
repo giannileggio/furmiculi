@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::cmd::md_files;
+use crate::config::Config;
 use crate::frontmatter;
 use crate::fsutil;
 use crate::home::{Home, expand_tilde};
@@ -265,6 +266,33 @@ pub fn update(home: &Home, id: &str, edit: TemplateEdit) -> Result<()> {
         &home.templates().join(format!("{id}.md")),
         template.to_markdown()?,
     )
+}
+
+/// Queues a new task from a template now, in the project it names. A template
+/// that names none is refused: whoever queues it has to say where it runs, as
+/// the New task form does. Returns the task's id.
+pub fn enqueue_now(home: &Home, config: &Config, id: &str) -> Result<String> {
+    let template = Template::find(home, id)?;
+    let problems = template.problems(Some(&home.templates().join(format!("{id}.md"))));
+    if !problems.is_empty() {
+        bail!("can't queue `{id}`: {}", problems.join("; "));
+    }
+    if template.repo().is_none() {
+        bail!("`{id}` names no project: use it from the New task form to choose one");
+    }
+    let (task, _) = crate::cmd::create_task(
+        home,
+        config,
+        crate::cmd::NewTask {
+            prompt: template.prompt.clone(),
+            id: None,
+            spec: template.spec.clone(),
+            scheduled_at: None,
+            created_by: format!("template:{id}"),
+            draft: false,
+        },
+    )?;
+    Ok(task.id)
 }
 
 /// Deletes a template. Tasks made from it stay.

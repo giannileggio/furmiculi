@@ -391,6 +391,23 @@ pub fn set_schedule_enabled(home: &Home, id: &str, enabled: bool) -> Result<()> 
     s.save(&path)
 }
 
+/// Queues one run of a schedule now, outside its cron slot. Returns the task's id.
+pub fn enqueue_schedule_now(home: &Home, id: &str) -> Result<String> {
+    home.ensure_initialized()?;
+    let config = Config::load(&home.config_path())?;
+    let _lock = home.lock()?;
+    let path = schedule_path(home, id)?;
+    crate::run::enqueue_schedule_now(home, &config, &path)
+}
+
+/// Queues one new task from a template now. Returns the task's id.
+pub fn enqueue_template_now(home: &Home, id: &str) -> Result<String> {
+    home.ensure_initialized()?;
+    let config = Config::load(&home.config_path())?;
+    let _lock = home.lock()?;
+    crate::template::enqueue_now(home, &config, id)
+}
+
 /// Deletes the schedule. Tasks it already queued stay.
 pub fn delete_schedule(home: &Home, id: &str) -> Result<()> {
     home.ensure_initialized()?;
@@ -753,6 +770,61 @@ mod tests {
         assert!(!path.exists());
         assert!(delete_schedule(&home, &id).is_err());
         assert_eq!(schedule_ids(&home), vec!["update-deps-2"]);
+    }
+
+    #[test]
+    fn a_schedule_and_a_template_can_be_queued_now() {
+        let (_dir, repo, home, _config) = setup();
+
+        // A run now, outside the cron slot: the schedule's own count is untouched.
+        let id = create_schedule(
+            &home,
+            schedule_form(repo.path(), "Update deps", "0 9 * * *"),
+        )
+        .unwrap();
+        let path = home.schedules().join(format!("{id}.md"));
+        let counted = Schedule::load(&path).unwrap().last_enqueued_at;
+        let queued = enqueue_schedule_now(&home, &id).unwrap();
+        assert!(home.tasks().join(format!("{queued}.md")).exists());
+        assert_eq!(Schedule::load(&path).unwrap().last_enqueued_at, counted);
+        assert_eq!(
+            Task::load(&home.tasks().join(format!("{queued}.md")))
+                .unwrap()
+                .created_by
+                .as_deref(),
+            Some("schedule:update-deps")
+        );
+
+        // The run is still waiting, so another is refused, as the schedule's own would be.
+        let err = enqueue_schedule_now(&home, &id).unwrap_err();
+        assert!(
+            err.to_string().contains("already has a run queued"),
+            "{err}"
+        );
+
+        // A template queues a task in the project it names; one with no project is refused.
+        std::fs::create_dir_all(home.templates()).unwrap();
+        std::fs::write(
+            home.templates().join("fix.md"),
+            format!(
+                "---\nid: fix\ndescription: Fix it\nrepo: {}\non_finish: none\n---\n\nFix the test\n",
+                repo.path().display()
+            ),
+        )
+        .unwrap();
+        let made = enqueue_template_now(&home, "fix").unwrap();
+        assert!(home.tasks().join(format!("{made}.md")).exists());
+        let waiting = || std::fs::read_dir(home.tasks()).unwrap().count();
+        assert_eq!(waiting(), 2, "the schedule's run and the template's task");
+
+        std::fs::write(
+            home.templates().join("loose.md"),
+            "---\nid: loose\n---\n\nDo something\n",
+        )
+        .unwrap();
+        let err = enqueue_template_now(&home, "loose").unwrap_err();
+        assert!(err.to_string().contains("names no project"), "{err}");
+        assert_eq!(waiting(), 2, "a refused template queues nothing");
     }
 
     #[test]

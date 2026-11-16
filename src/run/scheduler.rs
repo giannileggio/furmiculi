@@ -26,6 +26,33 @@ pub(super) fn enqueue_schedules(
     Ok(())
 }
 
+/// Enqueues one run of a schedule now, outside its cron slot. The slot it
+/// would next fire at is left as it was. Returns the new task's id.
+pub fn enqueue_now(home: &Home, config: &Config, path: &Path) -> Result<String> {
+    let s = Schedule::load(path)?;
+    let problems = s.problems(config, Some(path));
+    if !problems.is_empty() {
+        anyhow::bail!("can't enqueue `{}`: {}", s.id, problems.join("; "));
+    }
+    if !s.allow_overlap && has_queued_run(home, &s.id) {
+        anyhow::bail!(
+            "`{}` already has a run queued or running (set `allow_overlap: true` to enqueue anyway)",
+            s.id
+        );
+    }
+    let stamp = Local::now().format("%Y%m%d-%H%M");
+    let base = format!("{}-{stamp}", truncate_id(&s.id, 48));
+    let mut task = Task::new(unique_id(home, &base), s.spec.clone(), s.prompt.clone());
+    task.created_by = Some(format!("schedule:{}", s.id));
+    task.fill_remote();
+    task.create(&home.tasks().join(format!("{}.md", task.id)))?;
+    log(&format!(
+        "enqueued {} from schedule {} by hand",
+        task.id, s.id
+    ));
+    Ok(task.id)
+}
+
 fn enqueue_schedule(
     home: &Home,
     config: &Config,
@@ -92,22 +119,7 @@ pub fn run_now(home: &Home, config: &Config, id: &str) -> Result<String> {
         anyhow::bail!("no schedule `{id}`");
     }
     let _lock = home.lock()?;
-    let s = Schedule::load(&path)?;
-    let problems = s.problems(config, Some(&path));
-    if !problems.is_empty() {
-        anyhow::bail!("can't run it: {}", problems.join("; "));
-    }
-    let now = crate::task::now();
-    let base = format!("{}-{}", truncate_id(&s.id, 48), now.format("%Y%m%d-%H%M"));
-    let mut task = Task::new(unique_id(home, &base), s.spec.clone(), s.prompt.clone());
-    task.created_by = Some(format!("schedule:{}", s.id));
-    task.fill_remote();
-    task.create(&home.tasks().join(format!("{}.md", task.id)))?;
-    log(&format!(
-        "enqueued {} from schedule {} (run now)",
-        task.id, s.id
-    ));
-    Ok(task.id)
+    enqueue_now(home, config, &path)
 }
 
 /// Consecutive failed runs of a schedule at which the runner starts warning.

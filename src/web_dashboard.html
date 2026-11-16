@@ -637,7 +637,7 @@
 <div class="view-head">
   <div><h1 id="view-title">Waiting</h1><p id="view-desc"></p></div>
   <button class="ghost" id="tpl-new" data-action="tpl-new" hidden title="Write a template from scratch">+ New template</button>
-  <button class="ghost" id="select-toggle" data-action="select" hidden title="Tick several tasks and act on them together (x)">Select</button>
+  <button class="ghost" id="select-toggle" data-action="select" hidden title="Tick several rows and act on them together (x)">Select</button>
 </div>
 <div class="warn" id="invalid" hidden></div>
 <div class="warn" id="nodes-down" hidden></div>
@@ -908,7 +908,7 @@
       <li class="k"><kbd>Enter</kbd></li><li>Open the highlighted task</li>
       <li class="k"><kbd>o</kbd></li><li>Show what the agent printed</li>
       <li class="k"><kbd>n</kbd></li><li>New task</li>
-      <li class="k"><kbd>x</kbd></li><li>Select several tasks</li>
+      <li class="k"><kbd>x</kbd></li><li>Select several rows</li>
       <li class="k"><kbd>Esc</kbd></li><li>Close what's open, or clear the search</li>
       <li class="k"><kbd>?</kbd></li><li>This list</li>
     </ul>
@@ -1043,8 +1043,8 @@ let query = "";
 // The row the keyboard is on (its task id), highlighted so j/k has somewhere to
 // go. Clicking a row opens it; j/k only moves.
 let selected = null;
-// Bulk select: whether the tables show a tick box per task, and which ids are
-// ticked. Only tasks can be ticked; a schedule is acted on one at a time.
+// Bulk select: whether the tables show a tick box per row, and which ids are
+// ticked. Tasks, repeating tasks and templates can all be ticked.
 let selecting = false;
 const picked = new Set();
 // The column being sorted, and which way. Nothing is sorted until asked.
@@ -1188,7 +1188,7 @@ const shortId = id => id.includes("@") ? id.slice(0, id.lastIndexOf("@")) : id;
 
 function taskTable(rows, cols, empty, sortable, kind = "task") {
   if (rows.length === 0) return empty || `<div class="empty">Nothing here.</div>`;
-  const pick = selecting && kind === "task";
+  const pick = selecting; // every kind of row can be ticked: tasks, schedules and templates
   const allOn = pick && rows.every(r => picked.has(r.id));
   const head = (pick ? `<th class="pickcell"><input type="checkbox" class="pick" data-pick-all ${allOn ? "checked" : ""}
       aria-label="Select all tasks in this list" title="Select all"></th>` : "") + cols.map(c => {
@@ -1225,7 +1225,8 @@ const ACTIONS_FOR_STATUS = {
   done: [],
 };
 
-const ACTION_LABELS = { queue: "Queue", edit: "Edit", done: "Mark done", fail: "Mark failed", cancel: "Drop it", retry: "Try again", logs: "Output" };
+const ACTION_LABELS = { queue: "Queue", edit: "Edit", done: "Mark done", fail: "Mark failed", cancel: "Drop it", retry: "Try again", logs: "Output",
+  run: "Run now", pause: "Pause", resume: "Resume", delete: "Delete" };
 const ACTION_HELP = {
   queue: "Let the runner have it: it starts as soon as it can.",
   edit: "Change what it will do, where, or when it starts.",
@@ -1237,8 +1238,12 @@ const ACTION_HELP = {
   template: "Keep it as a template to start new tasks from.",
   retry: "Put it back in the queue, in the same workspace.",
   logs: "See what the agent printed.",
+  run: "Add one task from it now, to start as soon as the runner can. Its usual times stay as they are.",
+  pause: "Stop adding tasks until you resume it.",
+  resume: "Start adding tasks again.",
+  delete: "Remove it. Tasks it already added stay.",
 };
-const DANGER_ACTIONS = new Set(["fail", "cancel"]);
+const DANGER_ACTIONS = new Set(["fail", "cancel", "delete"]);
 const CONFIRM_ACTIONS = new Set(["fail", "cancel"]);
 
 // Every node can be changed over ssh; the flag stays for older hubs' rows.
@@ -1396,10 +1401,10 @@ const SCHEDULE_COLS = [
   { key: "repo", label: "Project", render: r =>
       `<div title="${escapeHtml(r.repo)}">${escapeHtml(baseName(r.repo))}</div>` },
   { key: "actions", label: "", render: r => !canAct(r) ? "" : `<div class="actions">
-      <button data-id="${escapeHtml(r.id)}" data-action="sched-run" title="Queue one run now, without waiting for the next slot. Its schedule is unchanged.">Run now</button>
       <button data-id="${escapeHtml(r.id)}" data-action="sched-edit" title="Change what it does or when">Edit</button>
       <button data-id="${escapeHtml(r.id)}" data-action="${r.enabled ? "sched-pause" : "sched-resume"}"
         title="${r.enabled ? "Stop adding tasks until you resume it" : "Start adding tasks again"}">${r.enabled ? "Pause" : "Resume"}</button>
+      <button data-id="${escapeHtml(r.id)}" data-action="sched-run" title="${escapeHtml(ACTION_HELP.run)}">Run now</button>
       <button class="danger" data-id="${escapeHtml(r.id)}" data-action="sched-delete" title="Remove the schedule. Tasks it already added stay.">Delete</button>
     </div>` },
 ];
@@ -1415,6 +1420,7 @@ const TEMPLATE_COLS = [
   { key: "actions", label: "", render: r => `<div class="actions">
       <button data-id="${escapeHtml(r.id)}" data-action="tpl-use" title="Open the New task form with this template filled in">Use</button>
       <button data-id="${escapeHtml(r.id)}" data-action="tpl-edit" title="Change what the template says">Edit</button>
+      ${r.repo ? `<button data-id="${escapeHtml(r.id)}" data-action="tpl-run" title="${escapeHtml(ACTION_HELP.run)}">Run now</button>` : ""}
       <button class="danger" data-id="${escapeHtml(r.id)}" data-action="tpl-delete" title="Delete the template. Tasks made from it stay.">Delete</button>
     </div>` },
 ];
@@ -2390,18 +2396,24 @@ function togglePick(id, on = !picked.has(id)) {
   if (lastState) draw(lastState);
 }
 
-// Every task in the open list: what the header's tick box means.
+// Every row the open list shows a tick for: what the header's tick box means.
 function pickAll(on) {
-  for (const row of document.querySelectorAll(`#panel-${activeTab()} tbody tr[data-kind="task"]`)) {
-    if (on) picked.add(row.dataset.id); else picked.delete(row.dataset.id);
+  for (const box of document.querySelectorAll(`#panel-${activeTab()} input[data-pick]`)) {
+    if (on) picked.add(box.dataset.pick); else picked.delete(box.dataset.pick);
   }
   if (lastState) draw(lastState);
 }
 
-// POSTs one action on one task; the error to show, or null when it worked.
-async function postAction(id, action, body) {
+// Where each kind of row is acted on, and what it's called in the bar.
+const KIND_BASE = { task: "/api/tasks", schedule: "/api/schedules", template: "/api/templates" };
+// [one, many], for the bar and the toast.
+const KIND_NOUN = { task: ["task", "tasks"], schedule: ["schedule", "schedules"], template: ["template", "templates"] };
+const nounFor = (kind, n) => KIND_NOUN[kind][n === 1 ? 0 : 1];
+
+// POSTs one action on one row; the error to show, or null when it worked.
+async function postAction(id, action, body, kind = "task") {
   try {
-    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/${action}`, {
+    const res = await fetch(`${KIND_BASE[kind]}/${encodeURIComponent(id)}/${action}`, {
       method: "POST",
       headers: { "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}`, ...(body ? { "Content-Type": "application/json" } : {}) },
       body,
@@ -2476,33 +2488,61 @@ function allTasks(state) {
   return [...state.drafts, ...state.queue, ...state.running, ...state.archive];
 }
 
-// Only a list of tasks has rows to tick.
+// The kind of row the open list shows: what a tick is on, and what can be done to it.
+const TAB_KIND = { schedules: "schedule", templates: "template" };
+const kindOf = tab => TAB_KIND[tab] || "task";
+
+// Every list but the Stats view has rows to tick.
 function hasTicks() {
-  return !["schedules", "templates", "stats"].includes(activeTab());
+  return activeTab() !== "stats";
+}
+
+// The rows of the open list a tick can go on.
+function tickable(state) {
+  const kind = kindOf(activeTab());
+  if (kind === "schedule") return state.schedules;
+  if (kind === "template") return state.templates;
+  return allTasks(state);
+}
+
+// What every ticked row allows, for the bar. An action one of them can't take
+// is left out: "Mark done" for a mix of waiting and working would fail for half.
+function bulkOffer(kind, rows) {
+  if (rows.length === 0) return [];
+  if (kind === "schedule") {
+    return [
+      "run",
+      ...(rows.some(r => r.enabled) ? ["pause"] : []),
+      ...(rows.some(r => !r.enabled) ? ["resume"] : []),
+      "delete",
+    ];
+  }
+  if (kind === "template") return rows.every(r => r.repo) ? ["run", "delete"] : ["delete"];
+  return BULK_ACTIONS.filter(a => rows.every(r => (ACTIONS_FOR_STATUS[r.status] || []).includes(a)));
 }
 
 function drawBulk(state) {
+  const kind = kindOf(activeTab());
   const toggle = document.getElementById("select-toggle");
-  const tasks = allTasks(state);
-  toggle.hidden = !hasTicks() || tasks.length === 0;
+  const items = tickable(state);
+  toggle.hidden = !hasTicks() || items.length === 0;
   toggle.classList.toggle("on", selecting);
   toggle.textContent = selecting ? "Done selecting" : "Select";
   toggle.setAttribute("aria-pressed", selecting);
 
-  const ids = new Set(tasks.map(r => r.id));
+  const ids = new Set(items.map(r => r.id));
   for (const id of picked) if (!ids.has(id)) picked.delete(id); // it moved on, or is gone
 
   const bar = document.getElementById("bulk");
   bar.hidden = !selecting || !hasTicks();
   if (bar.hidden) return;
-  const rows = tasks.filter(r => picked.has(r.id));
-  const common = BULK_ACTIONS.filter(a => rows.length > 0
-    && rows.every(r => (ACTIONS_FOR_STATUS[r.status] || []).includes(a)));
+  const rows = items.filter(r => picked.has(r.id));
+  const offer = bulkOffer(kind, rows);
   bar.innerHTML = `<span class="n">${rows.length} selected</span>` +
-    (rows.length === 0 ? `<span style="color:var(--muted);padding:0 8px">Tick the tasks to act on</span>` : "") +
-    (rows.length > 0 && common.length === 0
+    (rows.length === 0 ? `<span style="color:var(--muted);padding:0 8px">Tick the ${nounFor(kind, 2)} to act on</span>` : "") +
+    (rows.length > 0 && offer.length === 0
       ? `<span style="color:var(--muted);padding:0 8px">No action fits all of them</span>` : "") +
-    common.map(a => `<button data-bulk="${a}" title="${escapeHtml(ACTION_HELP[a])}" class="${DANGER_ACTIONS.has(a) ? "danger" : ""}">${ACTION_LABELS[a]}</button>`).join("") +
+    offer.map(a => `<button data-bulk="${a}" title="${escapeHtml(ACTION_HELP[a])}" class="${DANGER_ACTIONS.has(a) ? "danger" : ""}">${ACTION_LABELS[a]}</button>`).join("") +
     `<button data-action="select">Done</button>`;
 }
 
@@ -2512,9 +2552,18 @@ function setSelecting(on) {
   if (lastState) draw(lastState);
 }
 
+// One action on one row, from its own button: says how it went, then redraws.
+async function quickAction(kind, id, action) {
+  const error = await postAction(id, action, undefined, kind);
+  toast(error || `${ACTION_LABELS[action]}: ${id}`, !error);
+  await refresh();
+}
+
 async function bulkAction(action) {
+  const kind = kindOf(activeTab());
   const ids = [...picked];
   if (ids.length === 0) return;
+  const n = ids.length;
   let body;
   if (action === "fail") {
     const reason = await ask({
@@ -2532,26 +2581,37 @@ async function bulkAction(action) {
       confirm: "Drop them", danger: true,
     });
     if (!sure) return;
+  } else if (action === "delete") {
+    const sure = await ask({
+      title: `Delete ${ids.length} ${nounFor(kind, n)}?`,
+      message: kind === "schedule"
+        ? "Tasks they already added stay in the queue."
+        : "Tasks made from them stay.",
+      confirm: "Delete", danger: true,
+    });
+    if (!sure) return;
   }
   const errors = [];
   for (const id of ids) {
-    const error = await postAction(id, action, body);
+    const error = await postAction(id, action, body, kind);
     if (error) errors.push(error);
   }
   picked.clear();
-  if (errors.length) toast(`${errors.length} of ${ids.length} failed. ${errors[0]}`);
-  else toast(`${ACTION_LABELS[action]}: ${ids.length} tasks`, true);
+  if (errors.length) toast(`${errors.length} of ${n} failed. ${errors[0]}`);
+  else toast(`${ACTION_LABELS[action]}: ${n} ${nounFor(kind, n)}`, true);
   await refresh();
 }
 
 document.addEventListener("click", (e) => {
   // A row is the task: clicking it opens the view, unless the click was meant
   // for one of its buttons.
-  const row = e.target.closest("tr[data-kind='task']");
+  // While selecting, any row can be ticked: a task, a schedule or a template.
+  const row = e.target.closest("tr[data-kind]");
   if (row && !e.target.closest("button, a, input, select")) {
-    selected = row.dataset.id;
+    const task = row.dataset.kind === "task";
+    if (task) selected = row.dataset.id;
     if (selecting) { togglePick(row.dataset.id); return; }
-    showTask(row.dataset.id);
+    if (task) showTask(row.dataset.id);
     return;
   }
   const box = e.target.closest("input[data-pick]");
@@ -2582,6 +2642,10 @@ document.addEventListener("click", (e) => {
     deleteTemplate(id);
   } else if (action === "duplicate" || action === "save-template") {
     copyTask(id, action);
+  } else if (action === "sched-run") {
+    quickAction("schedule", id, "run");
+  } else if (action === "tpl-run") {
+    quickAction("template", id, "run");
   } else if (action.startsWith("sched-")) {
     scheduleAction(id, action.slice("sched-".length));
   } else if (action === "copy") {
