@@ -71,6 +71,16 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
     } else {
         body
     };
+    // "Save as template" on another machine's task: templates are this
+    // machine's own, so the task is read from there and the template is made
+    // here, where the form that uses it is.
+    if !ctx.peer
+        && matches!(method, Method::Post)
+        && let ["api", "tasks", id, "template"] = segments.as_slice()
+        && id.contains(['@', '%'])
+    {
+        return created_reply(template_from_remote(home, id));
+    }
     // A row, or a form, that belongs to another node goes there.
     if !ctx.peer
         && let Some((status, answer)) =
@@ -221,6 +231,45 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
         },
         _ => reply(404, "text/plain", "not found"),
     }
+}
+
+fn template_from_remote(home: &crate::home::Home, id: &str) -> anyhow::Result<String> {
+    let view = format!("/api/tasks/{}/view", id.replace("%40", "@"));
+    let (status, body) = crate::nodes::proxy(home, false, &view, "")
+        .ok_or_else(|| anyhow::anyhow!("`{id}` isn't a task of another machine"))?;
+    let task: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+    if status != 200 {
+        anyhow::bail!(
+            "{}",
+            task["error"].as_str().unwrap_or("couldn't read that task")
+        );
+    }
+    if task["command"] == true {
+        anyhow::bail!(
+            "a command task of another machine can't be saved as a template here: \
+             save it on that machine with `furmi template save`"
+        );
+    }
+    let on_finish = match task["on_finish"].as_str() {
+        Some("commit") => Some(crate::spec::OnFinish::Commit),
+        Some("push") => Some(crate::spec::OnFinish::Push),
+        Some("pr") => Some(crate::spec::OnFinish::Pr),
+        Some("none") => Some(crate::spec::OnFinish::None),
+        _ => None,
+    };
+    crate::template::create(
+        home,
+        crate::template::TemplateEdit {
+            description: String::new(),
+            prompt: task["prompt"].as_str().unwrap_or_default().to_string(),
+            // Its folder is a path on that machine: whoever uses the
+            // template here picks the project.
+            repo: String::new(),
+            on_finish,
+            // An agent this machine doesn't have would make the template unusable.
+            agent: None,
+        },
+    )
 }
 
 /// `{"ok":true,"id":...}` for something just made, or the error.
