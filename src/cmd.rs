@@ -45,6 +45,17 @@ pub fn init(home: &Home, args: InitArgs) -> Result<()> {
 /// to do about the global skill links: `None` leaves them alone, `Some(c)`
 /// applies `skill::set_global` with choice `c`.
 fn setup(home: &Home, agent: Option<String>, global_skill: Option<Option<bool>>) -> Result<()> {
+    // A new home is yours alone (0700): it holds prompts, logs and worktrees,
+    // and everything under it is created with the usual modes. An existing
+    // one is left as it is; `furmi doctor` says when it is open to others.
+    if !home.root().exists() {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(home.root())
+            .with_context(|| format!("creating {}", home.root().display()))?;
+    }
     for dir in home.dirs() {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     }
@@ -337,7 +348,7 @@ fn ls_schedules(home: &Home, config: &Config) -> Result<()> {
 pub struct AddArgs {
     /// What the agent should do. Asked for if omitted (or read from stdin
     /// when piped).
-    #[arg(conflicts_with = "prompt")]
+    #[arg(conflicts_with = "prompt", allow_hyphen_values = true)]
     text: Option<String>,
     /// Repository the task runs in [default: the git repo you're in].
     #[arg(long)]
@@ -350,7 +361,7 @@ pub struct AddArgs {
     #[arg(long)]
     id: Option<String>,
     /// The prompt, as an option instead of the positional argument.
-    #[arg(long, short)]
+    #[arg(long, short, allow_hyphen_values = true)]
     prompt: Option<String>,
     /// Run this shell command instead of an agent: a command task, with no
     /// prompt, agent, model or mode. Runs in the repo itself unless --worktree.
@@ -488,7 +499,7 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
         .as_deref()
         .map(|id| Template::find(home, id))
         .transpose()?;
-    let given = args.text.or(args.prompt);
+    let given = positional_prompt(args.text)?.or(args.prompt);
     let prompt = match (&args.run, &template) {
         (Some(_), _) => String::new(),
         // The template's own prompt, unless one was given to replace it.
@@ -559,6 +570,22 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
 /// What `--worktree` and `--no-worktree` ask for, if either was given.
 pub(crate) fn worktree_choice(worktree: bool, no_worktree: bool) -> Option<bool> {
     (worktree || no_worktree).then_some(worktree)
+}
+
+/// The positional prompt may start with `-` (a Markdown list is a prompt), so
+/// a mistyped flag lands here too. One word starting with `-` is taken for
+/// that mistake rather than queued as a task.
+pub(crate) fn positional_prompt(text: Option<String>) -> Result<Option<String>> {
+    if let Some(t) = &text
+        && t.starts_with('-')
+        && !t.trim().contains(char::is_whitespace)
+    {
+        bail!(
+            "unexpected argument '{t}' (if that is the prompt itself, pass it with --prompt; \
+             `--help` lists the options)"
+        );
+    }
+    Ok(text)
 }
 
 /// The given prompt, else the one piped on stdin, else (on a terminal) the

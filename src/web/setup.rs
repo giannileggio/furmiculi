@@ -70,6 +70,9 @@ pub(crate) struct WebArgs {
 pub(super) struct Serving {
     pub(super) addr: String,
     pub(super) remote: bool,
+    /// Whether a request has to prove itself with the bearer or a session: a
+    /// remote bind always, and a loopback one unless `[web] trust_local`.
+    pub(super) gated: bool,
     /// Shared secret for a remote bind; None on the loopback default, where
     /// the per-run token in the page is the only secret.
     pub(super) bearer: Option<String>,
@@ -134,7 +137,15 @@ pub(super) fn setup(home: &Home, args: &WebArgs) -> Result<Serving> {
     if asks(args, &web, std::io::stdin().is_terminal(), config_broken) {
         web = interactive_setup(home, args, &web)?;
     }
-    resolve(args, &web)
+    let mut serving = resolve(args, &web)?;
+    // A loopback page is reachable by every process on the machine, whoever
+    // runs it, and the page can queue a task that runs as you. So it asks for
+    // a secret only you can read, once per browser (`furmi open` supplies it).
+    if !serving.remote && !web.trust_local {
+        serving.bearer = Some(super::auth::local_token(home)?);
+        serving.gated = true;
+    }
+    Ok(serving)
 }
 
 /// Does this run ask the setup questions? Once, ever, on a terminal: either
@@ -179,6 +190,7 @@ fn resolve(args: &WebArgs, web: &Web) -> Result<Serving> {
         return Ok(Serving {
             addr,
             remote: false,
+            gated: false,
             bearer: None,
             allowed_hosts: Vec::new(),
             token_from: None,
@@ -192,6 +204,14 @@ fn resolve(args: &WebArgs, web: &Web) -> Result<Serving> {
              --token <value>"
         );
     };
+    if bearer.chars().count() < 16 {
+        eprintln!(
+            "warning: the dashboard token is {} characters long. It is the only thing between \
+             the network and a shell on this machine: use 16 or more random ones \
+             (`furmi web --setup` makes a token file for you).",
+            bearer.chars().count()
+        );
+    }
     let allowed_hosts = if args.allowed_hosts.is_empty() {
         web.allowed_hosts.clone()
     } else {
@@ -207,6 +227,7 @@ fn resolve(args: &WebArgs, web: &Web) -> Result<Serving> {
     Ok(Serving {
         addr,
         remote: true,
+        gated: true,
         bearer: Some(bearer),
         allowed_hosts,
         token_from,
@@ -330,6 +351,7 @@ fn interactive_setup(home: &Home, args: &WebArgs, web: &Web) -> Result<Web> {
         listen: Some(listen.clone()),
         allowed_hosts: hosts,
         token_file: Some(PathBuf::from(contract_tilde(&token_file))),
+        trust_local: web.trust_local,
     };
     set_web_config(&home.config_path(), &web)?;
     println!(
@@ -466,6 +488,7 @@ mod tests {
             listen: Some("0.0.0.0:9000".into()),
             allowed_hosts: vec!["saved.ts.net".into()],
             token_file: Some(saved_token.clone()),
+            trust_local: false,
         };
 
         // Nothing configured: loopback, and no shared secret needed.
@@ -616,6 +639,7 @@ mod tests {
         let serving = Serving {
             addr: "0.0.0.0:7433".into(),
             remote: true,
+            gated: true,
             bearer: Some("secret".into()),
             allowed_hosts: vec!["box.ts.net".into()],
             token_from: Some("~/.furmiculi/web-token".into()),

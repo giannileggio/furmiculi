@@ -38,7 +38,7 @@ pub enum ScheduleCmd {
 pub struct AddArgs {
     /// What the agent should do each time. Asked for if omitted (or read from
     /// stdin when piped).
-    #[arg(conflicts_with = "prompt")]
+    #[arg(conflicts_with = "prompt", allow_hyphen_values = true)]
     text: Option<String>,
     /// 5-field cron expression in local time, e.g. "0 2 * * *".
     #[arg(long)]
@@ -50,7 +50,7 @@ pub struct AddArgs {
     #[arg(long)]
     id: Option<String>,
     /// The prompt, as an option instead of the positional argument.
-    #[arg(long, short)]
+    #[arg(long, short, allow_hyphen_values = true)]
     prompt: Option<String>,
     /// Enqueue even if the previous run is still pending or running.
     #[arg(long)]
@@ -63,9 +63,9 @@ pub struct AddArgs {
 pub struct EditArgs {
     id: String,
     /// New prompt, as an option instead of the positional argument.
-    #[arg(conflicts_with = "prompt")]
+    #[arg(conflicts_with = "prompt", allow_hyphen_values = true)]
     text: Option<String>,
-    #[arg(long, short)]
+    #[arg(long, short, allow_hyphen_values = true)]
     prompt: Option<String>,
     /// New cron expression, e.g. "0 2 * * *".
     #[arg(long)]

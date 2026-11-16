@@ -156,6 +156,14 @@ enum Command {
         #[command(subcommand)]
         action: Option<AgentsAction>,
     },
+    /// Open the running dashboard in your browser, signed in. A dashboard on
+    /// this machine asks each browser to sign in once; this is how.
+    Open {
+        /// Print the link instead of opening a browser (it carries the
+        /// sign-in secret: don't paste it anywhere public).
+        #[arg(long)]
+        print: bool,
+    },
     /// Stop the dashboard and the runner, whichever of `furmi start`,
     /// `furmi web` and `furmi run` began them. Tasks already running keep
     /// going; start again to resume the queue.
@@ -298,6 +306,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             None => cmd::agents(&home)?,
             Some(AgentsAction::Use { name }) => cmd::use_agent(&home, &name)?,
         },
+        Command::Open { print } => web::open(&home, print)?,
         Command::Stop => {
             // A `furmi start` dashboard stops the runner it began as it goes,
             // so ask for the runner only if there was one to begin with.

@@ -772,7 +772,7 @@
 <div class="bulk" id="bulk" hidden></div>
 <div class="toast" id="toast"></div>
 
-<script>
+<script nonce="__FURMI_NONCE__">
 // The token: embedded at startup (loopback mode) or, on a remote dashboard, the
 // session's own token, filled in per page load. The server has already traded a
 // `?token=` for an HttpOnly session cookie and redirected without it, so it is
@@ -1238,7 +1238,9 @@ let lastState = null;
 async function refresh() {
   try {
     const res = await fetch("/api/state", { headers: AUTH() });
-    if (res.status === 401) { toast(LAPSED); return; }
+    // Signed out (idle, or signed out elsewhere): the server's sign-in page
+    // says how to get back in, which a toast can't.
+    if (res.status === 401) { location.reload(); return; }
     lastState = await res.json();
   } catch (e) {
     return; // keep showing the last good state
@@ -2795,6 +2797,8 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     keysOverlay.classList.toggle("active");
   } else if (e.key === "n") {
+    // Or the key that opened the form is typed into it.
+    e.preventDefault();
     openForm("new");
   } else if (e.key === "x" && hasTicks()) {
     setSelecting(!selecting);

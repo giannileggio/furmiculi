@@ -4,8 +4,6 @@
 //! Only a page load that asked for HTML gets this; the CLI, a proxy or an
 //! `/api` call still gets the plain-text refusal, which is what it can read.
 
-use super::auth::SESSION_TTL;
-
 /// Which refusal the page explains.
 pub(super) enum Why<'a> {
     /// No session cookie on the request: a first visit, or a cleared jar.
@@ -13,6 +11,8 @@ pub(super) enum Why<'a> {
     /// A cookie that names no live session: it idled past its TTL, or the
     /// dashboard restarted, which drops every session it handed out.
     ExpiredSession,
+    /// The form was sent with a token that isn't this dashboard's.
+    WrongToken,
     /// The `Host` asked for is not on the allowlist, and the ones that are.
     Host {
         asked: &'a str,
@@ -31,6 +31,11 @@ pub(super) struct Ask<'a> {
     /// Where the token came from at startup (`~/.furmiculi/web-token`), when
     /// it was a file worth naming. Never the token itself.
     pub(super) token_from: Option<&'a str>,
+    /// A loopback dashboard: the browser is on the machine itself, so the way
+    /// in is `furmi open`, not a file to `cat` over SSH.
+    pub(super) local: bool,
+    /// How long the session being asked for lasts without a request.
+    pub(super) ttl: std::time::Duration,
 }
 
 /// `<`, `>`, `&` and `"` out of anything that came off the wire or a flag.
@@ -50,7 +55,7 @@ fn esc(s: &str) -> String {
 
 fn form(action: &str) -> String {
     format!(
-        r#"<form method="get" action="{action}">
+        r#"<form method="post" action="{action}">
   <label for="token">Paste the dashboard token</label>
   <div class="row">
     <input id="token" name="token" type="password" autocomplete="off" spellcheck="false"
@@ -64,7 +69,37 @@ fn form(action: &str) -> String {
 
 /// The "how do I get it" block: the one command, and the address with the
 /// token in it, for whoever would rather use the bar than the box.
+/// "15 minutes", "30 days": how long a session idles before it ends.
+fn idle_span(ttl: std::time::Duration) -> String {
+    let secs = ttl.as_secs();
+    if secs >= 2 * 86_400 {
+        format!("{} days", secs / 86_400)
+    } else {
+        format!("{} minutes", secs / 60)
+    }
+}
+
+/// The same block for a dashboard on this machine: one command does it.
+fn where_from_local(ask: &Ask) -> String {
+    format!(
+        r#"<section>
+  <h2>The quick way in</h2>
+  <p>In a terminal on this machine, run:</p>
+  <pre><code>furmi open</code></pre>
+  <p class="hint">It opens this dashboard signed in (<code>furmi open --print</code> shows the
+  link instead). The dashboard asks because any program on this machine can reach this
+  address, and the page can queue work that runs as you. This browser then stays signed in
+  for {span} without a visit. To serve without asking, set <code>trust_local = true</code>
+  under <code>[web]</code> in config.toml.</p>
+</section>"#,
+        span = idle_span(ask.ttl)
+    )
+}
+
 fn where_from(ask: &Ask) -> String {
+    if ask.local {
+        return where_from_local(ask);
+    }
     let cmd = match ask.token_from {
         // `--token` put it on the command line, so there is no file to name.
         Some(from) if from.starts_with('-') => {
@@ -95,10 +130,10 @@ fn where_from(ask: &Ask) -> String {
   <h2>Where the token is</h2>
   {cmd}
   {link}
-  <p class="hint">The token is traded for a cookie that lasts {mins} minutes without a
+  <p class="hint">The token is traded for a cookie that lasts {span} without a
   request, so this is a once-in-a-while job, not every visit.</p>
 </section>"#,
-        mins = SESSION_TTL.as_secs() / 60
+        span = idle_span(ask.ttl)
     )
 }
 
@@ -124,6 +159,14 @@ dashboard answers to.</p>
 /// no script at all (the form is a plain GET).
 pub(super) fn page(ask: &Ask) -> String {
     let (title, lead) = match &ask.why {
+        Why::NoSession if ask.local => (
+            "Sign in",
+            "This browser hasn't been signed in to the dashboard yet.",
+        ),
+        Why::ExpiredSession if ask.local => (
+            "Signed out",
+            "This browser's session has ended. Sign in again to carry on.",
+        ),
         Why::NoSession => (
             "Token needed",
             "This dashboard serves other machines, so every visit has to carry its \
@@ -133,6 +176,11 @@ pub(super) fn page(ask: &Ask) -> String {
             "Session expired",
             "The session this browser had has run out. Restarting the dashboard drops \
              every session too. Paste the token again to carry on.",
+        ),
+        Why::WrongToken => (
+            "That token isn't right",
+            "It doesn't match this dashboard's token. Check for a missing character or a \
+             stray space, and try again.",
         ),
         Why::Host { .. } => ("Not a name this dashboard answers to", ""),
     };
@@ -232,6 +280,8 @@ mod tests {
             origin: Some("http://toolnet.example:7433".into()),
             action,
             token_from,
+            local: false,
+            ttl: std::time::Duration::from_secs(15 * 60),
         }
     }
 
@@ -239,7 +289,7 @@ mod tests {
     fn a_first_refusal_offers_the_box_the_command_and_the_link() {
         let page = page(&ask(Why::NoSession, "/", Some("~/.furmiculi/web-token")));
         assert!(
-            page.contains("<form method=\"get\" action=\"/\">"),
+            page.contains("<form method=\"post\" action=\"/\">"),
             "{page}"
         );
         assert!(page.contains("cat ~/.furmiculi/web-token"), "{page}");
@@ -276,6 +326,8 @@ mod tests {
             origin: None,
             action: "/",
             token_from: None,
+            local: false,
+            ttl: std::time::Duration::from_secs(900),
         });
         assert!(page.contains("<code>evil.example</code>"), "{page}");
         assert!(page.contains("<code>toolnet.example</code>"), "{page}");
@@ -295,6 +347,8 @@ mod tests {
             origin: Some("http://\"><script>".into()),
             action: "/\"><script>",
             token_from: Some("~/\"><script>"),
+            local: false,
+            ttl: std::time::Duration::from_secs(900),
         });
         assert!(!page.contains("<script>"), "{page}");
         assert!(!page.contains("<img src=x"), "{page}");

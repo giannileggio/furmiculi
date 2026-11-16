@@ -194,6 +194,11 @@ pub struct Web {
     /// expanded; the file must be 0600.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_file: Option<PathBuf>,
+    /// Serve a loopback dashboard to anything on this machine without asking
+    /// it to sign in, as furmi did before 0.9. Off by default: any process,
+    /// of any user here, could otherwise queue a task that runs as you.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub trust_local: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -978,6 +983,7 @@ mod tests {
             listen: Some("0.0.0.0:7433".into()),
             allowed_hosts: vec!["box.ts.net".into(), "100.64.0.10".into()],
             token_file: Some(PathBuf::from("~/.furmiculi/web-token")),
+            trust_local: false,
         };
 
         // No config yet: created from the template, comments and all.

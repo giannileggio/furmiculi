@@ -229,6 +229,19 @@ pub fn checks(home: &Home) -> Vec<Check> {
         ))),
     }
 
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(home.root())
+            && meta.permissions().mode() & 0o077 != 0
+        {
+            add(Check::Warn(format!(
+                "{0} can be read by other users of this machine (prompts, logs, worktrees): \
+                 `chmod 700 {0}`",
+                home.root().display()
+            )));
+        }
+    }
+
     let config = match Config::load(&home.config_path()) {
         Ok(c) => {
             add(Check::Ok("config.toml is valid".into()));

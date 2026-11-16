@@ -78,6 +78,22 @@ fn init(home: &Path) {
         "claude",
         "--no-global-skill",
     ])));
+    // These tests drive the dashboard's routes, not its sign-in: the loopback
+    // gate has its own tests, which turn it back on.
+    trust_local(home, true);
+}
+
+/// Sets `[web] trust_local` (a loopback dashboard that asks nobody to sign in).
+fn trust_local(home: &Path, trust: bool) {
+    let path = home.join("config.toml");
+    let config = std::fs::read_to_string(&path).unwrap();
+    let config = config.replace("\n[web]\ntrust_local = true\n", "");
+    let config = if trust {
+        format!("{config}\n[web]\ntrust_local = true\n")
+    } else {
+        config
+    };
+    std::fs::write(&path, config).unwrap();
 }
 
 fn add(home: &Path, repo: &Path, id: &str, prompt: &str) {
@@ -836,7 +852,7 @@ fn web_follows_the_web_section_in_config() {
     std::fs::write(
         &config_path,
         format!(
-            "{config}\n[web]\nlisten = \"0.0.0.0:{port}\"\nallowed_hosts = [\"toolnet.example\"]\n\
+            "{config}\nlisten = \"0.0.0.0:{port}\"\nallowed_hosts = [\"toolnet.example\"]\n\
              token_file = \"{}\"\n",
             token_file.display()
         ),
@@ -2648,4 +2664,207 @@ fn templates_are_listed_saved_used_and_deleted() {
         "weekly-check",
     ])));
     ok(run(furmi(home.path()).arg("validate")));
+}
+
+/// The `Set-Cookie` value for `name` in a raw response, as `name=value`.
+fn cookie_of(response: &str, name: &str) -> Option<String> {
+    response.lines().find_map(|line| {
+        let value = line
+            .strip_prefix("Set-Cookie: ")
+            .or_else(|| line.strip_prefix("set-cookie: "))?;
+        let pair = value.split(';').next()?.trim();
+        (pair.starts_with(&format!("{name}=")) && pair.len() > name.len() + 1)
+            .then(|| pair.to_string())
+    })
+}
+
+#[test]
+fn web_on_loopback_asks_a_browser_to_sign_in_once() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    trust_local(home.path(), false);
+    add(home.path(), repo.path(), "w1", "do it");
+
+    let port = 18391u16;
+    let mut child = furmi(home.path())
+        .args(["web", "--port", &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let host = format!("127.0.0.1:{port}");
+
+    // Anything on the machine can connect, but not read the queue or the page
+    // (and so not the token a POST needs).
+    let state = http_get(port, "/api/state");
+    assert!(state.starts_with("HTTP/1.1 401"), "{state}");
+    assert!(!state.contains("w1"), "{state}");
+    let page = http(port, "GET", "/", &host, &[("Accept", "text/html")], "");
+    assert!(page.starts_with("HTTP/1.1 401"), "{page}");
+    assert!(page.contains("furmi open"), "{page}");
+    assert!(!page.contains("furmi-token"), "{page}");
+
+    // `furmi open --print` is the way in: the address with the secret, which
+    // lives in a file only its owner can read.
+    let link = stdout(&ok(run(furmi(home.path()).args(["open", "--print"]))));
+    let token = link.trim().rsplit_once("?token=").expect("a token link").1;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(home.path().join(".local-token"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0, "{mode:o}");
+    }
+    let traded = http(
+        port,
+        "GET",
+        &format!("/?token={token}"),
+        &host,
+        &[("Accept", "text/html")],
+        "",
+    );
+    assert!(traded.starts_with("HTTP/1.1 303"), "{traded}");
+    assert!(!traded.contains(token), "the token must not be echoed");
+    let cookie = cookie_of(&traded, "furmi_session").expect("a session cookie");
+
+    // With the cookie the page and the queue are there, and the page's own
+    // token lets it act.
+    let page = http(port, "GET", "/", &host, &[("Cookie", &cookie)], "");
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert!(page.contains("script-src 'nonce-"), "{page}");
+    let marker = "name=\"furmi-token\" content=\"";
+    let at = page.find(marker).unwrap() + marker.len();
+    let page_token = &page[at..at + 32];
+    assert_ne!(page_token, token, "the page gets its session's token");
+    let state = http(port, "GET", "/api/state", &host, &[("Cookie", &cookie)], "");
+    assert!(state.contains("\"w1\""), "{state}");
+    let paused = http(
+        port,
+        "POST",
+        "/api/runner/pause",
+        &host,
+        &[("Cookie", &cookie), ("X-Furmi-Token", page_token)],
+        "",
+    );
+    assert!(paused.starts_with("HTTP/1.1 200"), "{paused}");
+
+    // The form on the refusal page posts the token instead of putting it in
+    // the address; a wrong one is told so.
+    let form = [("Content-Type", "application/x-www-form-urlencoded")];
+    let wrong = http(port, "POST", "/", &host, &form, "token=nope");
+    assert!(wrong.starts_with("HTTP/1.1 401"), "{wrong}");
+    assert!(wrong.contains("isn't right"), "{wrong}");
+    let right = http(port, "POST", "/", &host, &form, &format!("token={token}"));
+    assert!(right.starts_with("HTTP/1.1 303"), "{right}");
+    assert!(cookie_of(&right, "furmi_session").is_some(), "{right}");
+
+    // Signing out ends the session on the server, not just in the browser.
+    let out = http(
+        port,
+        "POST",
+        "/api/session/end",
+        &host,
+        &[("Cookie", &cookie), ("X-Furmi-Token", page_token)],
+        "{}",
+    );
+    assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+    let after = http(port, "GET", "/api/state", &host, &[("Cookie", &cookie)], "");
+    assert!(after.starts_with("HTTP/1.1 401"), "{after}");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn web_refuses_a_form_that_is_too_big_instead_of_cutting_it_short() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+
+    let port = 18392u16;
+    let mut child = furmi(home.path())
+        .args(["web", "--port", &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let token = page_token(port);
+
+    // A prompt of 60 KB, well past the old 16 KB cut, is a task like any other.
+    let long = "x".repeat(60 * 1024);
+    let form =
+        serde_json::json!({ "prompt": long, "scratch": true, "agent": "claude", "draft": true });
+    let made = http_post(port, &token, "/api/tasks", &form.to_string());
+    assert!(
+        made.starts_with("HTTP/1.1 200"),
+        "{}",
+        &made[made.len().saturating_sub(300)..]
+    );
+
+    let huge = "x".repeat(2 * 1024 * 1024);
+    let form = serde_json::json!({ "prompt": huge, "repo": repo.path(), "draft": true });
+    let refused = http_post(port, &token, "/api/tasks", &form.to_string());
+    assert!(
+        refused.starts_with("HTTP/1.1 413"),
+        "{}",
+        &refused[..200.min(refused.len())]
+    );
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn a_prompt_may_start_with_a_dash_but_a_mistyped_flag_is_not_a_prompt() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    let repo_arg = repo.path().display().to_string();
+
+    ok(run(furmi(home.path()).args([
+        "add",
+        "--repo",
+        &repo_arg,
+        "--no-worktree",
+        "--id",
+        "list",
+        "- first\n- second",
+    ])));
+    ok(run(furmi(home.path()).args([
+        "add",
+        "--repo",
+        &repo_arg,
+        "--no-worktree",
+        "--id",
+        "opt",
+        "--prompt",
+        "- first",
+    ])));
+    let file = std::fs::read_to_string(home.path().join("tasks/list.md")).unwrap();
+    assert!(file.contains("- first\n- second"), "{file}");
+
+    let out = failed(run(
+        furmi(home.path()).args(["add", "--repo", &repo_arg, "--drfat"])
+    ));
+    assert!(
+        stderr(&out).contains("unexpected argument '--drfat'"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_new_home_is_private_and_doctor_flags_one_that_is_not() {
+    use std::os::unix::fs::PermissionsExt;
+    let parent = tempfile::tempdir().unwrap();
+    let home = parent.path().join("fresh");
+    init(&home);
+    let mode = std::fs::metadata(&home).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o700, "{mode:o}");
+
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = run(furmi(&home).arg("doctor"));
+    assert!(stdout(&out).contains("chmod 700"), "{}", stdout(&out));
 }
