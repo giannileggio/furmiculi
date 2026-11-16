@@ -667,6 +667,71 @@ pub fn set_runner_limits(
     })
 }
 
+/// Sets (or, with 0, lifts) `runner.daily_token_budget`.
+pub fn set_daily_budget(path: &Path, tokens: u64) -> Result<()> {
+    set_keys(
+        path,
+        "runner",
+        &[("daily_token_budget", tokens.to_string())],
+        |c| c.runner.daily_token_budget == Some(tokens),
+    )
+}
+
+/// What the dashboard's notification form holds. Secrets aren't part of it:
+/// they stay in files, or in the environment.
+pub struct NotifyForm<'a> {
+    /// `finished`, `failed`, `needs_review`.
+    pub on: &'a [String],
+    pub ntfy_url: &'a str,
+    pub ntfy_topic: &'a str,
+    pub telegram_chat_id: &'a str,
+}
+
+/// Writes the notification settings: which endings to send, and where. A
+/// service whose fields are left empty is not touched.
+pub fn set_notify(path: &Path, form: &NotifyForm) -> Result<()> {
+    for event in form.on {
+        if !["finished", "failed", "needs_review"].contains(&event.as_str()) {
+            bail!("`{event}` isn't one of finished, failed, needs_review");
+        }
+    }
+    let on = format!(
+        "[{}]",
+        form.on
+            .iter()
+            .map(|e| toml_str(e))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    set_keys(path, "notify", &[("on", on)], |c| {
+        c.notify.on.len() == form.on.len()
+    })?;
+    let (url, topic) = (form.ntfy_url.trim(), form.ntfy_topic.trim());
+    if !url.is_empty() || !topic.is_empty() {
+        let mut keys = Vec::new();
+        if !url.is_empty() {
+            if !url.starts_with("https://") && !url.starts_with("http://") {
+                bail!("the ntfy address must start with https:// (or http://)");
+            }
+            keys.push(("url", toml_str(url)));
+        }
+        if !topic.is_empty() {
+            keys.push(("topic", toml_str(topic)));
+        }
+        set_keys(path, "notify.ntfy", &keys, |c| c.notify.ntfy.is_some())?;
+    }
+    let chat = form.telegram_chat_id.trim();
+    if !chat.is_empty() {
+        set_keys(
+            path,
+            "notify.telegram",
+            &[("chat_id", toml_str(chat))],
+            |c| c.notify.telegram.is_some(),
+        )?;
+    }
+    Ok(())
+}
+
 /// The `[defaults]` a task falls back to (everything but the agent, which has
 /// its own setter).
 pub struct DefaultsForm<'a> {

@@ -531,6 +531,79 @@ pub fn on_finish(action: OnFinish, dir: &Path, id: &str, prompt: &str) -> Result
 /// older commit — neither covers this run's work. `gh` failing to answer
 /// (e.g. no PR for the branch at all) counts as no covering PR; the
 /// `pr create` that follows then reports the real problem, if any.
+/// Whether the branch in `dir` has been pushed with commits of its own: the
+/// cheap local test for "there may be a pull request to ask about".
+pub fn has_commits_ahead(dir: &Path) -> bool {
+    git(
+        dir,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .is_ok()
+}
+
+/// The address of the pull request for the branch checked out in `dir`.
+pub fn pr_url(dir: &Path) -> Option<String> {
+    run(
+        "gh",
+        dir,
+        &["pr", "view", "--json", "url", "--jq", ".url"],
+        NETWORK_TIMEOUT,
+    )
+    .ok()
+    .map(|url| url.trim().to_string())
+    .filter(|url| url.starts_with("https://"))
+}
+
+/// What a task changed, for the dashboard's task view.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct Changes {
+    /// `git diff --shortstat`'s line: "3 files changed, 10 insertions(+)...".
+    pub summary: String,
+    /// `status path` lines, committed ones first; capped.
+    pub files: Vec<String>,
+    /// How many files there are in all, when `files` was cut short.
+    pub total: usize,
+    /// Changes in the workspace that no commit holds yet.
+    pub uncommitted: usize,
+}
+
+/// Most files listed in a task's view.
+const CHANGES_SHOWN: usize = 60;
+
+/// What `branch` holds that the repo's checked-out branch doesn't, plus
+/// whatever is uncommitted in `workdir` (the task's worktree, if it still
+/// exists). `None` when git has nothing to say (no such branch, not a repo).
+pub fn changes(repo: &Path, workdir: Option<&Path>, branch: Option<&str>) -> Option<Changes> {
+    let mut out = Changes::default();
+    if let Some(branch) = branch.filter(|b| branch_exists(repo, b)) {
+        let range = format!("HEAD...{branch}");
+        if let Ok(names) = git(repo, &["diff", "--name-status", &range]) {
+            out.files.extend(
+                names
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(|l| l.replace('\t', " ")),
+            );
+        }
+        if let Ok(stat) = git(repo, &["diff", "--shortstat", &range]) {
+            out.summary = stat.trim().to_string();
+        }
+    }
+    if let Some(dir) = workdir.filter(|d| d.is_dir())
+        && let Ok(paths) = changed_paths(dir)
+    {
+        out.uncommitted = paths.len();
+        out.files
+            .extend(paths.into_iter().map(|p| format!("{p} (not committed)")));
+    }
+    if out.files.is_empty() && out.summary.is_empty() {
+        return None;
+    }
+    out.total = out.files.len();
+    out.files.truncate(CHANGES_SHOWN);
+    Some(out)
+}
+
 fn pr_covers_head(dir: &Path) -> Result<bool> {
     let head = git(dir, &["rev-parse", "HEAD"])?;
     let out = run(

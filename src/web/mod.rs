@@ -264,7 +264,9 @@ fn run_server(
         home,
         // A remote page gets its own session's token, filled in per request.
         index: {
-            let page = INDEX_HTML.replace("__FURMI_VERSION__", crate::version::CURRENT);
+            let page = INDEX_HTML
+                .replace("__FURMI_VERSION__", crate::version::CURRENT)
+                .replace("__FURMI_GATED__", if serving.gated { "1" } else { "" });
             if serving.gated {
                 page
             } else {
@@ -539,6 +541,7 @@ fn handle<'scope, 'env>(
             .find(|h| h.field.equiv(name))
             .map(|h| h.value.as_str().to_string())
     };
+    let accept = header("Accept");
     let host = header("Host");
     let origin = header("Origin");
     let token = header(TOKEN_HEADER);
@@ -549,7 +552,7 @@ fn handle<'scope, 'env>(
     // A browser asks for HTML; a CLI, a proxy or the page's own fetch doesn't.
     // Only the former gets a page it can act on when refused — the rest keeps
     // the one-line plain text it can parse.
-    let wants_page = !is_post && header("Accept").is_some_and(|a| a.contains("text/html")) && {
+    let wants_page = !is_post && accept.as_deref().is_some_and(|a| a.contains("text/html")) && {
         let path = url.split('?').next().unwrap_or("");
         is_page(
             &path
@@ -730,6 +733,15 @@ fn handle<'scope, 'env>(
         }
     };
     let mut result = result;
+    // A browser that typed (or followed) an address the dashboard doesn't
+    // have gets a page that leads back, not eleven bytes of plain text.
+    if result.status == 404
+        && !is_post
+        && !url.starts_with("/api/")
+        && accept.as_deref().is_some_and(|a| a.contains("text/html"))
+    {
+        result = reply(404, HTML, recovery::not_found());
+    }
     let is_index = result.content_type.starts_with("text/html");
     let nonce = random_token().unwrap_or_default();
     if is_index {

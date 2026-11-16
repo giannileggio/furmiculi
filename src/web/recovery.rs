@@ -155,6 +155,37 @@ dashboard answers to.</p>
     )
 }
 
+/// What a browser gets at an address the dashboard doesn't have.
+pub(super) fn not_found() -> String {
+    r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Furmiculi — Not found</title>
+<link rel="icon" type="image/png" href="/logo.png">
+<style>
+  :root { --bg: #f2f2f3; --text: #1d1f20; --muted: #5d5d60; --accent: #416180; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141617; --text: #e6e7e9; --muted: #a9a9ac; --accent: #9dc0e3; }
+  }
+  body { margin: 0; padding: 80px 20px; background: var(--bg); color: var(--text); text-align: center;
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 8px; }
+  p { color: var(--muted); margin: 0 0 20px; }
+  a { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>There's nothing at this address</h1>
+<p>The link may be mistyped, or from an older furmiculi.</p>
+<a href="/">Back to the dashboard</a>
+</body>
+</html>
+"#
+    .to_string()
+}
+
 /// The whole page, styled like the dashboard: same palette, same system font,
 /// no script at all (the form is a plain GET).
 pub(super) fn page(ask: &Ask) -> String {

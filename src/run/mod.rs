@@ -29,7 +29,7 @@ pub use finishing::{archive, complete};
 pub use housekeeping::{Health, load_health};
 pub use log::log;
 pub use reaping::{save_log, window_of};
-pub use scheduler::failure_streak;
+pub use scheduler::{failure_streak, run_now};
 pub(crate) use usage::model_from_log;
 
 use std::path::PathBuf;
@@ -259,7 +259,11 @@ pub struct Budget {
 
 /// `None` when no budget is set.
 pub fn budget(home: &Home, config: &Config, now: DateTime<FixedOffset>) -> Option<Budget> {
-    let limit = config.runner.daily_token_budget?;
+    // 0 is how the dashboard's form says "no budget".
+    let limit = config
+        .runner
+        .daily_token_budget
+        .filter(|limit| *limit > 0)?;
     let today = now.date_naive();
     let spent = md_files(&home.archive())
         .unwrap_or_default()

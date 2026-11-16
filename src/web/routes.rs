@@ -6,10 +6,11 @@ use tiny_http::Method;
 
 use super::handlers::{
     agents_json, detail_reply, doctor_json, json_err, json_log_with, models_json, mutation_reply,
-    perform_action, perform_create, perform_create_schedule, perform_create_template,
-    perform_delete_template, perform_duplicate, perform_edit_schedule, perform_edit_task,
-    perform_edit_template, perform_save_template, perform_set_default_agent, perform_set_defaults,
-    perform_set_limits, tail_of, task_view_json, template_detail,
+    perform_action, perform_allow_agent, perform_create, perform_create_schedule,
+    perform_create_template, perform_delete_template, perform_duplicate, perform_edit_schedule,
+    perform_edit_task, perform_edit_template, perform_save_template, perform_set_default_agent,
+    perform_set_defaults, perform_set_limits, perform_set_notify, perform_test_notify,
+    settings_json, tail_of, task_view_json, template_detail,
 };
 use super::state::{capacity, repos_json, state_json};
 use super::{Ctx, Reply, json_reply, reply};
@@ -123,6 +124,10 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 }
             }
             ["api", "doctor"] => json_reply(200, doctor_json(home)),
+            ["api", "settings"] => match settings_json(home) {
+                Ok(json) => json_reply(200, json),
+                Err(e) => json_reply(500, json_err(&e)),
+            },
             ["api", "agents"] => match agents_json(home) {
                 Ok(json) => json_reply(200, json),
                 Err(e) => json_reply(500, json_err(&e)),
@@ -211,6 +216,13 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
             ["api", "defaults"] => mutation_reply(perform_set_defaults(home, body)),
             ["api", "runner", "limits"] => mutation_reply(perform_set_limits(home, body)),
             ["api", "agents", "default"] => mutation_reply(perform_set_default_agent(home, body)),
+            ["api", "agents", "allow"] => mutation_reply(perform_allow_agent(home, body)),
+            ["api", "notify"] => mutation_reply(perform_set_notify(home, body)),
+            ["api", "notify", "test"] => mutation_reply(perform_test_notify(home)),
+            ["api", "schedules", id, "run"] => created_reply(
+                crate::config::Config::load(&home.config_path())
+                    .and_then(|config| crate::run::run_now(home, &config, id)),
+            ),
             ["api", "tasks"] => match perform_create(home, ctx.cwd_repo.as_deref(), body) {
                 Ok(id) => json_reply(
                     200,

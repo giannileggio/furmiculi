@@ -42,6 +42,14 @@ pub enum Event {
 }
 
 impl Event {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Event::Finished => "finished",
+            Event::Failed => "failed",
+            Event::NeedsReview => "needs_review",
+        }
+    }
+
     fn of(status: Status) -> Option<Self> {
         match status {
             Status::Done => Some(Event::Finished),
@@ -311,6 +319,15 @@ pub fn dispatch(notify: &Notify, msg: &Message, sender: &dyn Sender) {
             log(&format!("notification to {name} failed: {e:#}"));
         }
     }
+}
+
+/// One message to every configured service, to try the settings out.
+pub fn send_test(notify: &Notify) {
+    let msg = Message {
+        title: "furmi: test".into(),
+        body: "Notifications from furmiculi reach you here.".into(),
+    };
+    dispatch(notify, &msg, &Curl);
 }
 
 /// Called when a task is archived: sends the message if `[notify]` asks for

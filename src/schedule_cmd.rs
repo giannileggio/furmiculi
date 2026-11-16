@@ -32,6 +32,8 @@ pub enum ScheduleCmd {
     Resume { id: String },
     /// Delete a schedule. Tasks it already queued stay.
     Delete { id: String },
+    /// Queue one run of a schedule now, without waiting for its next slot.
+    Run { id: String },
 }
 
 #[derive(clap::Args)]
@@ -184,6 +186,13 @@ pub fn run(home: &Home, command: ScheduleCmd) -> Result<()> {
         ScheduleCmd::Delete { id } => {
             edit::delete_schedule(home, &id)?;
             println!("Deleted `{id}`");
+            Ok(())
+        }
+        ScheduleCmd::Run { id } => {
+            home.ensure_initialized()?;
+            let config = crate::config::Config::load(&home.config_path())?;
+            let task = crate::run::run_now(home, &config, &id)?;
+            println!("Queued `{task}` from `{id}`");
             Ok(())
         }
     }

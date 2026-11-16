@@ -93,6 +93,9 @@ pub struct Task {
     /// without digging through its log. Written by furmiculi.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_used: Option<String>,
+    /// The pull request `on_finish: pr` opened for it. Written by furmiculi.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
 
     #[serde(skip)]
     pub prompt: String,
@@ -118,6 +121,7 @@ const TASK_KEYS: &[&str] = &[
     // No longer recorded; still accepted so older task files load.
     "cost_usd",
     "model_used",
+    "pr_url",
 ];
 
 fn is_zero(n: &u32) -> bool {
@@ -178,6 +182,7 @@ impl Task {
             tokens_in: None,
             tokens_out: None,
             model_used: None,
+            pr_url: None,
             prompt,
         }
     }

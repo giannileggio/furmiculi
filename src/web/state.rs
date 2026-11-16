@@ -79,6 +79,19 @@ struct ScheduleRow {
     cron: String,
     next: String,
     repo: String,
+    /// The task its latest firing made, and how that went.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_run: Option<LastRun>,
+    /// How many of its latest finished runs failed in a row.
+    failing: usize,
+}
+
+#[derive(Serialize)]
+struct LastRun {
+    id: String,
+    status: &'static str,
+    /// RFC 3339, of when it finished, started or was queued.
+    at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -331,6 +344,25 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
                     cron: s.cron.clone(),
                     next,
                     repo: contract_tilde(&s.spec.resolve(&config.defaults).repo),
+                    last_run: {
+                        let by = format!("schedule:{}", s.id);
+                        running_tasks
+                            .iter()
+                            .chain(&queue_tasks)
+                            .chain(&archive_tasks)
+                            .filter(|t| t.created_by.as_deref() == Some(by.as_str()))
+                            .max_by_key(|t| t.created_at)
+                            .map(|t| LastRun {
+                                id: t.id.clone(),
+                                status: t.status.as_str(),
+                                at: t
+                                    .finished_at
+                                    .or(t.started_at)
+                                    .or(t.created_at)
+                                    .map(|at| at.to_rfc3339()),
+                            })
+                    },
+                    failing: crate::run::failure_streak(home, &s.id),
                 }
             })
             .collect();
