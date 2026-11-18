@@ -72,6 +72,10 @@ Add a regression test.
 | `retry_delay`  | no       | `5m`              | Wait between attempts (`30s`, `5m`, `1h`...). |
 | `timeout`      | no       | `2h`              | Per attempt. |
 | `run`          | no       | —                 | A shell command to run instead of an agent — see [Command tasks](#command-tasks). |
+| `base`         | no       | the repo's checked-out branch | What a new branch starts from: a branch, tag or commit. One on a remote (`origin/main`) is fetched first. Only matters when the branch is made; a retry keeps its branch. |
+| `setup`        | no       | —                 | A shell command run in the task's workspace before its first attempt (`npm ci`, copy an untracked `.env`). `$FURMI_REPO` is the project's folder. Its output is the top of the attempt's log, and its failure fails the attempt. |
+| `after`        | no       | —                 | Ids of tasks that must have finished as `done` before this one starts. One that failed keeps this waiting (the dashboard says why); `furmi retry` on it lets both go on. |
+| `priority`     | no       | `0`               | Higher starts first among waiting tasks that are ready. |
 | `scheduled_at` | no       | now               | Don't start before this RFC 3339 time. |
 | `created_by`   | no       | —                 | Free text: `cli`, `agent`, `schedule:<id>`... |
 | `remote`       | no       | —                 | Written by furmi: the repo's `origin` as `host/owner/name` (`github.com/me/app`), so another machine can find its own clone. Absent without an `origin`. |
@@ -91,6 +95,7 @@ Don't edit these by hand. Use `furmi` commands to change the status.
 | `tmux_window` | Where the task is or was running. |
 | `error`       | Last failure reason. |
 | `tokens_in`, `tokens_out` | Token usage summed over attempts, if the agent's headless mode reports it (built in for `claude`). |
+| `pr_url`      | The pull request `on_finish: pr` opened, once it has. |
 | `model_used`  | The model the agent said it ran with (out of the same output as the usage above), `provider/model` when it names both. Only when the task pins no `model` does it differ from a name you chose: it is how a finished task records what it actually cost. A task that ran before this was kept has none — the dashboard reads the model out of the attempt's log when you open the task instead. |
 
 `needs_review` means an interactive session ended without signalling
@@ -337,6 +342,56 @@ such a command — pi and opencode. The answer is kept for an hour in
 `models-cache.json` beside the tasks, and a failing command falls back to the
 last answer it gave. Without it the box still takes any model you type.
 
+### Letting agents work unattended
+
+A headless run can't answer an agent's permission prompts, so an agent that asks
+before editing stops at its first question and the task changes nothing.
+`[unattended]` says what to answer for each preset that asks:
+
+```toml
+[unattended]
+claude = "edits"   # edits | all | ask
+```
+
+| Level   | claude | codex | gemini |
+|---------|--------|-------|--------|
+| `edits` | `--permission-mode acceptEdits` | `--full-auto` | `--approval-mode auto_edit` |
+| `all`   | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` | `--yolo` |
+| `ask`   | nothing added | nothing added | nothing added |
+
+The flags are added to the end of a headless run only (an interactive session
+has you to answer). If an agent's own `headless` line already carries an
+approval flag, that line is taken as your answer and nothing is added.
+`furmi init` asks, `furmi agents allow <agent> <level>` and the dashboard's
+Setup change it, and `furmi doctor` warns while a preset that asks has no
+answer. hermes' one-shot `-z` and pi don't ask; opencode reads its permissions
+from its own config.
+
+`{prompt_file}` in an agent's argv is the path of a 0600 file holding the prompt,
+for a launcher that would rather read it than take it on its command line,
+where `ps` shows it: `headless = ["sh", "-c", "claude -p < {prompt_file}"]`.
+
+### More `[defaults]` and `[runner]` settings
+
+```toml
+[defaults]
+base = "origin/main"     # what a new branch starts from, fetched first
+setup = "npm ci"         # run in each workspace before the first attempt
+commit_guard = true      # on_finish won't commit a new .env, key or 10 MB file
+
+[runner]
+strip_env = ["GITHUB_TOKEN"]   # variables tasks don't inherit
+daily_token_budget = 5000000   # hold the queue past this many tokens today
+```
+
+Tasks never inherit `FURMI_NTFY_TOKEN` or `FURMI_TELEGRAM_BOT_TOKEN`; `strip_env`
+names more. The budget counts the tokens (in and out) of tasks that finished
+today, local time, so only agents that report usage count; running tasks finish,
+and the queue starts again at midnight. A new file that looks like a secret
+(`.env*`, `*.pem`, `*.key`, `id_rsa`, `.npmrc`, `credentials.json`, ... — not
+`.example`) or is over 10 MB makes `on_finish` fail instead of committing it: the
+work stays in the worktree for you to look at.
+
 ### The dashboard
 
 ```toml
@@ -345,7 +400,16 @@ configured = true                    # the setup questions have been answered
 listen = "0.0.0.0:7433"              # optional: default 127.0.0.1:7433
 allowed_hosts = ["box.tailnet.ts.net"]  # the Host headers browsers send; ["*"] = any
 token_file = "~/.furmiculi/web-token"   # 0600, shared secret
+trust_local = false                  # true: a loopback dashboard asks nobody to sign in
 ```
+
+On loopback the dashboard asks each browser to sign in once with a file only you
+can read (`~/.furmiculi/.local-token`): `furmi start` opens the browser already
+signed in and `furmi open` does it for a dashboard that is running. A browser
+stays signed in for 30 days; the sessions are kept in `.web-sessions` (0600) so
+a restart doesn't end them. Any program on the machine can reach a loopback
+port, and the page can queue work that runs as you, which is why it asks;
+`trust_local = true` turns that off.
 
 Where `furmi web` and `furmi start` serve from, and how they guard it. Nothing
 here means loopback only, which is the default and needs no secret. A

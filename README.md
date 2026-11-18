@@ -146,17 +146,23 @@ furmi duplicate <id>    # copy any task into a new draft
 furmi template ls       # tasks to start new ones from (a few come with furmi)
 furmi template save <task>   # keep a task as a template
 furmi add --template review-the-diff --repo ~/Projects/myapp   # a task from one
+furmi add --base origin/main --setup "npm ci" "Upgrade the linter"   # branch from origin/main, install first
+furmi add --after upgrade-linter "Fix what the new linter found"     # waits for it to finish as done
+furmi add --priority 5 "The urgent one"   # starts before waiting tasks with a lower number
 
 furmi start             # the runner and the dashboard together (--no-open: no browser)
 furmi start -d          # ...in the background: prints the URL and returns
+furmi open              # the running dashboard in your browser, signed in
 furmi stop              # stop the dashboard and the runner (work already underway keeps going in tmux)
 furmi restart           # stop them and start them again the way they were started, on the installed binary
 furmi agents            # which coding agents are installed, and how to install the rest
 furmi agents use codex   # make one the default for new tasks
+furmi agents allow claude edits   # how far an agent may go with nobody to ask: ask | edits | all
 
 furmi ls                # queue
 furmi ls --schedules    # schedules with their next run
 furmi ls --archive      # finished tasks
+furmi ls --json         # for scripts (so does furmi status --json)
 furmi ls --watch        # ...live, every --interval (default 2s); in a terminal it's
                         # interactive: j/k move, l logs, d/f/c done/fail/cancel (asks
                         # first), r retry, a attach, tab queue/archive, q quit
@@ -166,6 +172,7 @@ furmi schedule add --cron "0 2 * * *" "update deps"   # same options as add, plu
 furmi schedule add --cron "0 3 * * *" --run "./scripts/backup.sh"   # ...a command, on a schedule
 furmi schedule ls       # same as ls --schedules
 furmi schedule edit <id> --cron "0 3 * * *"   # changes only the options you give
+furmi schedule run <id>      # queue one run now, without waiting for its slot
 furmi schedule pause <id>    # stop firing, keep the file (resume <id> undoes it)
 furmi schedule delete <id>   # tasks it already queued stay
 
@@ -193,6 +200,7 @@ furmi pause             # hold the runner: nothing new starts, no schedule fires
 furmi resume            # undo furmi pause
 furmi status            # is the runner alive? queue, failing schedules
 furmi doctor            # check tmux/git/agents/config/task files; non-zero on problems
+furmi completions zsh   # a completion script (bash, zsh, fish, ...)
 furmi service systemd   # units that keep the runner and the dashboard up (or: launchd)
 
 furmi web               # dashboard at http://127.0.0.1:7433, until Ctrl-C
@@ -218,6 +226,24 @@ for the chores around the agents' work: it goes through `sh -c` with no prompt,
 agent or model, and gets the same logs, `timeout`, `retries` and `on_finish`. It
 runs in the repo folder itself unless you add `--worktree`, and commits nothing
 unless you set `--on-finish`. See [docs/FORMAT.md](docs/FORMAT.md#command-tasks).
+
+## Letting agents work on their own
+
+A task runs with nobody there to answer an agent's permission questions, so an
+agent that asks before editing files stops at its first question and the task
+changes nothing. `furmi init` asks how far the default agent may go (edit
+files in the task's own workspace, or edit and run anything), `furmi agents
+allow <agent> <ask|edits|all>` and the dashboard's **Setup** change it, and
+`furmi doctor` warns while a question is unanswered. The answer is kept under
+`[unattended]` in `config.toml`, which also lists the flags each level adds.
+Whichever you pick, a task only does what that agent could do as you: see
+[SECURITY.md](SECURITY.md), and prefer `edits` unless the task needs more.
+
+What a task can leave behind is limited too: `on_finish` won't commit a new
+file that looks like a secret (`.env`, a private key) or is over 10 MB, tasks
+don't inherit furmi's own notification tokens, and `[runner] strip_env` names
+others to keep from them. `[runner] daily_token_budget` holds the queue once
+the day's tasks have used that many tokens.
 
 ## Keeping it running
 
@@ -288,6 +314,12 @@ What `furmi` does so that a bad day doesn't lose work:
 - **Safe git handling.** A reused worktree must belong to the repo, `furmi`
   won't switch your checkout's branch over uncommitted changes, and
   `on_finish: pr` won't open a second PR for a branch that has one.
+
+The dashboard asks each browser on this machine to sign in once, because any
+program here can reach a loopback port and the page can queue work that runs as
+you. `furmi start` opens your browser signed in, `furmi open` does the same for
+a dashboard that is running, and the browser stays signed in for 30 days
+(`[web] trust_local = true` turns the question off).
 
 `furmi web` serves a local dashboard (queue, running, archive, schedules and stats,
 pushed live over SSE as it changes) — a Sidekiq-style view of the same state

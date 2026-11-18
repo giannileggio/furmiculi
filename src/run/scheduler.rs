@@ -82,6 +82,34 @@ fn enqueue_schedule(
     Ok(())
 }
 
+/// Queues one run of a schedule right now, whatever its cron says and
+/// whether or not it is paused. Its next regular firing is unaffected.
+/// Returns the new task's id.
+pub fn run_now(home: &Home, config: &Config, id: &str) -> Result<String> {
+    crate::spec::validate_id(id).map_err(anyhow::Error::msg)?;
+    let path = home.schedules().join(format!("{id}.md"));
+    if !path.exists() {
+        anyhow::bail!("no schedule `{id}`");
+    }
+    let _lock = home.lock()?;
+    let s = Schedule::load(&path)?;
+    let problems = s.problems(config, Some(&path));
+    if !problems.is_empty() {
+        anyhow::bail!("can't run it: {}", problems.join("; "));
+    }
+    let now = crate::task::now();
+    let base = format!("{}-{}", truncate_id(&s.id, 48), now.format("%Y%m%d-%H%M"));
+    let mut task = Task::new(unique_id(home, &base), s.spec.clone(), s.prompt.clone());
+    task.created_by = Some(format!("schedule:{}", s.id));
+    task.fill_remote();
+    task.create(&home.tasks().join(format!("{}.md", task.id)))?;
+    log(&format!(
+        "enqueued {} from schedule {} (run now)",
+        task.id, s.id
+    ));
+    Ok(task.id)
+}
+
 /// Consecutive failed runs of a schedule at which the runner starts warning.
 const FAILURE_WARNING_STREAK: usize = 3;
 

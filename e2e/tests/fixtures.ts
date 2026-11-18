@@ -195,6 +195,10 @@ interactive = ["sh", "-c", "{prompt}"]
 [agents.stub2]
 headless = ["sh", "-c", "{prompt}"]
 interactive = ["sh", "-c", "{prompt}"]
+
+# These tests drive the page, not its sign-in (tests/cli.rs covers that).
+[web]
+trust_local = true
 ${config}
 `,
     );

@@ -38,15 +38,25 @@ What it *uses*:
   accept task files from people you wouldn't give a shell.
 - **The dashboard is local by default.** `furmi web` / `furmi start` bind
   127.0.0.1 and additionally require a loopback `Host` (against DNS
-  rebinding) and a per-run token on actions (against cross-site forgery).
+  rebinding), a per-session token on actions (against cross-site forgery) and
+  a sign-in: a secret only the data folder's owner can read
+  (`.local-token`, 0600), which `furmi open` gives to a browser once. Without
+  it any program on the machine, of any user, could fetch the page and queue a
+  task that runs as you; `[web] trust_local = true` accepts that.
 - **Serving other machines is opt-in**, and then the bearer token is the gate:
   a `--allowed-host '*'` entry means any `Host` is accepted and the token is
   the only thing left. It speaks plain HTTP — put `tailscale serve` or an SSH
   tunnel in front of it, not the open internet.
+- **What a task inherits and commits is limited.** Tasks don't get furmi's own
+  notification tokens (`[runner] strip_env` names more), an agent's prompt
+  can't be read as an option, and `on_finish` refuses a new file that looks like
+  a secret or is over 10 MB (`commit_guard`). These are guard rails against
+  accidents, not a sandbox: an agent can still read anything you can.
 - **Running an agent is running an agent.** A prompt-injected task can do
   whatever that agent can. Keep unattended agents on the shortest leash their
   own flags allow (`--permission-mode`, `--full-auto`, …), and see the
-  `max_parallel` and `timeout` limits (see `furmi init`'s config.toml and
+  `max_parallel` and `timeout` limits, and `[unattended]`, which says how far
+  each agent may go with nobody to ask (`edits` before `all`) (see `furmi init`'s config.toml and
   [docs/FORMAT.md](docs/FORMAT.md)).
 
 ## In scope

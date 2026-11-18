@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta name="furmi-token" content="__FURMI_TOKEN__">
+<meta name="furmi-gated" content="__FURMI_GATED__">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Furmiculi</title>
@@ -229,7 +230,22 @@
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 16px;
     background: var(--failed); color: var(--bg); font-size: 13px; display: none; z-index: 20;
   }
-  .toast.active { display: block; }
+  .toast.active { display: flex; align-items: center; gap: 14px; max-width: min(560px, calc(100vw - 24px)); }
+  .toast button {
+    background: none; border: 1px solid currentColor; color: inherit; font: inherit; font-weight: 600;
+    padding: 2px 10px; cursor: pointer; flex: none;
+  }
+  #ask-overlay { z-index: 30; }
+  .modal.ask { width: min(460px, 100%); }
+  .modal.ask form { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .modal.ask p { margin: 0; font-size: 13px; color: var(--muted); }
+  .modal.ask input {
+    font: inherit; padding: 8px 10px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text);
+  }
+  .modal.ask .buttons { display: flex; gap: 8px; justify-content: flex-end; }
+  .btn.danger { background: var(--failed); border-color: var(--failed); color: #fff; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   header .primary {
     white-space: nowrap;
     background: var(--accent); color: var(--bg); border: 1px solid var(--accent);
@@ -265,6 +281,7 @@
   form.new-task .buttons { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
   form.new-task .error { color: var(--failed); font-size: 12px; margin-right: auto; white-space: pre-line; }
   .why { color: var(--muted); font-size: 11px; max-width: 280px; white-space: normal; margin-top: 2px; }
+  .exact { color: var(--muted); font-size: 11px; margin-top: 2px; }
   .summary {
     font-size: 14px; font-weight: 500;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -305,6 +322,18 @@
   ul.agents code.cmd { flex: 1 1 260px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px; font-size: 12px; overflow-x: auto; white-space: nowrap; }
   ul.agents button { font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
   ul.agents button:hover { background: rgba(127,127,127,.12); }
+  .modal input, .modal select, .modal textarea { color-scheme: light dark; }
+  form.limits input[type="text"], form.limits input[type="number"], form.limits select {
+    font: inherit; font-size: 13px; padding: 4px 8px; margin-left: 6px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  }
+  form.limits input[type="number"] { width: 84px; }
+  form.limits label { display: inline-flex; align-items: center; }
+  form.limits fieldset.inline { border: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+  form.limits fieldset.inline legend { float: left; padding: 0; margin-right: 12px; }
+  form.limits fieldset.inline label { margin: 0; }
+  ul.agents select.allow { font: inherit; font-size: 12px; padding: 2px 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+  ul.agents .allow-label { color: var(--muted); font-size: 12px; }
   form.limits { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 4px 16px 12px; font-size: 13px; }
   form.limits input { width: 56px; margin-left: 6px; }
   form.limits button { font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
@@ -312,6 +341,11 @@
   .badge.active { color: var(--done); }
   .badge.paused { color: var(--cancelled); }
   form.new-task [hidden] { display: none; }
+  /* Stays in reach however long the form has grown. */
+  form.new-task .buttons { position: sticky; bottom: -16px; background: var(--bg); padding: 12px 0 16px; margin-bottom: -16px; border-top: 1px solid var(--border); }
+  form.new-task details { border-top: 1px solid var(--border); padding-top: 10px; }
+  form.new-task details summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
+  form.new-task details .row { margin-bottom: 12px; }
   .toolbar {
     display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
     margin: 14px 22px 0; padding: 0; font-size: 13px;
@@ -373,10 +407,20 @@
        sight by it. The block scrolls on its own instead. */
     max-height: 38vh; overflow: auto;
   }
+  .task-view pre.tail {
+    margin: 0; padding: 10px 12px; max-height: 240px; overflow: auto; font-size: 12px;
+    white-space: pre-wrap; word-break: break-word; background: var(--surface); border: 1px solid var(--border);
+  }
+  .task-view ul.changed { list-style: none; margin: 6px 0 0; padding: 0; font-size: 12px; }
+  .task-view ul.changed li { padding: 2px 0; overflow-wrap: anywhere; }
+  .task-view ul.changed .st { display: inline-block; width: 2.2em; color: var(--muted); }
+  .task-view .stat { font-size: 13px; margin: 0; }
+  .task-view .stat .dim { color: var(--muted); }
   .task-view dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; margin: 0; font-size: 13px; }
   .task-view dt { color: var(--muted); }
   .task-view dd { margin: 0; word-break: break-word; }
   .task-view .why { max-width: none; }
+  .task-view .missing { margin: 0 0 12px; font-size: 14px; line-height: 1.6; }
   .task-view .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 18px; }
   .task-view .acts button {
     font-size: 12.5px; padding: 5px 10px; cursor: pointer;
@@ -386,6 +430,19 @@
   .task-view .acts button.danger { color: var(--failed); border-color: var(--failed); }
 
   /* ---- Live logs ---- */
+  #logs-body.nowrap { white-space: pre; word-break: normal; }
+  #logs-foot { flex-wrap: wrap; }
+  #logs-foot .tools { display: flex; gap: 6px; margin-left: auto; }
+  #logs-foot .tools .btn { margin-left: 0; padding: 4px 10px; font-size: 12px; }
+  #logs-attempt { font: inherit; font-size: 12px; padding: 2px 6px; margin-left: 12px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+  #logs-latest { position: absolute; right: 22px; bottom: 56px; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+  #logs-latest[hidden] { display: none; }
+  .modal.logs { position: relative; }
+  .ansi-1 { font-weight: 700; }
+  .ansi-30 { color: var(--muted); } .ansi-31 { color: var(--failed); } .ansi-32 { color: var(--done); }
+  .ansi-33 { color: var(--review); } .ansi-34 { color: var(--accent-ink); } .ansi-35 { color: #9b59b6; }
+  .ansi-36 { color: #1b8a8f; } .ansi-37 { color: var(--text); }
   .modal header .live {
     display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
     font-size: 11px; font-weight: 400; color: var(--muted);
@@ -479,7 +536,7 @@
   @media (max-width: 760px) {
     header { padding: 10px 14px; gap: 8px; flex-wrap: wrap; }
     .view-head { flex-wrap: wrap; }
-    header h1 .name, .runner-pill .detail, #setup-open, #keys-open { display: none; }
+    header h1 .name, .runner-pill .detail, #keys-open { display: none; }
     .toolbar input[type="search"] { flex: 1 1 100%; height: 40px; }
     main { padding: 12px 14px 32px; }
     .layout { display: block; }
@@ -489,7 +546,10 @@
       border-right: none;
     }
     aside#side h2, .side-note { display: none; }
-    aside#side nav { flex-direction: row; overflow-x: auto; gap: 6px; padding-bottom: 2px; }
+    aside#side nav { flex-direction: row; overflow-x: auto; gap: 6px; padding-bottom: 2px;
+      /* Fades out at the right edge: there is more to swipe to. */
+      -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+      mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); padding-right: 28px; }
     aside#side nav button {
       flex: none; min-height: 42px; border: 1px solid var(--border); border-left-width: 1px; white-space: nowrap;
     }
@@ -605,17 +665,24 @@
 <div id="stats-tip" role="tooltip" hidden></div>
 
 <div class="overlay" id="logs-overlay">
-  <div class="modal">
+  <div class="modal logs">
     <header>
       <h2 class="mono" id="logs-title">logs</h2>
+      <select id="logs-attempt" hidden aria-label="Which attempt"></select>
       <span class="live" id="logs-live" hidden><span class="dot"></span>live</span>
       <button id="logs-close" aria-label="Close">&times;</button>
     </header>
     <pre id="logs-body">loading&hellip;</pre>
+    <button class="btn" id="logs-latest" hidden>Jump to the latest &darr;</button>
     <div class="foot" id="logs-foot" hidden>
       <span id="logs-note">Rendered from the agent's JSON output</span>
       <span class="cut" id="logs-cut" hidden>showing the end of a long log</span>
-      <button class="btn secondary" id="logs-toggle">Show the raw output</button>
+      <span class="tools">
+        <button class="btn secondary" id="logs-toggle">Show the raw output</button>
+        <button class="btn secondary" id="logs-wrap" aria-pressed="true" title="Wrap long lines">Wrap</button>
+        <button class="btn secondary" id="logs-copy" title="Copy everything shown here">Copy</button>
+        <button class="btn secondary" id="logs-download" title="Save it as a file">Download</button>
+      </span>
     </div>
   </div>
 </div>
@@ -689,6 +756,29 @@
           <small id="f-model-hint">Leave empty for the agent's own model.</small>
         </label>
       </div>
+      <details id="f-more">
+        <summary>More options</summary>
+        <div class="row">
+          <label>Start the branch from
+            <input id="f-base" class="mono" placeholder="origin/main" spellcheck="false" autocomplete="off">
+            <small>Fetched first. Empty: whatever the project has checked out.</small>
+          </label>
+          <label>Run after
+            <input id="f-after" class="mono" placeholder="task-id, another-id" spellcheck="false" autocomplete="off">
+            <small>Waits until those have finished as done.</small>
+          </label>
+        </div>
+        <div class="row">
+          <label>Set the workspace up with
+            <input id="f-setup" class="mono" placeholder="npm ci" spellcheck="false" autocomplete="off">
+            <small>Run once before the first attempt. $FURMI_REPO is the project's folder.</small>
+          </label>
+          <label>Priority
+            <input id="f-priority" type="number" value="0">
+            <small>Higher starts first.</small>
+          </label>
+        </div>
+      </details>
       <div class="buttons">
         <span class="error" id="f-error"></span>
         <button type="button" class="btn secondary" id="new-cancel">Cancel</button>
@@ -701,7 +791,7 @@
 </div>
 
 <div class="overlay" id="setup-overlay">
-  <div class="modal">
+  <div class="modal wide setup">
     <header>
       <h2>Setup</h2>
       <button id="setup-close" aria-label="Close">&times;</button>
@@ -710,25 +800,82 @@
       <h3 class="sub">Coding agents</h3>
       <ul class="agents" id="agent-list"><li>checking&hellip;</li></ul>
       <p class="hint" id="agent-hint"></p>
-      <h3 class="sub">Runner</h3>
+      <p class="hint" id="allow-hint" hidden>Nobody is there to answer an agent's permission questions while a
+        task runs. <strong>How far it may go</strong> says what to answer for it: edit files in the task's own
+        workspace, or edit and run anything with no sandbox. With no answer, an agent that asks first stops
+        at its first question and the task changes nothing.</p>
+
+      <h3 class="sub">How much at once</h3>
       <form class="limits" id="limits-form">
-        <label>At once, overall <input type="number" min="1" id="lim-total" required></label>
-        <label>At once, per repo <input type="number" min="1" id="lim-repo" required></label>
-        <label>Rescan every <input type="text" id="lim-poll" size="6" required></label>
+        <label>Tasks at once <input type="number" min="1" id="lim-total" required></label>
+        <label>Tasks at once in one project <input type="number" min="1" id="lim-repo" required></label>
+        <label>Look for work every <input type="text" id="lim-poll" size="6" required></label>
+        <label title="Stop starting tasks once today's finished tasks have used this many tokens. 0 means no limit.">Tokens a day, at most
+          <input type="number" min="0" id="lim-budget" placeholder="0"></label>
         <button type="submit">Save</button>
       </form>
-      <p class="hint">A running <code>furmi run</code> picks changes up within a poll.</p>
+      <p class="hint">A running <code>furmi run</code> picks changes up within a look. Past the daily tokens the
+        queue is held until tomorrow; what is running still finishes.</p>
+
       <h3 class="sub">Task defaults</h3>
       <form class="limits" id="defaults-form">
-        <label>Mode <select id="def-mode"><option>headless</option><option>interactive</option></select></label>
-        <label>On finish <select id="def-finish"><option>none</option><option>commit</option><option>push</option><option>pr</option></select></label>
+        <label>Runs
+          <select id="def-mode">
+            <option value="headless">on its own, no one watching</option>
+            <option value="interactive">in a terminal you can type into</option>
+          </select></label>
+        <label>When it's done
+          <select id="def-finish">
+            <option value="none">leave the changes for me</option>
+            <option value="commit">commit them</option>
+            <option value="push">commit and push</option>
+            <option value="pr">open a pull request</option>
+          </select></label>
         <label><input type="checkbox" id="def-worktree"> Own git worktree</label>
         <label>Retries <input type="number" min="0" id="def-retries" required></label>
-        <label>Retry delay <input type="text" id="def-delay" size="6" required></label>
-        <label>Timeout <input type="text" id="def-timeout" size="6" required></label>
+        <label>Wait between tries <input type="text" id="def-delay" size="6" required></label>
+        <label>Give up after <input type="text" id="def-timeout" size="6" required></label>
         <button type="submit">Save</button>
       </form>
       <p class="hint">Used by any task or schedule that doesn't set its own. Durations look like <code>30s</code>, <code>5m</code>, <code>2h</code>.</p>
+
+      <h3 class="sub">Tell me when a task ends</h3>
+      <form class="limits" id="notify-form">
+        <fieldset class="inline">
+          <legend>Send a message when a task</legend>
+          <label><input type="checkbox" name="on" value="finished"> finished</label>
+          <label><input type="checkbox" name="on" value="failed"> failed for good</label>
+          <label><input type="checkbox" name="on" value="needs_review"> needs a look</label>
+        </fieldset>
+        <label>ntfy server <input type="text" id="nt-url" size="22" placeholder="https://ntfy.sh" spellcheck="false"></label>
+        <label>ntfy topic <input type="text" id="nt-topic" size="14" spellcheck="false"></label>
+        <label>Telegram chat id <input type="text" id="nt-chat" size="12" spellcheck="false"></label>
+        <button type="submit">Save</button>
+        <button type="button" id="nt-test" title="Send a message to what is saved">Send a test</button>
+      </form>
+      <p class="hint" id="notify-hint">Access tokens stay out of this page and of config.toml: they are read from
+        files (or <code>FURMI_NTFY_TOKEN</code> and <code>FURMI_TELEGRAM_BOT_TOKEN</code>). See the README.</p>
+      <ul class="checks" id="notify-problems"></ul>
+
+      <h3 class="sub">On this computer</h3>
+      <form class="limits" id="browser-form">
+        <label><input type="checkbox" id="browser-notify"> Tell me in this browser when a task ends while this tab is in the background</label>
+      </form>
+      <p class="hint" id="browser-hint"></p>
+
+      <h3 class="sub">Other machines</h3>
+      <ul class="agents" id="nodes-list"><li>checking&hellip;</li></ul>
+      <p class="hint">Add one in a terminal with <code>furmi node add &lt;name&gt; &lt;ssh-target&gt;</code>; it needs furmi installed over there and nothing else.</p>
+
+      <div id="signin-wrap" hidden>
+        <h3 class="sub">Signing in</h3>
+        <form class="limits" id="signin-form">
+          <button type="button" id="sign-out">Sign out of this browser</button>
+          <button type="button" id="sign-out-all">Sign out everywhere</button>
+        </form>
+        <p class="hint" id="signin-hint"></p>
+      </div>
+
       <h3 class="sub">Checks</h3>
       <ul class="checks" id="setup-list"><li>checking&hellip;</li></ul>
     </div>
@@ -769,10 +916,24 @@
   </div>
 </div>
 
-<div class="bulk" id="bulk" hidden></div>
-<div class="toast" id="toast"></div>
+<div class="overlay" id="ask-overlay">
+  <div class="modal ask" role="alertdialog" aria-modal="true" aria-labelledby="ask-title" aria-describedby="ask-msg">
+    <header><h2 id="ask-title"></h2></header>
+    <form id="ask-form">
+      <p id="ask-msg"></p>
+      <input id="ask-input" hidden autocomplete="off">
+      <div class="buttons">
+        <button type="button" class="btn secondary" id="ask-cancel">Cancel</button>
+        <button type="submit" class="btn" id="ask-ok">OK</button>
+      </div>
+    </form>
+  </div>
+</div>
 
-<script>
+<div class="bulk" id="bulk" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script nonce="__FURMI_NONCE__">
 // The token: embedded at startup (loopback mode) or, on a remote dashboard, the
 // session's own token, filled in per page load. The server has already traded a
 // `?token=` for an HttpOnly session cookie and redirected without it, so it is
@@ -825,7 +986,7 @@ function applyTheme(choice, remember) {
   if (logo) logo.src = resolvedTheme() === "dark" ? "/logo-dark.png" : "/logo.png";
   const btn = document.getElementById("theme-toggle");
   if (btn) {
-    btn.textContent = THEME_LABELS[choice];
+    btn.textContent = `Theme: ${THEME_LABELS[choice]}`;
     btn.title = `Light, dark, or whatever this computer is set to (now: ${THEME_LABELS[choice].toLowerCase()})`;
   }
   if (remember) {
@@ -1127,7 +1288,9 @@ function idCell(r) {
   const summary = r.summary
     ? `<div class="summary" title="${escapeHtml(r.summary)}">${escapeHtml(r.summary)}</div>` : "";
   const why = r.error && r.status !== "done" ? `<div class="why">${escapeHtml(r.error)}</div>` : "";
-  return `${summary}${why}<div class="idcell"><span class="mono">${escapeHtml(shortId(r.id))}</span>` +
+  const waits = r.waits ? `<div class="why" title="Set with --after">${escapeHtml(r.waits)}</div>` : "";
+  const first = r.priority > 0 ? `<span class="badge" title="Starts before waiting tasks with a lower number">priority ${r.priority}</span> ` : "";
+  return `${summary}${why}${waits}<div class="idcell">${first}<span class="mono">${escapeHtml(shortId(r.id))}</span>` +
     `<button class="copy" data-action="copy" data-text="${escapeHtml(shortId(r.id))}" ` +
     `title="Copy the id: ${escapeHtml(shortId(r.id))}" aria-label="Copy the id ${escapeHtml(shortId(r.id))}">${COPY_ICON}</button></div>`;
 }
@@ -1135,10 +1298,31 @@ function idCell(r) {
 // When it runs (or ran): for a working task that's when it started, plus how
 // long it has been going. The clock is filled in and kept current by the
 // once-a-second ticker below, so it doesn't wait on the next push.
+const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { return ""; } })();
+
+// "3 min ago", "in 2 h": what a person asks of a time. The exact one is under
+// it (and on hover, with the time zone it is in), for when it's needed.
+function relTime(iso, now) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const diff = Math.round((t - (now ?? Date.now())) / 1000), abs = Math.abs(diff);
+  if (abs < 45) return diff >= 0 ? "in a moment" : "just now";
+  let span;
+  if (abs < 3570) span = `${Math.round(abs / 60)} min`;
+  else if (abs < 36 * 3600) span = `${Math.round(abs / 3600)} h`;
+  else { const d = Math.round(abs / 86400); span = `${d} day${d === 1 ? "" : "s"}`; }
+  return diff >= 0 ? `in ${span}` : `${span} ago`;
+}
+
 function whenCell(r) {
   const when = escapeHtml(r.when);
-  if (r.status !== "running" || !r.when_at) return when;
-  return `${when}<div class="why elapsed mono" data-started="${escapeHtml(r.when_at)}"></div>`;
+  if (!r.when_at) return when;
+  if (r.status === "running") {
+    return `${when}<div class="why elapsed mono" data-started="${escapeHtml(r.when_at)}"></div>`;
+  }
+  const exact = escapeHtml(`${r.when}${TZ ? ` (${TZ})` : ""}`);
+  return `<span class="rel" data-at="${escapeHtml(r.when_at)}" title="${exact}">${escapeHtml(relTime(r.when_at))}</span>` +
+    `<div class="exact mono" title="${exact}">${when}</div>`;
 }
 
 // "12s", "3m 05s", "2h 07m" — coarse enough to stay readable while it ticks.
@@ -1152,6 +1336,10 @@ function fmtElapsed(ms) {
 
 function tickElapsed() {
   const now = Date.now();
+  for (const el of document.querySelectorAll(".rel[data-at]")) {
+    const text = relTime(el.dataset.at, now);
+    if (text && el.textContent !== text) el.textContent = text;
+  }
   for (const el of document.querySelectorAll(".elapsed[data-started]")) {
     const started = Date.parse(el.dataset.started);
     if (!Number.isNaN(started)) el.textContent = `running ${fmtElapsed(now - started)}`;
@@ -1199,8 +1387,16 @@ const SCHEDULE_COLS = [
       : `<span class="badge paused" title="Paused: it adds nothing until you resume it.">Paused</span>` },
   { key: "cron", label: "Repeats", render: r => `<span title="${escapeHtml(r.cron)}">${escapeHtml(describeCron(r.cron))}</span>` },
   { key: "next", label: "Next run" },
-  { key: "repo", label: "Project", mono: true },
+  { key: "last", label: "Last run", render: r => {
+      if (!r.last_run) return `<span class="sub">not yet</span>`;
+      const when = r.last_run.at ? `<div class="why">${escapeHtml(relTime(r.last_run.at))}</div>` : "";
+      const streak = r.failing >= 2 ? `<div><span class="badge failed" title="Its latest runs all failed">failed ${r.failing} times running</span></div>` : "";
+      return `<button class="linkish" data-action="open-task" data-id="${escapeHtml(r.last_run.id)}" title="Open ${escapeHtml(r.last_run.id)}">${badge(r.last_run.status)}</button>${when}${streak}`;
+    } },
+  { key: "repo", label: "Project", render: r =>
+      `<div title="${escapeHtml(r.repo)}">${escapeHtml(baseName(r.repo))}</div>` },
   { key: "actions", label: "", render: r => !canAct(r) ? "" : `<div class="actions">
+      <button data-id="${escapeHtml(r.id)}" data-action="sched-run" title="Queue one run now, without waiting for the next slot. Its schedule is unchanged.">Run now</button>
       <button data-id="${escapeHtml(r.id)}" data-action="sched-edit" title="Change what it does or when">Edit</button>
       <button data-id="${escapeHtml(r.id)}" data-action="${r.enabled ? "sched-pause" : "sched-resume"}"
         title="${r.enabled ? "Stop adding tasks until you resume it" : "Start adding tasks again"}">${r.enabled ? "Pause" : "Resume"}</button>
@@ -1238,7 +1434,9 @@ let lastState = null;
 async function refresh() {
   try {
     const res = await fetch("/api/state", { headers: AUTH() });
-    if (res.status === 401) { toast(LAPSED); return; }
+    // Signed out (idle, or signed out elsewhere): the server's sign-in page
+    // says how to get back in, which a toast can't.
+    if (res.status === 401) { location.reload(); return; }
     lastState = await res.json();
   } catch (e) {
     return; // keep showing the last good state
@@ -1273,6 +1471,8 @@ function syncUrl() {
   history[open ? "pushState" : "replaceState"](null, "", url);
 }
 
+let landOn = null;
+const VIEW_OF_STATUS = { pending: "waiting", running: "working", draft: "drafts", needs_review: "review", failed: "failed" };
 function applyUrl() {
   const [, kind, raw] = location.pathname.split("/");
   const id = raw ? decodeURIComponent(raw) : null;
@@ -1289,6 +1489,9 @@ function applyUrl() {
   if (task) { if (taskShown !== task) showTask(task); } else if (taskShown) closeTask();
   if (logs) { if (logsId !== logs) showLogs(logs); } else if (logsId) closeLogs();
   pageOverlay = task ? `task:${task}` : logs ? `logs:${logs}` : "";
+  // A link to a task says nothing about which list it was in: once the state
+  // is here, the page behind it is the list that holds it.
+  if ((task || logs) && !lastState) landOn = task || logs;
   if (lastState) draw(lastState);
 }
 
@@ -1313,8 +1516,78 @@ function drawVersions(state) {
   el.textContent = remote.map(n => `${n.name} ${n.version ? "v" + n.version : "(version unknown)"}`).join(" · ");
 }
 
+// ---- Knowing without looking
+//
+// A tab in the background still says when something wants you: its title and
+// icon carry a count of tasks that ended (or need review) while you were away,
+// and, if you asked for it in Setup, the browser says so as well.
+const NOTIFY_KEY = "furmi-notify";
+function browserNotifyOn() {
+  try { return localStorage.getItem(NOTIFY_KEY) === "1" && window.Notification && Notification.permission === "granted"; }
+  catch (e) { return false; }
+}
+let endedKnown = null;      // task id -> status, as of the last look
+let unseen = 0;             // ended while the tab was in the background
+const baseIcons = [...document.querySelectorAll('link[rel="icon"]')];
+function badgeIcon(count) {
+  try {
+    if (count === 0) {
+      for (const l of document.querySelectorAll('link[data-badge]')) l.remove();
+      for (const l of baseIcons) l.media = l.dataset.media ?? l.media;
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = c.height = 32;
+      const g = c.getContext("2d");
+      const h = 32 * img.height / img.width;
+      g.drawImage(img, 0, (32 - h) / 2, 32, h);
+      g.fillStyle = "#d93025";
+      g.beginPath(); g.arc(24, 8, 8, 0, 7); g.fill();
+      for (const l of baseIcons) { l.dataset.media = l.media; l.media = "not all"; }
+      let b = document.querySelector('link[data-badge]');
+      if (!b) { b = document.createElement("link"); b.rel = "icon"; b.dataset.badge = "1"; document.head.append(b); }
+      b.href = c.toDataURL("image/png");
+    };
+    img.src = "/logo.png";
+  } catch (e) { /* the title still says it */ }
+}
+function noteEnded(state) {
+  const now = new Map(state.archive.map(r => [r.id, r.status]));
+  if (endedKnown) {
+    for (const r of state.archive) {
+      if (endedKnown.has(r.id) || r.status === "cancelled") continue;
+      if (document.hidden) unseen++;
+      if (document.hidden && browserNotifyOn()) {
+        const verdict = { done: "finished", failed: "failed", needs_review: "needs a look" }[r.status] || r.status;
+        const n = new Notification(`${r.id} ${verdict}`, { body: r.error || r.summary || "", icon: "/logo.png", tag: r.id });
+        n.onclick = () => { window.focus(); showTask(r.id); n.close(); };
+      }
+    }
+  }
+  endedKnown = now;
+  const count = unseen + (state.counts.needs_review || 0);
+  document.title = count > 0 ? `(${count}) Furmiculi` : "Furmiculi";
+  if (badgeShown !== count > 0) { badgeShown = count > 0; badgeIcon(count); }
+}
+let badgeShown = false;
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && unseen) { unseen = 0; if (lastState) noteEnded(lastState); }
+});
+
 // Everything on the page comes from one state object.
 function draw(state) {
+  noteEnded(state);
+  if (landOn) {
+    const row = taskRow(landOn);
+    if (row) {
+      const v = VIEWS.find(x => x.id === (VIEW_OF_STATUS[row.status] || "finished"));
+      filter = v.filter || null;
+      showTab(v.tab);
+    }
+    landOn = null;
+  }
   drawVersions(state);
   document.getElementById("home").textContent = state.home;
   document.getElementById("updated").textContent = state.generated_at;
@@ -1721,14 +1994,112 @@ searchEl.addEventListener("input", () => {
 });
 
 let toastTimer = null;
-function toast(msg, ok) {
+// `undo`, when there is one, is `{ label, run }`: a button that takes the
+// thing back, for the few seconds the message is up.
+function toast(msg, ok, undo) {
   const el = document.getElementById("toast");
-  el.textContent = msg;
+  el.textContent = "";
+  const text = document.createElement("span");
+  text.textContent = msg;
+  el.append(text);
+  if (undo) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = undo.label;
+    b.addEventListener("click", () => { el.classList.remove("active"); undo.run(); });
+    el.append(b);
+  }
   el.classList.toggle("ok", !!ok);
   el.classList.add("active");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove("active"), 4000);
+  toastTimer = setTimeout(() => el.classList.remove("active"), undo ? 8000 : 4000);
 }
+
+// ---- Asking in the page
+//
+// The browser's own confirm() and prompt() stop the page, look like nothing
+// else here, can't say what a button will do, and are dropped by some
+// browsers for a tab in the background. This is the same question, in the
+// page's own dialog: `null` when it's declined, `true` when it's accepted,
+// and the text when it asks for some.
+const askOverlay = document.getElementById("ask-overlay");
+let askDone = null;
+function ask({ title, message = "", confirm = "OK", danger = false, input = null }) {
+  return new Promise((resolve) => {
+    if (askDone) askDone(null);
+    const field = document.getElementById("ask-input");
+    const ok = document.getElementById("ask-ok");
+    document.getElementById("ask-title").textContent = title;
+    document.getElementById("ask-msg").textContent = message;
+    field.hidden = !input;
+    field.value = "";
+    field.placeholder = input?.placeholder || "";
+    field.setAttribute("aria-label", input?.label || title);
+    ok.textContent = confirm;
+    ok.classList.toggle("danger", danger);
+    askDone = (value) => {
+      askDone = null;
+      askOverlay.classList.remove("active");
+      resolve(value);
+    };
+    askOverlay.classList.add("active");
+    // The risky answer isn't the one Enter gives.
+    (input ? field : danger ? document.getElementById("ask-cancel") : ok).focus();
+  });
+}
+document.getElementById("ask-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const field = document.getElementById("ask-input");
+  if (askDone) askDone(field.hidden ? true : field.value.trim());
+});
+document.getElementById("ask-cancel").addEventListener("click", () => askDone && askDone(null));
+askOverlay.addEventListener("click", (e) => { if (e.target === askOverlay && askDone) askDone(null); });
+
+// ---- Dialogs are dialogs
+//
+// Each overlay says what it is to a screen reader, takes the focus when it
+// opens, keeps Tab inside itself, and hands the focus back to whatever opened
+// it when it closes.
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const openers = new Map();
+function visible(el) { return el.offsetParent !== null || el === document.activeElement; }
+for (const overlay of document.querySelectorAll(".overlay")) {
+  const modal = overlay.querySelector(".modal");
+  const title = modal.querySelector("header h2");
+  if (!modal.getAttribute("role")) { modal.setAttribute("role", "dialog"); modal.setAttribute("aria-modal", "true"); }
+  if (title && !modal.getAttribute("aria-labelledby")) {
+    if (!title.id) title.id = `${overlay.id}-title`;
+    modal.setAttribute("aria-labelledby", title.id);
+  }
+  new MutationObserver(() => {
+    const on = overlay.classList.contains("active");
+    if (on && !openers.has(overlay)) {
+      openers.set(overlay, document.activeElement);
+      // After the key press that opened it has finished: an Enter that opens
+      // a dialog must not go on to press the button the focus lands on.
+      setTimeout(() => {
+        if (!overlay.classList.contains("active") || modal.contains(document.activeElement)) return;
+        const first = [...modal.querySelectorAll(FOCUSABLE)].find(visible);
+        (first || modal).focus?.();
+      }, 0);
+    } else if (!on && openers.has(overlay)) {
+      const back = openers.get(overlay);
+      openers.delete(overlay);
+      if (back && back.isConnected && !document.querySelector(".overlay.active")) back.focus?.();
+    }
+  }).observe(overlay, { attributes: true, attributeFilter: ["class"] });
+  modal.setAttribute("tabindex", "-1");
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Tab") return;
+  const open = [...document.querySelectorAll(".overlay.active")].pop();
+  if (!open) return;
+  const items = [...open.querySelectorAll(FOCUSABLE)].filter(visible);
+  if (items.length === 0) return;
+  const first = items[0], last = items[items.length - 1];
+  if (e.shiftKey && (document.activeElement === first || !open.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (document.activeElement === last || !open.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
+});
 
 const logsOverlay = document.getElementById("logs-overlay");
 const logsTitle = document.getElementById("logs-title");
@@ -1736,6 +2107,8 @@ const logsBody = document.getElementById("logs-body");
 const logsFoot = document.getElementById("logs-foot");
 const logsToggle = document.getElementById("logs-toggle");
 const logsLive = document.getElementById("logs-live");
+const logsAttemptSel = document.getElementById("logs-attempt");
+const logsLatest = document.getElementById("logs-latest");
 const logsCut = document.getElementById("logs-cut");
 const logsNote = document.getElementById("logs-note");
 
@@ -1755,15 +2128,50 @@ let logsEvents = null;
 // reaches 64 MB; this is what a screenful or twenty of it needs.
 const LOG_TAIL_BYTES = 100_000;
 
+// A terminal's colours and carriage returns, as an agent's tools print them,
+// made into something a page can show: the colours it names (in the page's own
+// palette), bold, and a progress line that rewrites itself kept as its last
+// version. Anything else an escape sequence asks for (moving the cursor,
+// clearing the screen) is dropped. Built from escaped text only.
+function ansiHtml(text) {
+  if (!text.includes("\x1b") && !text.includes("\r")) return escapeHtml(text);
+  const lines = text.replace(/\r\n/g, "\n").split("\n").map(l => l.slice(l.lastIndexOf("\r") + 1));
+  let open = false;
+  const out = [];
+  for (const line of lines) {
+    let html = "", last = 0;
+    const re = /\x1b\[([0-9;?]*)([A-Za-z])/g;
+    let m;
+    while ((m = re.exec(line))) {
+      html += escapeHtml(line.slice(last, m.index));
+      last = re.lastIndex;
+      if (m[2] !== "m") continue;
+      if (open) { html += "</span>"; open = false; }
+      const classes = [];
+      for (const code of (m[1] || "0").split(";").map(Number)) {
+        if (code === 1) classes.push("ansi-1");
+        else if (code >= 30 && code <= 37) classes.push(`ansi-${code}`);
+        else if (code >= 90 && code <= 97) classes.push(`ansi-${code - 60}`);
+      }
+      if (classes.length) { html += `<span class="${classes.join(" ")}">`; open = true; }
+    }
+    html += escapeHtml(line.slice(last)).replace(/\x1b/g, "");
+    // A colour doesn't run across lines in what is shown.
+    if (open) { html += "</span>"; open = false; }
+    out.push(html);
+  }
+  return out.join("\n");
+}
+
 function drawLogs() {
   // The footer is for the readable view and for what got cut; a plain-text log
   // that is all here needs neither.
   logsNote.hidden = logsReadable === null;
   logsToggle.hidden = logsReadable === null;
   logsCut.hidden = !logsCutOff;
-  logsFoot.hidden = logsReadable === null && !logsCutOff;
+  logsFoot.hidden = !logsLoaded;
   logsToggle.textContent = logsShowRaw ? "Show the readable view" : "Show the raw output";
-  if (logsShowRaw || logsReadable === null) logsBody.textContent = logsRaw || "(empty)";
+  if (logsShowRaw || logsReadable === null) logsBody.innerHTML = ansiHtml(logsRaw || "(empty)");
   else logsBody.innerHTML = logsReadable;
 }
 
@@ -1774,8 +2182,20 @@ function taskRow(id) {
     .find(r => r.id === id) || null;
 }
 
+let logsAttempt = null; // null: the latest, which is the one that is followed
+function fillAttempts(id) {
+  const row = taskRow(id);
+  const n = row && row.attempts ? row.attempts : 0;
+  logsAttemptSel.hidden = n < 2;
+  logsAttemptSel.innerHTML = Array.from({ length: n }, (_, i) => n - i)
+    .map(a => `<option value="${a}">Attempt ${a}${a === n ? " (latest)" : ""}</option>`).join("");
+  logsAttemptSel.value = String(logsAttempt || n);
+}
+
 async function showLogs(id) {
+  logsAttempt = null;
   logsId = id;
+  fillAttempts(id);
   logsTitle.textContent = id;
   logsBody.textContent = "loading…";
   logsFoot.hidden = true;
@@ -1795,7 +2215,8 @@ async function showLogs(id) {
 // doesn't fight with scrolling up to read something.
 function openLogsStream(id) {
   stopLogsStream();
-  logsEvents = new EventSource(`/api/tasks/${encodeURIComponent(id)}/logs/stream?tail=${LOG_TAIL_BYTES}`);
+  const which = logsAttempt ? `&attempt=${logsAttempt}` : "";
+  logsEvents = new EventSource(`/api/tasks/${encodeURIComponent(id)}/logs/stream?tail=${LOG_TAIL_BYTES}${which}`);
   logsEvents.onmessage = (e) => {
     let data;
     try { data = JSON.parse(e.data); } catch { return; }
@@ -1833,9 +2254,53 @@ function applyLogs(text, cut) {
   logsLoaded = true;
   drawLogs();
   const row = taskRow(logsId);
-  logsLive.hidden = !row || row.status !== "running";
+  logsLive.hidden = !row || row.status !== "running" || !!logsAttempt;
   if (follow) logsBody.scrollTop = logsBody.scrollHeight;
+  syncLatest();
 }
+
+// "Jump to the latest" appears when a log that is still growing has been
+// scrolled away from its end, so reading back never means losing the place.
+function syncLatest() {
+  const away = logsBody.scrollTop + logsBody.clientHeight < logsBody.scrollHeight - 40;
+  logsLatest.hidden = !(away && !logsLive.hidden);
+}
+logsBody.addEventListener("scroll", syncLatest);
+logsLatest.addEventListener("click", () => { logsBody.scrollTop = logsBody.scrollHeight; syncLatest(); });
+logsAttemptSel.addEventListener("change", () => {
+  const n = Number(logsAttemptSel.value);
+  const row = taskRow(logsId);
+  logsAttempt = row && n === row.attempts ? null : n;
+  logsRaw = ""; logsReadable = null; logsLoaded = false; logsCutOff = false;
+  logsBody.textContent = "loading…";
+  openLogsStream(logsId);
+});
+
+// What is shown, as a file or on the clipboard.
+const WRAP_KEY = "furmi-logwrap";
+let logsWrap = (() => { try { return localStorage.getItem(WRAP_KEY) !== "0"; } catch (e) { return true; } })();
+function applyWrap() {
+  logsBody.classList.toggle("nowrap", !logsWrap);
+  document.getElementById("logs-wrap").setAttribute("aria-pressed", String(logsWrap));
+}
+applyWrap();
+document.getElementById("logs-wrap").addEventListener("click", () => {
+  logsWrap = !logsWrap;
+  try { localStorage.setItem(WRAP_KEY, logsWrap ? "1" : "0"); } catch (e) { /* kept for this visit only */ }
+  applyWrap();
+});
+document.getElementById("logs-copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(logsRaw); toast("Copied the log", true); }
+  catch (e) { toast("Couldn't copy: select the text and copy it by hand"); }
+});
+document.getElementById("logs-download").addEventListener("click", () => {
+  const url = URL.createObjectURL(new Blob([logsRaw], { type: "text/plain" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${logsId}${logsAttempt ? `.${logsAttempt}` : ""}.log`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
 
 function stopLogsStream() {
   if (logsEvents) logsEvents.close();
@@ -1950,18 +2415,51 @@ async function postAction(id, action, body) {
 
 async function runAction(id, action) {
   let body;
+  const row = taskRow(id);
+  let undoable = false;
   if (action === "fail") {
-    const reason = prompt(`Why didn't ${id} work out? (optional)`, "");
+    const reason = await ask({
+      title: `Mark ${id} as failed?`,
+      message: "This stops the agent and it won't be tried again. Why didn't it work out? (optional)",
+      input: { placeholder: "e.g. it changed the wrong file", label: "Why it failed" },
+      confirm: "Mark failed", danger: true,
+    });
     if (reason === null) return; // cancelled
     body = JSON.stringify({ reason });
+  } else if (action === "cancel" && row && row.status === "draft") {
+    const sure = await ask({
+      title: `Discard the draft ${id}?`, message: "A draft is deleted for good: there is no file left to bring back.",
+      confirm: "Discard", danger: true,
+    });
+    if (!sure) return;
+  } else if (action === "cancel") {
+    // Dropping something that was only waiting to start can be taken back
+    // (try again puts it back as it was) as long as it had no start time of
+    // its own, which would be lost: so it needs no question.
+    if (row && row.when_at) {
+      const sure = await ask({
+        title: `Drop ${id}?`,
+        message: "It hasn't started, and the when-done step won't run. Its start time is lost.",
+        confirm: "Drop it", danger: true,
+      });
+      if (!sure) return;
+    } else {
+      undoable = true;
+    }
   }
-  const row = taskRow(id);
-  const confirmText = { cancel: row && row.status === "draft"
-    ? `Discard the draft ${id}?` : `Drop ${id}? It hasn't started, and the when-done step won't run.` };
-  if (CONFIRM_ACTIONS.has(action) && action !== "fail" && !confirm(confirmText[action])) return;
 
   const error = await postAction(id, action, body);
   if (error) toast(error);
+  else if (undoable) {
+    toast(`Dropped ${id}`, true, {
+      label: "Undo",
+      run: async () => {
+        const e = await postAction(id, "retry");
+        if (e) toast(e); else toast(`${id} is waiting again`, true);
+        await refresh();
+      },
+    });
+  }
   await refresh();
   // Done, failed, retried: the view stays open, showing what it became.
   if (taskShown === id) showTask(id);
@@ -2019,11 +2517,21 @@ async function bulkAction(action) {
   if (ids.length === 0) return;
   let body;
   if (action === "fail") {
-    const reason = prompt(`Why didn't these ${ids.length} work out? (optional)`, "");
+    const reason = await ask({
+      title: `Mark ${ids.length} tasks as failed?`,
+      message: "This stops their agents and they won't be tried again. Why didn't they work out? (optional)",
+      input: { placeholder: "e.g. the upgrade broke the build", label: "Why they failed" },
+      confirm: "Mark failed", danger: true,
+    });
     if (reason === null) return;
     body = JSON.stringify({ reason });
-  } else if (action === "cancel" && !confirm(`Drop ${ids.length} tasks? They haven't started, and the when-done step won't run. Drafts are deleted.`)) {
-    return;
+  } else if (action === "cancel") {
+    const sure = await ask({
+      title: `Drop ${ids.length} tasks?`,
+      message: "They haven't started, and the when-done step won't run. Drafts are deleted for good.",
+      confirm: "Drop them", danger: true,
+    });
+    if (!sure) return;
   }
   const errors = [];
   for (const id of ids) {
@@ -2078,6 +2586,10 @@ document.addEventListener("click", (e) => {
     scheduleAction(id, action.slice("sched-".length));
   } else if (action === "copy") {
     copyText(btn.dataset.text);
+  } else if (action === "close-task") {
+    closeTask();
+  } else if (action === "open-task") {
+    showTask(id);
   } else if (action === "use-agent") {
     useAgent(btn.dataset.name, btn);
   } else if (action === "runner-start" || action === "runner-stop" || action === "runner-pause" || action === "runner-resume") {
@@ -2143,7 +2655,14 @@ function renderTaskView(t) {
     t.command ? null : ["Model", t.model === "-"
       ? `<span title="${escapeHtml(MODEL_SOURCE_HELP.none)}">-</span>`
       : marked(t.model, { note: inferred(t.model_source) ? MODEL_SOURCE_HELP[t.model_source] : "" })],
+    t.waits ? ["Why it waits", escapeHtml(t.waits)] : null,
+    t.after && t.after.length ? ["Runs after", t.after.map(a => `<span class="mono">${escapeHtml(a)}</span>`).join(", ")] : null,
+    t.priority ? ["Priority", String(t.priority)] : null,
+    t.base ? ["Starts from", `<span class="mono">${escapeHtml(t.base)}</span>`] : null,
+    t.setup ? ["Setup command", `<span class="mono">${escapeHtml(t.setup)}</span>`] : null,
     ["When it's done", ON_FINISH_HELP[t.on_finish] || t.on_finish],
+    typeof t.pr_url === "string" && t.pr_url.startsWith("https://")
+      ? ["Pull request", `<a href="${escapeHtml(t.pr_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.pr_url.replace("https://", ""))}</a>`] : null,
     ["Runs", t.mode === "interactive" ? "in a terminal you can type into" : "on its own, no one watching"],
     t.created_at ? ["Queued", escapeHtml(t.created_at)] : null,
     t.scheduled_at ? ["Starts", escapeHtml(t.scheduled_at)] : null,
@@ -2160,7 +2679,31 @@ function renderTaskView(t) {
     `<pre class="prompt">${escapeHtml(t.prompt.trim())}</pre>` +
     `<h3>The run</h3>` +
     `<dl>${facts.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${v}</dd>`).join("")}</dl>` +
+    tailBlock(t) + changesBlock(t) +
     `<div class="acts">${actionButtons(t)}${copyButtons(t)}</div>`;
+}
+
+// The end of what a task that didn't work out printed: usually the reason is
+// there, and reading it shouldn't take another click.
+function tailBlock(t) {
+  if (!t.log_tail) return "";
+  return `<h3>What it printed last</h3><pre class="tail">${escapeHtml(t.log_tail)}</pre>`;
+}
+
+// What the task's branch holds that the project's checked-out branch doesn't,
+// and anything its workspace has not committed.
+function changesBlock(t) {
+  const c = t.changes;
+  if (!c) return "";
+  const dim = (s) => `<span class="dim">${escapeHtml(s)}</span>`;
+  const files = c.files.map(line => {
+    const m = /^([A-Z]\d*)\s+(.*)$/.exec(line);
+    return m ? `<li><span class="st">${escapeHtml(m[1])}</span><span class="mono">${escapeHtml(m[2])}</span></li>`
+      : `<li><span class="st"></span><span class="mono">${escapeHtml(line)}</span></li>`;
+  }).join("");
+  const more = c.total > c.files.length ? `<li>${dim(`…and ${c.total - c.files.length} more`)}</li>` : "";
+  const note = [c.summary, c.uncommitted ? `${c.uncommitted} not committed yet` : ""].filter(Boolean).join(" · ");
+  return `<h3>What it changed</h3><p class="stat">${escapeHtml(note)}</p><ul class="changed">${files}${more}</ul>`;
 }
 
 // Any task can be copied into a new draft, or kept as a template. Not a row of
@@ -2208,7 +2751,11 @@ async function editTemplate(id) {
 }
 
 async function deleteTemplate(id) {
-  if (!confirm(`Delete the template ${id}? Tasks made from it stay.`)) return;
+  const sure = await ask({
+    title: `Delete the template ${id}?`, message: "Tasks made from it stay.",
+    confirm: "Delete", danger: true,
+  });
+  if (!sure) return;
   const { ok, data } = await post(`/api/templates/${encodeURIComponent(id)}/delete`, {});
   if (!ok) toast(`${id}: ${data.error || "couldn't delete it"}`);
   refresh();
@@ -2224,7 +2771,14 @@ async function showTask(id) {
     const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/view`, { headers: AUTH() });
     const data = await res.json();
     if (!res.ok || taskShown !== id) {
-      if (taskShown === id) taskBody.innerHTML = `<p class="why">${escapeHtml(data.error || "can't read that task")}</p>`;
+      if (taskShown === id) {
+        const gone = res.status === 404;
+        taskBody.innerHTML = gone
+          ? `<p class="missing"><strong>There's no task called ${escapeHtml(id)}.</strong><br>` +
+            `It may have been cleaned up (<code>furmi clean</code>), or the link is from another machine.</p>` +
+            `<div class="acts"><button data-action="close-task">Back to the list</button></div>`
+          : `<p class="why">${escapeHtml(data.error || "can't read that task")}</p>`;
+      }
       return;
     }
     renderTaskView(data);
@@ -2245,7 +2799,14 @@ taskOverlay.addEventListener("click", (e) => { if (e.target === taskOverlay) clo
 // ---- Runner on/off
 
 async function runnerAction(what, btn) {
-  if (what === "stop" && !confirm("Stop the runner? Work already underway keeps going, but nothing new starts until you turn it back on.")) return;
+  if (what === "stop") {
+    const sure = await ask({
+      title: "Stop the runner?",
+      message: "Work already underway keeps going, but nothing new starts until you turn it back on.",
+      confirm: "Stop it", danger: true,
+    });
+    if (!sure) return;
+  }
   btn.disabled = true;
   try {
     const res = await fetch(`/api/runner/${what}`, { method: "POST", headers: { "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}` } });
@@ -2278,6 +2839,7 @@ async function loadAgents() {
     document.getElementById("lim-total").value = data.max_parallel;
     document.getElementById("lim-repo").value = data.max_parallel_per_repo;
     document.getElementById("lim-poll").value = data.poll_interval;
+    document.getElementById("lim-budget").value = data.daily_token_budget || "";
     const d = data.defaults;
     document.getElementById("def-mode").value = d.mode;
     document.getElementById("def-finish").value = d.on_finish;
@@ -2310,6 +2872,7 @@ saveForm("limits-form", "/api/runner/limits", () => ({
   max_parallel: Number(val("lim-total")),
   max_parallel_per_repo: Number(val("lim-repo")),
   poll_interval: val("lim-poll").trim(),
+  daily_token_budget: Number(val("lim-budget") || 0),
 }), "limits");
 saveForm("defaults-form", "/api/defaults", () => ({
   mode: val("def-mode"),
@@ -2339,8 +2902,24 @@ function renderAgents(agents) {
       action += `<code class="cmd mono">${escapeHtml(a.install)}</code>` +
         `<button data-action="copy" data-text="${escapeHtml(a.install)}">Copy</button>`;
     }
-    return `<li><span class="name">${escapeHtml(a.name)}</span>${state}${action}</li>`;
+    // How far it may go with nobody there to answer it. Only for agents that
+    // ask, and not for one whose own command line already says.
+    let allow = "";
+    if (a.unattended === "custom") {
+      allow = `<span class="allow-label" title="Its command line in config.toml already carries approval flags">permissions set in config.toml</span>`;
+    } else if (a.unattended && a.unattended !== "not_needed") {
+      const opt = (v, text, flags) => `<option value="${v}"${a.unattended === v ? " selected" : ""}${flags ? ` title="${escapeHtml(flags)}"` : ""}>${text}</option>`;
+      allow = `<label class="allow-label">How far it may go ` +
+        `<select class="allow" data-allow="${escapeHtml(a.name)}" aria-label="How far ${escapeHtml(a.name)} may go with no one there">` +
+        (a.unattended === "unset" ? `<option value="" selected disabled>choose…</option>` : "") +
+        opt("edits", "edit files in its workspace", a.edits_flags) +
+        opt("all", "edit and run anything", a.all_flags) +
+        opt("ask", "nothing: it stops and waits") +
+        `</select></label>`;
+    }
+    return `<li><span class="name">${escapeHtml(a.name)}</span>${state}${action}${allow}</li>`;
   }).join("");
+  document.getElementById("allow-hint").hidden = !agents.some(a => a.unattended && !["not_needed", "custom"].includes(a.unattended));
   const any = agents.some(a => a.installed);
   document.getElementById("agent-hint").textContent = any
     ? "Tasks use the default agent unless one is chosen for them."
@@ -2409,10 +2988,98 @@ async function checkSetupQuietly() {
   } catch (e) { /* the page still works without it */ }
 }
 
+// ---- Setup: how agents are told, who hears about endings, who may sign in
+const GATED = document.querySelector('meta[name="furmi-gated"]')?.content === "1";
+
+async function loadSettings() {
+  const res = await fetch("/api/settings", { headers: AUTH() });
+  if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+  return res.json();
+}
+
+function renderSettings(s) {
+  const n = s.notify;
+  for (const box of document.querySelectorAll("#notify-form input[name=on]")) box.checked = n.on.includes(box.value);
+  document.getElementById("nt-url").value = n.ntfy_url;
+  document.getElementById("nt-topic").value = n.ntfy_topic;
+  document.getElementById("nt-chat").value = n.telegram_chat_id;
+  document.getElementById("notify-problems").innerHTML = n.problems.map(p =>
+    `<li class="c-warn"><span class="ico">${ICONS.warn}</span><span>${escapeHtml(p)}</span></li>`).join("");
+  document.getElementById("nodes-list").innerHTML = s.nodes.length === 0
+    ? "<li>No other machines yet.</li>"
+    : s.nodes.map(x => `<li><span class="name">${escapeHtml(x.name)}</span>` +
+        `<span class="mono">${escapeHtml(x.ssh)}${x.furmi ? ` (${escapeHtml(x.furmi)})` : ""}</span></li>`).join("");
+  const wrap = document.getElementById("signin-wrap");
+  wrap.hidden = !GATED;
+  document.getElementById("signin-hint").textContent = s.web.listen
+    ? "This dashboard serves other machines: each browser signs in with the token, and a session ends after 15 idle minutes."
+    : "This dashboard asks each browser on this machine to sign in once (furmi open does it), because any program here can reach it. Set trust_local = true under [web] in config.toml to stop asking.";
+  const box = document.getElementById("browser-notify");
+  box.checked = browserNotifyOn();
+  document.getElementById("browser-hint").textContent = !window.Notification
+    ? "This browser can't show notifications."
+    : Notification.permission === "denied"
+      ? "This browser has blocked notifications from this address: allow them in its site settings."
+      : "";
+}
+
+document.getElementById("browser-notify").addEventListener("change", async (e) => {
+  const box = e.target;
+  if (!box.checked) { try { localStorage.setItem(NOTIFY_KEY, "0"); } catch (x) { /* this visit only */ } return; }
+  if (!window.Notification) { box.checked = false; return; }
+  const answer = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+  if (answer === "granted") {
+    try { localStorage.setItem(NOTIFY_KEY, "1"); } catch (x) { /* this visit only */ }
+    toast("You'll hear about tasks that end while this tab is in the background", true);
+  } else {
+    box.checked = false;
+    toast("The browser didn't allow notifications");
+  }
+  loadSettings().then(renderSettings).catch(() => {});
+});
+
+document.getElementById("notify-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const { ok, data } = await post("/api/notify", {
+    on: [...document.querySelectorAll("#notify-form input[name=on]:checked")].map(b => b.value),
+    ntfy_url: val("nt-url"), ntfy_topic: val("nt-topic"), telegram_chat_id: val("nt-chat"),
+  });
+  toast(ok ? "Notification settings saved" : data.error || "couldn't save the notification settings", ok);
+  if (ok) loadSettings().then(renderSettings).catch(() => {});
+});
+document.getElementById("nt-test").addEventListener("click", async () => {
+  const { ok, data } = await post("/api/notify/test", {});
+  toast(ok ? "Sent a test message" : data.error || "couldn't send it", ok);
+});
+
+agentList.addEventListener("change", async (e) => {
+  const select = e.target.closest("select.allow");
+  if (!select) return;
+  const agent = select.dataset.allow;
+  const { ok, data } = await post("/api/agents/allow", { agent, level: select.value });
+  toast(ok ? `${agent} may now ${{ edits: "edit files in its workspace", all: "edit and run anything", ask: "do nothing without being asked" }[select.value]}` : data.error || "couldn't save that", ok);
+  loadAgents().then(renderAgents).catch(() => {});
+});
+
+async function signOut(all) {
+  const { ok, data } = await post("/api/session/end", { all });
+  if (!ok) { toast(data.error || "couldn't sign out"); return; }
+  location.reload();
+}
+document.getElementById("sign-out").addEventListener("click", () => signOut(false));
+document.getElementById("sign-out-all").addEventListener("click", async () => {
+  const sure = await ask({
+    title: "Sign out everywhere?", message: "Every browser signed in to this dashboard has to sign in again, this one included.",
+    confirm: "Sign out everywhere", danger: true,
+  });
+  if (sure) signOut(true);
+});
+
 async function openSetup() {
   setupList.innerHTML = "<li>checking&hellip;</li>";
   agentList.innerHTML = "<li>checking&hellip;</li>";
   setupOverlay.classList.add("active");
+  loadSettings().then(renderSettings).catch(e => { document.getElementById("nodes-list").innerHTML = `<li>${escapeHtml(String(e))}</li>`; });
   loadAgents().then(renderAgents).catch(e => { agentList.innerHTML = `<li>${escapeHtml(String(e))}</li>`; });
   try { renderSetup(await loadSetup()); }
   catch (e) { setupList.innerHTML = `<li class="c-fail"><span class="ico">${ICONS.fail}</span><span>${escapeHtml(String(e))}</span></li>`; }
@@ -2468,6 +3135,9 @@ function syncFormFields() {
   $("f-submit").textContent = kind === "task" || kind === "schedule" || kind === "template" ? "Save changes"
     : kind === "template-new" ? "Create template"
     : repeat === "once" ? "Queue task" : "Create schedule";
+  // Where the branch starts, what it waits for and in what order are for a
+  // new one-off task.
+  $("f-more").hidden = !(kind === "new" && repeat === "once");
   // Only a new one-off task can be saved for later.
   $("f-draft").hidden = !(kind === "new" && repeat === "once");
 }
@@ -2660,6 +3330,9 @@ function openForm(kind, v, template) {
   $("f-node").value = "local";
   $("f-repo-hint").textContent = isTemplate ? "Optional. Leave empty and whoever uses the template chooses the project." : LOCAL_HINT;
   $("f-scratch").checked = false;
+  for (const id of ["f-base", "f-after", "f-setup"]) $(id).value = "";
+  $("f-priority").value = "0";
+  $("f-more").open = false;
 
   // How often: schedules can't be "just once".
   const repeats = kind === "schedule" ? REPEAT_OPTIONS.slice(1) : REPEAT_OPTIONS;
@@ -2712,11 +3385,22 @@ async function scheduleAction(id, verb) {
     } catch (e) { toast(String(e)); }
     return;
   }
-  if (verb === "delete" && !confirm(`Delete the schedule ${id}? Tasks it already added stay in the queue.`)) return;
+  if (verb === "delete") {
+    const sure = await ask({
+      title: `Delete the schedule ${id}?`, message: "Tasks it already added stay in the queue.",
+      confirm: "Delete", danger: true,
+    });
+    if (!sure) return;
+  }
   try {
     const res = await fetch(`/api/schedules/${encodeURIComponent(id)}/${verb}`, { method: "POST", headers: { "X-Furmi-Token": TOKEN, Authorization: `Bearer ${TOKEN}` } });
     const data = await res.json();
     if (!res.ok) toast(`${id}: ${data.error || "failed"}`);
+    else if (verb === "run") {
+      // A schedule of another machine made its task there.
+      const made = id.includes("@") ? `${data.id}@${id.split("@").pop()}` : data.id;
+      toast(`Queued ${made}`, true, { label: "See it", run: () => showTask(made) });
+    }
   } catch (e) { toast(`${id}: ${e}`); }
   refresh();
 }
@@ -2747,6 +3431,7 @@ function typing() {
 // Back out of whatever is open, innermost first. On a plain page, Esc mean
 // "never mind the search".
 function escape() {
+  if (askDone) return askDone(null);
   if (selecting && !document.querySelector(".overlay.active")) return setSelecting(false);
   if (taskOverlay.classList.contains("active")) return closeTask();
   if (logsOverlay.classList.contains("active")) return closeLogs();
@@ -2785,7 +3470,7 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { escape(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (typing()) return;
+  if (typing() || askDone) return;
   const tab = KEYS_TABS[Number(e.key) - 1];
   if (e.key === "/") {
     e.preventDefault();
@@ -2795,6 +3480,8 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     keysOverlay.classList.toggle("active");
   } else if (e.key === "n") {
+    // Or the key that opened the form is typed into it.
+    e.preventDefault();
     openForm("new");
   } else if (e.key === "x" && hasTicks()) {
     setSelecting(!selecting);
@@ -2867,6 +3554,12 @@ newForm.addEventListener("submit", async (e) => {
       body = { ...common, start: $("f-start").value };
       if ($("f-scratch").checked) { body.scratch = true; body.repo = ""; }
       if (draft) body.draft = true;
+      if (!$("f-more").hidden) {
+        body.base = $("f-base").value;
+        body.after = $("f-after").value;
+        body.setup = $("f-setup").value;
+        body.priority = Number($("f-priority").value) || 0;
+      }
       if (formMode.template) body.template = formMode.template;
       if (!$("f-node-wrap").hidden) body.node = $("f-node").value;
       done = (d) => draft ? `Saved the draft ${d.id}`
@@ -2942,6 +3635,9 @@ applyUrl();
 openEvents();
 // The "running for" clock ticks on its own, so it stays right between pushes.
 setInterval(tickElapsed, 1000);
+// A background tab has no live stream (see above), but it should still notice
+// a task ending: a slow look, only while the page can't be seen.
+setInterval(() => { if (document.hidden) refresh(); }, 15000);
 // Keeps a remote dashboard's session cookie alive while the tab sits open.
 setInterval(() => fetch("/logo.png", { cache: "no-store" }).catch(() => {}), 5 * 60 * 1000);
 </script>

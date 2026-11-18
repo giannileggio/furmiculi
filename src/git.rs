@@ -141,7 +141,48 @@ fn common_dir(dir: &Path) -> Result<std::path::PathBuf> {
 /// the repo's HEAD if needed. An existing `path` is reused as is (whatever
 /// branch the agent left it on), so a retried task picks up where the
 /// previous attempt left off, but only if it really is a worktree of `repo`.
+#[cfg(test)]
 pub fn ensure_worktree(repo: &Path, path: &Path, branch: &str) -> Result<()> {
+    ensure_worktree_from(repo, path, branch, None)
+}
+
+/// Brings `base` up to date if it lives on a remote (`origin/main`), and
+/// checks that it names a commit. Being offline isn't fatal: a base the repo
+/// already has is used as it stands, a moment stale.
+fn prepare_base(repo: &Path, base: &str) -> Result<()> {
+    if let Some((remote, _)) = base.split_once('/')
+        && git(repo, &["remote"])?.lines().any(|r| r.trim() == remote)
+    {
+        let _ = run("git", repo, &["fetch", "--quiet", remote], NETWORK_TIMEOUT);
+    }
+    git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{base}^{{commit}}"),
+        ],
+    )
+    .map(|_| ())
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "base `{base}` is not a branch, tag or commit of {}",
+            repo.display()
+        )
+    })
+}
+
+/// [`ensure_worktree`], with a new branch starting from `base` (see
+/// [`prepare_base`]) instead of the repo's HEAD. A branch or worktree that
+/// already exists is left where it is: `base` is where work starts, not
+/// something a retry rebases onto.
+pub fn ensure_worktree_from(
+    repo: &Path,
+    path: &Path,
+    branch: &str,
+    base: Option<&str>,
+) -> Result<()> {
     if path.exists() {
         let ours = common_dir(path).ok().zip(common_dir(repo).ok());
         return match ours {
@@ -159,6 +200,13 @@ pub fn ensure_worktree(repo: &Path, path: &Path, branch: &str) -> Result<()> {
     git(repo, &["worktree", "prune"])?;
     if branch_exists(repo, branch) {
         git(repo, &["worktree", "add", p, branch])?;
+    } else if let Some(base) = base {
+        prepare_base(repo, base)?;
+        // --no-track: the branch is the task's own, pushed under its own name.
+        git(
+            repo,
+            &["worktree", "add", "--no-track", "-b", branch, p, base],
+        )?;
     } else {
         git(repo, &["worktree", "add", "-b", branch, p])?;
     }
@@ -168,7 +216,12 @@ pub fn ensure_worktree(repo: &Path, path: &Path, branch: &str) -> Result<()> {
 /// Checks out `branch` in `repo` itself, creating it if needed. Refuses to
 /// switch branches over uncommitted changes, which would carry them onto
 /// the task's branch (or fail halfway).
+#[cfg(test)]
 pub fn checkout_branch(repo: &Path, branch: &str) -> Result<()> {
+    checkout_branch_from(repo, branch, None)
+}
+
+pub fn checkout_branch_from(repo: &Path, branch: &str, base: Option<&str>) -> Result<()> {
     let current = git(repo, &["branch", "--show-current"])?;
     if current.trim() == branch {
         return Ok(());
@@ -181,6 +234,9 @@ pub fn checkout_branch(repo: &Path, branch: &str) -> Result<()> {
     }
     if branch_exists(repo, branch) {
         git(repo, &["checkout", branch])?;
+    } else if let Some(base) = base {
+        prepare_base(repo, base)?;
+        git(repo, &["checkout", "--no-track", "-b", branch, base])?;
     } else {
         git(repo, &["checkout", "-b", branch])?;
     }
@@ -334,6 +390,97 @@ pub fn commit_message(id: &str, prompt: &str) -> String {
     }
 }
 
+/// A new file bigger than this is not something an agent's commit should
+/// carry without anyone looking.
+const GUARD_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Does this file name look like it holds a secret?
+fn looks_secret(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    let example = [".example", ".sample", ".template", ".dist", ".defaults"]
+        .iter()
+        .any(|s| name.ends_with(s));
+    if example {
+        return false;
+    }
+    name == ".env"
+        || name.starts_with(".env.")
+        || [".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"]
+            .iter()
+            .any(|s| name.ends_with(s))
+        || [
+            "id_rsa",
+            "id_dsa",
+            "id_ecdsa",
+            "id_ed25519",
+            ".npmrc",
+            ".netrc",
+            ".pypirc",
+            "credentials.json",
+            "service-account.json",
+            "secrets.json",
+            "secrets.yaml",
+            "secrets.yml",
+        ]
+        .contains(&name.as_str())
+}
+
+/// New files in `dir` that a commit of everything would take and probably
+/// shouldn't: ones named like secrets, and very large ones. Files git
+/// already tracks are the repo's own business.
+pub fn guarded_paths(dir: &Path) -> Result<Vec<String>> {
+    let status = git(dir, &["status", "--porcelain", "--untracked-files=all"])?;
+    let mut out = Vec::new();
+    for line in status.lines() {
+        let (Some(state), Some(path)) = (line.get(..2), line.get(3..)) else {
+            continue;
+        };
+        if !(state == "??" || state.starts_with('A')) {
+            continue;
+        }
+        let path = path.trim().trim_matches('"');
+        if looks_secret(path) {
+            out.push(format!("{path} (looks like a secret)"));
+        } else if let Ok(meta) = std::fs::metadata(dir.join(path))
+            && meta.len() > GUARD_MAX_BYTES
+        {
+            out.push(format!("{path} ({} MB)", meta.len() / (1024 * 1024)));
+        }
+    }
+    Ok(out)
+}
+
+/// Runs the task's `on_finish` step in `dir`. With `guard`, it first refuses
+/// a commit that would take a file that looks like a secret or is very large
+/// (see [`guarded_paths`]): the work stays in `dir` for someone to look at.
+pub fn on_finish_guarded(
+    action: OnFinish,
+    dir: &Path,
+    id: &str,
+    prompt: &str,
+    guard: bool,
+) -> Result<()> {
+    if guard && action != OnFinish::None {
+        let held = guarded_paths(dir)?;
+        if !held.is_empty() {
+            let shown = held.len().min(8);
+            let more = if held.len() > shown {
+                format!(" and {} more", held.len() - shown)
+            } else {
+                String::new()
+            };
+            bail!(
+                "not committing: the changes include {}{more}. Remove or .gitignore them in {} \
+                 and `furmi done {id}`, or set `commit_guard = false` under [defaults] in \
+                 config.toml if they belong in the repo",
+                held[..shown].join(", "),
+                dir.display()
+            );
+        }
+    }
+    on_finish(action, dir, id, prompt)
+}
+
 /// Runs the task's `on_finish` step in `dir`.
 pub fn on_finish(action: OnFinish, dir: &Path, id: &str, prompt: &str) -> Result<()> {
     if action == OnFinish::None {
@@ -384,6 +531,79 @@ pub fn on_finish(action: OnFinish, dir: &Path, id: &str, prompt: &str) -> Result
 /// older commit — neither covers this run's work. `gh` failing to answer
 /// (e.g. no PR for the branch at all) counts as no covering PR; the
 /// `pr create` that follows then reports the real problem, if any.
+/// Whether the branch in `dir` has been pushed with commits of its own: the
+/// cheap local test for "there may be a pull request to ask about".
+pub fn has_commits_ahead(dir: &Path) -> bool {
+    git(
+        dir,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .is_ok()
+}
+
+/// The address of the pull request for the branch checked out in `dir`.
+pub fn pr_url(dir: &Path) -> Option<String> {
+    run(
+        "gh",
+        dir,
+        &["pr", "view", "--json", "url", "--jq", ".url"],
+        NETWORK_TIMEOUT,
+    )
+    .ok()
+    .map(|url| url.trim().to_string())
+    .filter(|url| url.starts_with("https://"))
+}
+
+/// What a task changed, for the dashboard's task view.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct Changes {
+    /// `git diff --shortstat`'s line: "3 files changed, 10 insertions(+)...".
+    pub summary: String,
+    /// `status path` lines, committed ones first; capped.
+    pub files: Vec<String>,
+    /// How many files there are in all, when `files` was cut short.
+    pub total: usize,
+    /// Changes in the workspace that no commit holds yet.
+    pub uncommitted: usize,
+}
+
+/// Most files listed in a task's view.
+const CHANGES_SHOWN: usize = 60;
+
+/// What `branch` holds that the repo's checked-out branch doesn't, plus
+/// whatever is uncommitted in `workdir` (the task's worktree, if it still
+/// exists). `None` when git has nothing to say (no such branch, not a repo).
+pub fn changes(repo: &Path, workdir: Option<&Path>, branch: Option<&str>) -> Option<Changes> {
+    let mut out = Changes::default();
+    if let Some(branch) = branch.filter(|b| branch_exists(repo, b)) {
+        let range = format!("HEAD...{branch}");
+        if let Ok(names) = git(repo, &["diff", "--name-status", &range]) {
+            out.files.extend(
+                names
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(|l| l.replace('\t', " ")),
+            );
+        }
+        if let Ok(stat) = git(repo, &["diff", "--shortstat", &range]) {
+            out.summary = stat.trim().to_string();
+        }
+    }
+    if let Some(dir) = workdir.filter(|d| d.is_dir())
+        && let Ok(paths) = changed_paths(dir)
+    {
+        out.uncommitted = paths.len();
+        out.files
+            .extend(paths.into_iter().map(|p| format!("{p} (not committed)")));
+    }
+    if out.files.is_empty() && out.summary.is_empty() {
+        return None;
+    }
+    out.total = out.files.len();
+    out.files.truncate(CHANGES_SHOWN);
+    Some(out)
+}
+
 fn pr_covers_head(dir: &Path) -> Result<bool> {
     let head = git(dir, &["rev-parse", "HEAD"])?;
     let out = run(
@@ -700,5 +920,52 @@ mod tests {
             .to_string();
         assert_eq!(subject.chars().count(), 72);
         assert!(subject.ends_with('…'));
+    }
+
+    #[test]
+    fn a_new_branch_can_start_from_a_base_instead_of_head() {
+        let repo = repo();
+        let p = repo.path();
+        git(p, &["branch", "release"]).unwrap();
+        std::fs::write(p.join("later.txt"), "x").unwrap();
+        git(p, &["add", "-A"]).unwrap();
+        git(p, &["commit", "-q", "-m", "later"]).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt");
+        ensure_worktree_from(p, &wt, "furmi/based", Some("release")).unwrap();
+        assert!(
+            !wt.join("later.txt").exists(),
+            "started from HEAD, not the base"
+        );
+
+        let err = ensure_worktree_from(p, &dir.path().join("wt2"), "furmi/nope", Some("no-such"))
+            .unwrap_err();
+        assert!(err.to_string().contains("base `no-such`"), "{err}");
+    }
+
+    #[test]
+    fn the_commit_guard_holds_new_secrets_and_leaves_tracked_files_alone() {
+        let repo = repo();
+        let p = repo.path();
+        std::fs::write(p.join(".env"), "tracked on purpose").unwrap();
+        git(p, &["add", "-A"]).unwrap();
+        git(p, &["commit", "-q", "-m", "env"]).unwrap();
+        std::fs::write(p.join(".env"), "changed").unwrap();
+        std::fs::write(p.join("code.rs"), "fn main() {}").unwrap();
+        std::fs::write(p.join(".env.example"), "KEY=").unwrap();
+        assert!(guarded_paths(p).unwrap().is_empty());
+
+        std::fs::create_dir(p.join("deploy")).unwrap();
+        std::fs::write(p.join("deploy/id_rsa"), "key").unwrap();
+        std::fs::write(p.join(".env.production"), "SECRET=1").unwrap();
+        let held = guarded_paths(p).unwrap();
+        assert_eq!(held.len(), 2, "{held:?}");
+
+        let err = on_finish_guarded(OnFinish::Commit, p, "t", "do it", true).unwrap_err();
+        assert!(err.to_string().contains("deploy/id_rsa"), "{err}");
+        assert!(has_changes(p).unwrap(), "nothing was committed");
+        on_finish_guarded(OnFinish::Commit, p, "t", "do it", false).unwrap();
+        assert!(!has_changes(p).unwrap());
     }
 }

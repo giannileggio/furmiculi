@@ -67,9 +67,9 @@ use anyhow::{Context, Result};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 use self::auth::{
-    Access, SESSION_TTL, Sessions, TOKEN_HEADER, authenticate, dead_session_cookie_expiry,
-    forwarded_https, had_session, hosts_ok, legacy_cookie_expiry, origins_ok, random_token,
-    same_token, session_cookie, stripped_location,
+    Access, LOCAL_SESSION_TTL, SESSION_TTL, Sessions, TOKEN_HEADER, authenticate,
+    dead_session_cookie_expiry, forwarded_https, had_session, hosts_ok, legacy_cookie_expiry,
+    origins_ok, random_token, same_token, stripped_location,
 };
 use self::bind::bind;
 use self::detach::{detach, refuse_token_with_detach};
@@ -86,8 +86,10 @@ const INDEX_HTML: &str = include_str!("../web_dashboard.html");
 /// action waiting for the lock) doesn't stall the dashboard's other requests.
 const WORKERS: usize = 4;
 
-/// Largest request body read; the only body anyone sends is a short reason.
-const MAX_BODY_BYTES: u64 = 16 * 1024;
+/// Largest request body read. The biggest thing anyone sends is a task's
+/// prompt, and one of those can be pages long; past this the form is refused
+/// with a 413 rather than cut short and failed as unreadable.
+const MAX_BODY_BYTES: u64 = 1024 * 1024;
 
 struct Ctx<'a> {
     home: &'a Home,
@@ -98,6 +100,9 @@ struct Ctx<'a> {
     /// A non-loopback bind: requests additionally need the bearer token and
     /// an allowlisted `Host`.
     remote: bool,
+    /// Requests must carry the bearer or a session cookie: a remote bind, or
+    /// a loopback one that asks browsers to sign in (the default).
+    gated: bool,
     /// Exact `Host` allowlist for a remote bind.
     allowed_hosts: Vec<String>,
     /// Answering another machine's `furmi node call`: its rows and forms are
@@ -150,7 +155,41 @@ fn recovery_page(ctx: &Ctx, url: &str, host: &Option<String>, https: bool, why: 
             .map(|h| format!("{}//{h}", if https { "https:" } else { "http:" })),
         action: &action,
         token_from: ctx.token_from.as_deref(),
+        local: !ctx.remote,
+        ttl: if ctx.remote {
+            SESSION_TTL
+        } else {
+            LOCAL_SESSION_TTL
+        },
     })
+}
+
+/// A form field's value as the browser sent it: `+` for a space and `%XX`
+/// for anything else that isn't plain.
+fn form_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' if bytes.get(i + 1..i + 3).is_some() => {
+                match std::str::from_utf8(&bytes[i + 1..i + 3])
+                    .ok()
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+                {
+                    Some(b) => {
+                        out.push(b);
+                        i += 2;
+                    }
+                    None => out.push(b'%'),
+                }
+            }
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// The `Host` refusal, naming the name that was asked for and the ones allowed.
@@ -225,8 +264,10 @@ fn run_server(
         home,
         // A remote page gets its own session's token, filled in per request.
         index: {
-            let page = INDEX_HTML.replace("__FURMI_VERSION__", crate::version::CURRENT);
-            if serving.remote {
+            let page = INDEX_HTML
+                .replace("__FURMI_VERSION__", crate::version::CURRENT)
+                .replace("__FURMI_GATED__", if serving.gated { "1" } else { "" });
+            if serving.gated {
                 page
             } else {
                 page.replace("__FURMI_TOKEN__", &token)
@@ -235,6 +276,7 @@ fn run_server(
         token,
         cwd_repo,
         remote: serving.remote,
+        gated: serving.gated,
         allowed_hosts: serving.allowed_hosts.clone(),
         peer: false,
         token_from: serving.token_from.clone(),
@@ -245,10 +287,17 @@ fn run_server(
     println!("Dashboard: {url}  (Ctrl-C to stop)");
     if serving.remote {
         print_remote(serving, &ctx.token, tty);
+    } else if serving.gated {
+        println!("  A browser that isn't signed in yet: `furmi open` opens it signed in.");
     }
-    // A wide bind has no local browser worth opening; loopback does.
+    // A wide bind has no local browser worth opening; loopback does. The
+    // token goes to the browser, never to the terminal or a log.
     if !args.no_open && !serving.remote && tty {
-        open_browser(&url);
+        if serving.gated {
+            open_browser(&format!("{url}/?token={}", ctx.token));
+        } else {
+            open_browser(&url);
+        }
     }
 
     // Unblock every worker once the handler has seen a signal (`unblock`
@@ -265,7 +314,11 @@ fn run_server(
         })
     };
     let ctx = &ctx;
-    let sessions = &Sessions::new(SESSION_TTL);
+    let sessions = &if serving.remote || !serving.gated {
+        Sessions::new(SESSION_TTL)
+    } else {
+        Sessions::kept_in(LOCAL_SESSION_TTL, home.web_sessions(), Instant::now())
+    };
 
     std::thread::scope(|scope| {
         for _ in 0..WORKERS {
@@ -315,6 +368,72 @@ pub fn relaunch(home: &Home, launch: &Launch) -> Result<()> {
     };
     let serving = setup(home, &args)?;
     detach(home, launch.with_runner, args, &serving)
+}
+
+/// `furmi open`: the running dashboard in a browser, already signed in.
+pub fn open(home: &Home, print: bool) -> Result<()> {
+    let Some((_, addr)) = home.dashboard() else {
+        anyhow::bail!("no dashboard is running: `furmi start` runs the queue and opens it");
+    };
+    let host = addr.rsplit_once(':').map_or(addr.as_str(), |(h, _)| h);
+    if !is_loopback_authority(host) {
+        // A wide bind answers to the names on its allowlist, not to this
+        // machine's loopback, and its token lives where its setup put it.
+        let web = crate::config::Config::load(&home.config_path())
+            .map(|c| c.web)
+            .unwrap_or_default();
+        let name = web
+            .allowed_hosts
+            .iter()
+            .find(|h| !auth::is_any_host(h))
+            .map_or_else(
+                || {
+                    format!(
+                        "http://<this machine's name>:{}",
+                        addr.rsplit_once(':').map_or("7433", |(_, p)| p)
+                    )
+                },
+                |h| url_for(h, &addr),
+            );
+        println!(
+            "This dashboard serves other machines. Open {name}/ and paste the token from {}.",
+            web.token_file
+                .as_deref()
+                .map_or_else(|| "its token file".to_string(), |p| p.display().to_string())
+        );
+        return Ok(());
+    }
+    let web = crate::config::Config::load(&home.config_path())
+        .map(|c| c.web)
+        .unwrap_or_default();
+    let url = if web.trust_local {
+        format!("http://{addr}/")
+    } else {
+        format!("http://{addr}/?token={}", auth::local_token(home)?)
+    };
+    if print {
+        println!("{url}");
+    } else {
+        println!("Opening http://{addr}/ in your browser.");
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        let opened = Command::new(opener)
+            .arg(&url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !opened {
+            println!(
+                "Couldn't start a browser here; `furmi open --print` shows the link to paste."
+            );
+        }
+    }
+    Ok(())
 }
 
 /// A background `furmi run`, stopped when dropped. It's asked to stop
@@ -399,6 +518,7 @@ pub fn call(home: &Home, method: &str, url: &str, body: &str) -> Result<(u16, St
         index: String::new(),
         cwd_repo: None,
         remote: false,
+        gated: false,
         allowed_hosts: Vec::new(),
         peer: true,
         token_from: None,
@@ -421,6 +541,7 @@ fn handle<'scope, 'env>(
             .find(|h| h.field.equiv(name))
             .map(|h| h.value.as_str().to_string())
     };
+    let accept = header("Accept");
     let host = header("Host");
     let origin = header("Origin");
     let token = header(TOKEN_HEADER);
@@ -431,7 +552,7 @@ fn handle<'scope, 'env>(
     // A browser asks for HTML; a CLI, a proxy or the page's own fetch doesn't.
     // Only the former gets a page it can act on when refused — the rest keeps
     // the one-line plain text it can parse.
-    let wants_page = !is_post && header("Accept").is_some_and(|a| a.contains("text/html")) && {
+    let wants_page = !is_post && accept.as_deref().is_some_and(|a| a.contains("text/html")) && {
         let path = url.split('?').next().unwrap_or("");
         is_page(
             &path
@@ -441,7 +562,37 @@ fn handle<'scope, 'env>(
         )
     };
 
-    let access = if host.as_deref().is_some_and(|h| hosts_ok(ctx, h)) {
+    // The refusal page's form posts the token here, so it never sits in an
+    // address, the history or a proxy's log. A right one is traded for a
+    // session exactly as `?token=` is.
+    let page_path = {
+        let path = url.split('?').next().unwrap_or("");
+        is_page(
+            &path
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>(),
+        )
+    };
+    let host_ok = host.as_deref().is_some_and(|h| hosts_ok(ctx, h));
+    let mut wrong_token = false;
+    let signing_in = is_post && ctx.gated && page_path && host_ok;
+    let signed_in = signing_in && {
+        let mut form = String::new();
+        let _ = request.as_reader().take(4096).read_to_string(&mut form);
+        let supplied = form
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("token="))
+            .map(form_decode)
+            .unwrap_or_default();
+        let right = same_token(supplied.trim(), &ctx.token);
+        wrong_token = !right;
+        right
+    };
+
+    let access = if signed_in {
+        Access::Exchange
+    } else if host.as_deref().is_some_and(|h| hosts_ok(ctx, h)) && !signing_in {
         authenticate(
             ctx,
             sessions,
@@ -457,6 +608,7 @@ fn handle<'scope, 'env>(
     // What the browser's cookie jar gets out of this response.
     let mut set_cookies: Vec<String> = Vec::new();
     let mut location = None;
+    let mut signed_out = false;
     // The token a POST must carry: the page's own, if it has a session.
     let page_token = match &access {
         Access::Session { page_token, .. } => Some(page_token.as_str()),
@@ -490,6 +642,13 @@ fn handle<'scope, 'env>(
                 Why::NoSession
             };
             reply(401, HTML, recovery_page(ctx, &url, &host, https, why))
+        } else if signing_in {
+            let _ = wrong_token;
+            reply(
+                401,
+                HTML,
+                recovery_page(ctx, &url, &host, https, Why::WrongToken),
+            )
         } else {
             reply(
                 401,
@@ -503,12 +662,32 @@ fn handle<'scope, 'env>(
         // the history or the bar.
         match sessions.open(Instant::now()) {
             Ok((id, _)) => {
-                set_cookies.push(session_cookie(&id, https));
+                set_cookies.push(sessions.cookie(&id, https));
                 location = Some(stripped_location(&url));
                 reply(303, "text/plain", "")
             }
             Err(e) => reply(500, "text/plain", format!("{e:#}")),
         }
+    } else if is_post
+        && url.split('?').next() == Some("/api/session/end")
+        && origin.as_deref().is_none_or(|o| origins_ok(ctx, o))
+        && token.as_deref().is_some_and(|t| {
+            same_token(t, &ctx.token) || page_token.is_some_and(|p| same_token(t, p))
+        })
+    {
+        // "Sign out", or "sign out everywhere": the session (or all of them)
+        // ends on the server, and this browser's cookie is thrown away.
+        let mut body = String::new();
+        let _ = request.as_reader().take(1024).read_to_string(&mut body);
+        let everywhere =
+            serde_json::from_str::<serde_json::Value>(&body).is_ok_and(|v| v["all"] == true);
+        match &access {
+            _ if everywhere => sessions.clear(Instant::now()),
+            Access::Session { id, .. } => sessions.close(id, Instant::now()),
+            _ => {}
+        }
+        signed_out = true;
+        json_reply(200, "{\"ok\":true}".into())
     } else if is_post
         && !(origin.as_deref().is_none_or(|o| origins_ok(ctx, o))
             && token.as_deref().is_some_and(|t| {
@@ -528,23 +707,55 @@ fn handle<'scope, 'env>(
         }
     } else {
         let mut body = String::new();
-        if is_post {
+        let mut too_big = request
+            .body_length()
+            .is_some_and(|n| n as u64 > MAX_BODY_BYTES);
+        if is_post && !too_big {
+            // One byte past the limit, so a body with no length is caught too.
             let _ = request
                 .as_reader()
-                .take(MAX_BODY_BYTES)
+                .take(MAX_BODY_BYTES + 1)
                 .read_to_string(&mut body);
+            too_big = body.len() as u64 > MAX_BODY_BYTES;
         }
-        route(ctx, request.method(), &url, &body)
+        if too_big {
+            json_reply(
+                413,
+                serde_json::json!({ "error": format!(
+                    "that is over {} KB, the most the dashboard takes in one form; \
+                     for a longer prompt write the task file or pipe it to `furmi add`",
+                    MAX_BODY_BYTES / 1024
+                ) })
+                .to_string(),
+            )
+        } else {
+            route(ctx, request.method(), &url, &body)
+        }
     };
     let mut result = result;
+    // A browser that typed (or followed) an address the dashboard doesn't
+    // have gets a page that leads back, not eleven bytes of plain text.
+    if result.status == 404
+        && !is_post
+        && !url.starts_with("/api/")
+        && accept.as_deref().is_some_and(|a| a.contains("text/html"))
+    {
+        result = reply(404, HTML, recovery::not_found());
+    }
     let is_index = result.content_type.starts_with("text/html");
-    if let Access::Session { id, page_token } = &access {
+    let nonce = random_token().unwrap_or_default();
+    if is_index {
+        result.body = result.body.replace("__FURMI_NONCE__", &nonce);
+    }
+    if signed_out {
+        set_cookies.push(dead_session_cookie_expiry());
+    } else if let Access::Session { id, page_token } = &access {
         // Sliding: every answer re-arms the browser's copy of the cookie.
-        set_cookies.push(session_cookie(id, https));
+        set_cookies.push(sessions.cookie(id, https));
         if is_index {
             result.body = result.body.replace("__FURMI_TOKEN__", page_token);
         }
-    } else if is_index && ctx.remote {
+    } else if is_index && ctx.gated {
         // A bearer-authenticated page load: the master token it already has.
         result.body = result.body.replace("__FURMI_TOKEN__", &ctx.token);
     }
@@ -569,12 +780,19 @@ fn handle<'scope, 'env>(
         },
     );
     add("X-Content-Type-Options", "nosniff");
+    // Nothing the dashboard links to needs to know where the click came from.
+    add("Referrer-Policy", "no-referrer");
     if is_index {
         add("X-Frame-Options", "DENY");
+        // Only the page's own script runs: it carries this response's nonce,
+        // so markup that slipped through as text can't bring a script along.
         add(
             "Content-Security-Policy",
-            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
-             img-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+            &format!(
+                "default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; \
+                 img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; \
+                 frame-ancestors 'none'"
+            ),
         );
         // The 30-day cookie older versions set held the master token; it
         // is never read now, so tell the browser to drop it.

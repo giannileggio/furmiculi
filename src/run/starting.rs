@@ -43,11 +43,21 @@ pub(super) fn start_pending(
         .into_iter()
         .filter(|(_, t)| t.scheduled_at.is_none_or(|at| at <= now))
         .collect();
-    pending.sort_by_key(|(_, t)| (t.scheduled_at.or(t.created_at), t.id.clone()));
+    // Higher priority first, then oldest first.
+    pending.sort_by_key(|(_, t)| {
+        (
+            std::cmp::Reverse(t.spec.priority.unwrap_or(0)),
+            t.scheduled_at.or(t.created_at),
+            t.id.clone(),
+        )
+    });
 
     for (path, task) in pending {
         if total >= config.runner.max_parallel {
             break;
+        }
+        if super::blocked_by(home, &task).is_some() {
+            continue;
         }
         let eff = task.spec.resolve(&config.defaults);
         let key = workspace_key(home, &eff.repo);
@@ -199,9 +209,16 @@ pub(super) fn workdir(home: &Home, task: &Task, eff: &Effective) -> PathBuf {
 
 fn prepare_workdir(home: &Home, config: &Config, task: &Task, eff: &Effective) -> Result<PathBuf> {
     let dir = workdir(home, task, eff);
+    // A workspace made afresh (a first attempt, or a worktree that was
+    // cleaned away since) has to be set up again: forget that it ever was.
+    if task.attempts <= 1 || (eff.worktree && !dir.exists()) {
+        let _ = std::fs::remove_file(home.logs().join(format!("{}.setup", task.id)));
+    }
     match task.effective_branch(config) {
-        Some(branch) if eff.worktree => git::ensure_worktree(&eff.repo, &dir, &branch)?,
-        Some(branch) => git::checkout_branch(&eff.repo, &branch)?,
+        Some(branch) if eff.worktree => {
+            git::ensure_worktree_from(&eff.repo, &dir, &branch, eff.base.as_deref())?
+        }
+        Some(branch) => git::checkout_branch_from(&eff.repo, &branch, eff.base.as_deref())?,
         None => {}
     }
     Ok(dir)

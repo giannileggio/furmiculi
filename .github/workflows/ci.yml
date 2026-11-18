@@ -127,9 +127,12 @@ jobs:
         with:
           command: check advisories bans licenses sources
 
-  # The scripts under scripts/ drive the e2e and agent checks; keep them lint-clean.
+  # The scripts under scripts/ drive the e2e and agent checks, and install.sh
+  # is what everyone pipes into their shell: keep them lint-clean. install.sh
+  # is held to warnings too, since it runs on machines we never see.
   shellcheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: shellcheck --severity=error scripts/*.sh
+      - run: shellcheck --severity=warning install.sh

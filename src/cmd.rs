@@ -45,6 +45,17 @@ pub fn init(home: &Home, args: InitArgs) -> Result<()> {
 /// to do about the global skill links: `None` leaves them alone, `Some(c)`
 /// applies `skill::set_global` with choice `c`.
 fn setup(home: &Home, agent: Option<String>, global_skill: Option<Option<bool>>) -> Result<()> {
+    // A new home is yours alone (0700): it holds prompts, logs and worktrees,
+    // and everything under it is created with the usual modes. An existing
+    // one is left as it is; `furmi doctor` says when it is open to others.
+    if !home.root().exists() {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(home.root())
+            .with_context(|| format!("creating {}", home.root().display()))?;
+    }
     for dir in home.dirs() {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     }
@@ -55,6 +66,11 @@ fn setup(home: &Home, agent: Option<String>, global_skill: Option<Option<bool>>)
         let agent = choose_agent(agent)?;
         crate::fsutil::write_atomic(&config, default_config_toml(agent.as_deref()))?;
         skill::note(format_args!("wrote {}", config.display()));
+    }
+    if let Ok(config) = Config::load(&config)
+        && let Some(agent) = config.defaults.agent.clone()
+    {
+        ask_unattended(home, &agent)?;
     }
     template::install_starters(home)?;
     skill::install_in_home(home)?;
@@ -139,6 +155,73 @@ pub fn use_agent(home: &Home, name: &str) -> Result<()> {
                 .unwrap_or_default()
         );
     }
+    Ok(())
+}
+
+/// `furmi agents allow <name> <level>`: how far an agent may go unattended.
+pub fn allow_agent(home: &Home, name: &str, level: &str) -> Result<()> {
+    let leash = crate::config::Leash::parse(level)?;
+    crate::config::set_unattended(&home.config_path(), name, leash)?;
+    let flags = crate::config::unattended_flags(name).map(|(edits, all)| match leash {
+        crate::config::Leash::Edits => edits.join(" "),
+        crate::config::Leash::All => all.join(" "),
+        crate::config::Leash::Ask => String::new(),
+    });
+    match (leash, flags) {
+        (crate::config::Leash::Ask, _) => println!(
+            "`{name}` gets no approval flags: unattended, it will stop at its first permission prompt."
+        ),
+        (_, Some(flags)) => println!(
+            "`{name}` now runs unattended tasks with `{flags}`. Tasks already running aren't affected."
+        ),
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Asks, once and only on a terminal, how far the default agent may go when
+/// nobody is there to answer it. Without an answer an agent that asks before
+/// editing would finish its first task having changed nothing.
+fn ask_unattended(home: &Home, agent: &str) -> Result<()> {
+    use crate::config::{Leash, Unattended};
+    let config = Config::load(&home.config_path())?;
+    if config.unattended(agent) != Unattended::Unset {
+        return Ok(());
+    }
+    let Some((edits, all)) = crate::config::unattended_flags(agent) else {
+        return Ok(());
+    };
+    if !std::io::stdin().is_terminal() {
+        println!(
+            "Note: unattended, `{agent}` stops at its first permission prompt. \
+             `furmi agents allow {agent} edits` (or `all`) lets it work."
+        );
+        return Ok(());
+    }
+    println!(
+        "\nTasks run with nobody there to answer {agent}'s permission prompts. How far may it go?"
+    );
+    println!(
+        "  1) edit files in the task's own workspace   ({})",
+        edits.join(" ")
+    );
+    println!(
+        "  2) edit and run anything, no sandbox        ({})",
+        all.join(" ")
+    );
+    println!("  3) neither: it will stop and wait (or I'll set its flags in config.toml)");
+    let leash = loop {
+        match skill::prompt("Choose [1]: ")?.as_str() {
+            "" | "1" => break Leash::Edits,
+            "2" => break Leash::All,
+            "3" => break Leash::Ask,
+            _ => println!("  1, 2 or 3"),
+        }
+    };
+    crate::config::set_unattended(&home.config_path(), agent, leash)?;
+    println!(
+        "Saved under [unattended] in config.toml; `furmi agents allow {agent} <level>` changes it."
+    );
     Ok(())
 }
 
@@ -263,6 +346,67 @@ fn ls_once(home: &Home, archive: bool, schedules: bool) -> Result<()> {
     Ok(())
 }
 
+/// `furmi ls --json`: the same tasks, one object each, for scripts.
+pub fn ls_json(home: &Home, archive: bool) -> Result<()> {
+    home.ensure_initialized()?;
+    let config = Config::load(&home.config_path())?;
+    let dir = if archive {
+        home.archive()
+    } else {
+        home.tasks()
+    };
+    let (tasks, warnings) = load_tasks(&dir)?;
+    for w in warnings {
+        eprintln!("warning: {w}");
+    }
+    let rows: Vec<_> = tasks
+        .iter()
+        .map(|t| {
+            let eff = t.spec.resolve(&config.defaults);
+            serde_json::json!({
+                "id": t.id,
+                "status": t.status.as_str(),
+                "repo": contract_tilde(&eff.repo),
+                "branch": t.effective_branch(&config),
+                "agent": eff.agent,
+                "model": t.model_in_use(&config).0,
+                "command": eff.run.is_some(),
+                "on_finish": crate::edit::on_finish_str(eff.on_finish),
+                "attempts": t.attempts,
+                "after": t.spec.after,
+                "priority": eff.priority,
+                "created_at": t.created_at.map(|at| at.to_rfc3339()),
+                "scheduled_at": t.scheduled_at.map(|at| at.to_rfc3339()),
+                "started_at": t.started_at.map(|at| at.to_rfc3339()),
+                "finished_at": t.finished_at.map(|at| at.to_rfc3339()),
+                "exit_code": t.exit_code,
+                "error": t.error,
+                "tokens_in": t.tokens_in,
+                "tokens_out": t.tokens_out,
+                "pr_url": t.pr_url,
+                "file": dir.join(format!("{}.md", t.id)),
+            })
+        })
+        .collect();
+    println!("{}", serde_json::to_string_pretty(&rows)?);
+    Ok(())
+}
+
+/// A long path made to fit a table column: the end of it, which is what tells
+/// projects apart, behind an ellipsis.
+pub fn shorten_path(path: &str, max: usize) -> String {
+    let chars: Vec<char> = path.chars().collect();
+    if chars.len() <= max {
+        return path.to_string();
+    }
+    let tail: String = chars[chars.len() - (max - 1)..].iter().collect();
+    // Start at a folder boundary when there is one close by.
+    match tail.find('/') {
+        Some(at) if at < max / 3 => format!("…{}", &tail[at..]),
+        _ => format!("…{tail}"),
+    }
+}
+
 /// The tasks in `dir`, oldest first, plus a warning for each file that
 /// couldn't be read.
 pub fn load_tasks(dir: &Path) -> Result<(Vec<Task>, Vec<String>)> {
@@ -293,7 +437,7 @@ pub fn task_rows(config: &Config, tasks: &[Task]) -> Vec<Vec<String>> {
             t.id.clone(),
             t.status.as_str().into(),
             when,
-            contract_tilde(&eff.repo),
+            shorten_path(&contract_tilde(&eff.repo), 36),
             t.effective_branch(config).unwrap_or_else(|| "-".into()),
             match (eff.runner(), t.model_in_use(config).0) {
                 ("-", _) => "-".into(),
@@ -337,7 +481,7 @@ fn ls_schedules(home: &Home, config: &Config) -> Result<()> {
 pub struct AddArgs {
     /// What the agent should do. Asked for if omitted (or read from stdin
     /// when piped).
-    #[arg(conflicts_with = "prompt")]
+    #[arg(conflicts_with = "prompt", allow_hyphen_values = true)]
     text: Option<String>,
     /// Repository the task runs in [default: the git repo you're in].
     #[arg(long)]
@@ -350,7 +494,7 @@ pub struct AddArgs {
     #[arg(long)]
     id: Option<String>,
     /// The prompt, as an option instead of the positional argument.
-    #[arg(long, short)]
+    #[arg(long, short, allow_hyphen_values = true)]
     prompt: Option<String>,
     /// Run this shell command instead of an agent: a command task, with no
     /// prompt, agent, model or mode. Runs in the repo itself unless --worktree.
@@ -397,6 +541,20 @@ pub struct AddArgs {
     /// are used, and anything given here replaces them.
     #[arg(long)]
     template: Option<String>,
+    /// What the task's new branch starts from, e.g. `origin/main` (fetched
+    /// first). Default: whatever the repo has checked out.
+    #[arg(long)]
+    base: Option<String>,
+    /// A shell command to run in the task's workspace before its first
+    /// attempt, e.g. `npm ci`. `$FURMI_REPO` is the repo it came from.
+    #[arg(long)]
+    setup: Option<String>,
+    /// Start only after this task has finished as done. Repeatable.
+    #[arg(long, value_name = "ID")]
+    after: Vec<String>,
+    /// Start before waiting tasks with a lower number (default 0).
+    #[arg(long, allow_hyphen_values = true)]
+    priority: Option<i32>,
 }
 
 /// Everything needed to queue a task, from the CLI or the dashboard.
@@ -488,7 +646,7 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
         .as_deref()
         .map(|id| Template::find(home, id))
         .transpose()?;
-    let given = args.text.or(args.prompt);
+    let given = positional_prompt(args.text)?.or(args.prompt);
     let prompt = match (&args.run, &template) {
         (Some(_), _) => String::new(),
         // The template's own prompt, unless one was given to replace it.
@@ -528,6 +686,10 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
             .or_else(|| base.and_then(|s| s.retry_delay)),
         timeout: args.timeout.or_else(|| base.and_then(|s| s.timeout)),
         run: args.run.or_else(|| base.and_then(|s| s.run.clone())),
+        base: args.base.or_else(|| base.and_then(|s| s.base.clone())),
+        setup: args.setup.or_else(|| base.and_then(|s| s.setup.clone())),
+        after: args.after,
+        priority: args.priority.or_else(|| base.and_then(|s| s.priority)),
     };
     let scheduled_at = match (args.at, args.delay) {
         (Some(at), _) => Some(at),
@@ -559,6 +721,22 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
 /// What `--worktree` and `--no-worktree` ask for, if either was given.
 pub(crate) fn worktree_choice(worktree: bool, no_worktree: bool) -> Option<bool> {
     (worktree || no_worktree).then_some(worktree)
+}
+
+/// The positional prompt may start with `-` (a Markdown list is a prompt), so
+/// a mistyped flag lands here too. One word starting with `-` is taken for
+/// that mistake rather than queued as a task.
+pub(crate) fn positional_prompt(text: Option<String>) -> Result<Option<String>> {
+    if let Some(t) = &text
+        && t.starts_with('-')
+        && !t.trim().contains(char::is_whitespace)
+    {
+        bail!(
+            "unexpected argument '{t}' (if that is the prompt itself, pass it with --prompt; \
+             `--help` lists the options)"
+        );
+    }
+    Ok(text)
 }
 
 /// The given prompt, else the one piped on stdin, else (on a terminal) the

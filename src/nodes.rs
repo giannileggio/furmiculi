@@ -513,7 +513,7 @@ fn call(home: &Home, method: &str, url: &str) -> Result<()> {
 }
 
 /// What may follow `/api/tasks/<id>` or `/api/schedules/<id>` when forwarded.
-const FORWARDED: [&str; 12] = [
+const FORWARDED: [&str; 13] = [
     "view",
     "logs",
     "edit",
@@ -526,6 +526,7 @@ const FORWARDED: [&str; 12] = [
     "retry",
     "queue",
     "duplicate",
+    "run",
 ];
 
 /// An id of the form `<id>@<node>` (or `%40`), the way the merged state names

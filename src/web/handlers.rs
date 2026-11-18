@@ -155,6 +155,17 @@ struct NewTaskBody {
     /// Pin a model for this task; empty or absent means the agent's own.
     #[serde(default)]
     model: Option<String>,
+    /// The form's "More options": what the branch starts from, a command to
+    /// prepare the workspace, tasks to wait for (ids, separated by commas or
+    /// spaces) and the place in the queue.
+    #[serde(default)]
+    base: Option<String>,
+    #[serde(default)]
+    setup: Option<String>,
+    #[serde(default)]
+    after: Option<String>,
+    #[serde(default)]
+    priority: Option<i32>,
 }
 
 /// Queues the task described by the form, as `furmi add` would. Returns its id.
@@ -213,6 +224,26 @@ pub(super) fn perform_create(home: &Home, cwd_repo: Option<&str>, body: &str) ->
     }
     if form.on_finish.is_some() {
         spec.on_finish = form.on_finish;
+    }
+    let filled =
+        |text: Option<String>| text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    if let Some(base) = filled(form.base) {
+        spec.base = Some(base);
+    }
+    if let Some(setup) = filled(form.setup) {
+        spec.setup = Some(setup);
+    }
+    if let Some(after) = filled(form.after) {
+        spec.after = after
+            .split([',', ' ', '\n'])
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            // A row of another machine reads `id@node`; the wait is local.
+            .map(|id| id.split('@').next().unwrap_or(id).to_string())
+            .collect();
+    }
+    if form.priority.is_some_and(|p| p != 0) {
+        spec.priority = form.priority;
     }
     // The form's one text box holds a command task's command.
     let mut prompt = form.prompt;
@@ -367,6 +398,106 @@ struct LimitsBody {
     max_parallel: usize,
     max_parallel_per_repo: usize,
     poll_interval: String,
+    /// Tokens a day before the queue is held; 0 for no budget. Absent (an
+    /// older page) leaves it as it is.
+    #[serde(default)]
+    daily_token_budget: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct AllowBody {
+    agent: String,
+    level: String,
+}
+
+/// "How far may it go?" in the setup view.
+pub(super) fn perform_allow_agent(home: &Home, body: &str) -> Result<()> {
+    let form: AllowBody = serde_json::from_str(body).context("couldn't read the form")?;
+    home.ensure_initialized()?;
+    crate::config::set_unattended(
+        &home.config_path(),
+        &form.agent,
+        crate::config::Leash::parse(&form.level)?,
+    )
+}
+
+#[derive(Deserialize)]
+struct NotifyBody {
+    #[serde(default)]
+    on: Vec<String>,
+    #[serde(default)]
+    ntfy_url: String,
+    #[serde(default)]
+    ntfy_topic: String,
+    #[serde(default)]
+    telegram_chat_id: String,
+}
+
+pub(super) fn perform_set_notify(home: &Home, body: &str) -> Result<()> {
+    let form: NotifyBody = serde_json::from_str(body).context("couldn't read the form")?;
+    home.ensure_initialized()?;
+    crate::config::set_notify(
+        &home.config_path(),
+        &crate::config::NotifyForm {
+            on: &form.on,
+            ntfy_url: &form.ntfy_url,
+            ntfy_topic: &form.ntfy_topic,
+            telegram_chat_id: &form.telegram_chat_id,
+        },
+    )
+}
+
+/// Sends a message to every configured service, whatever `on` says, so the
+/// settings can be tried without waiting for a task to end.
+pub(super) fn perform_test_notify(home: &Home) -> Result<()> {
+    let config = Config::load(&home.config_path())?;
+    if config.notify.ntfy.is_none() && config.notify.telegram.is_none() {
+        anyhow::bail!("no service is set up yet: fill in ntfy or Telegram and save first");
+    }
+    let problems = crate::notify::problems(&config.notify);
+    if !problems.is_empty() {
+        anyhow::bail!("{}", problems.join("; "));
+    }
+    crate::notify::send_test(&config.notify);
+    Ok(())
+}
+
+/// Everything the Settings page shows that isn't an agent or a check:
+/// notifications, the other machines, and how this dashboard is served.
+pub(super) fn settings_json(home: &Home) -> Result<String> {
+    let config = Config::load(&home.config_path())?;
+    let n = &config.notify;
+    let nodes: Vec<_> = crate::nodes::load(home)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|node| serde_json::json!({ "name": node.name, "ssh": node.ssh, "furmi": node.furmi }))
+        .collect();
+    Ok(serde_json::json!({
+        "config_path": contract_tilde(&home.config_path()),
+        "notify": {
+            "on": n.on.iter().map(|e| e.as_str()).collect::<Vec<_>>(),
+            "ntfy_url": n.ntfy.as_ref().and_then(|x| x.url.clone()).unwrap_or_default(),
+            "ntfy_topic": n.ntfy.as_ref().and_then(|x| x.topic.clone()).unwrap_or_default(),
+            "telegram_chat_id": n.telegram.as_ref().and_then(|x| x.chat_id.clone()).unwrap_or_default(),
+            "problems": crate::notify::problems(n),
+        },
+        "nodes": nodes,
+        "web": {
+            "listen": config.web.listen,
+            "allowed_hosts": config.web.allowed_hosts,
+            "trust_local": config.web.trust_local,
+        },
+        "defaults": {
+            "base": config.defaults.base,
+            "setup": config.defaults.setup,
+            "commit_guard": config.defaults.commit_guard,
+        },
+        "runner": {
+            "daily_token_budget": config.runner.daily_token_budget.unwrap_or(0),
+            "strip_env": config.runner.strip_env,
+        },
+    })
+    .to_string())
 }
 
 #[derive(Deserialize)]
@@ -406,7 +537,11 @@ pub(super) fn perform_set_limits(home: &Home, body: &str) -> Result<()> {
         form.max_parallel,
         form.max_parallel_per_repo,
         &form.poll_interval,
-    )
+    )?;
+    match form.daily_token_budget {
+        Some(tokens) => crate::config::set_daily_budget(&home.config_path(), tokens),
+        None => Ok(()),
+    }
 }
 
 /// Which coding agents are installed here and how to get the others, and how
@@ -418,6 +553,7 @@ pub(super) fn agents_json(home: &Home) -> Result<String> {
         "max_parallel": config.runner.max_parallel,
         "max_parallel_per_repo": config.runner.max_parallel_per_repo,
         "poll_interval": humantime::format_duration(config.runner.poll_interval).to_string(),
+        "daily_token_budget": config.runner.daily_token_budget.unwrap_or(0),
         "defaults": {
             "mode": config.defaults.mode,
             "worktree": config.defaults.worktree,
@@ -502,6 +638,26 @@ pub(super) fn tail_of(text: &str, limit: usize) -> (String, bool) {
     (cut.to_string(), true)
 }
 
+/// How much of the end of a log the task view carries.
+const TAIL_LINES: usize = 30;
+const TAIL_BYTES: usize = 6 * 1024;
+
+/// The last lines of a failed or unreviewed task's latest attempt.
+fn log_tail(home: &Home, task: &Task) -> Option<String> {
+    use crate::task::Status;
+    if !matches!(task.status, Status::Failed | Status::NeedsReview) || task.attempts == 0 {
+        return None;
+    }
+    let path = home
+        .logs()
+        .join(format!("{}.{}.log", task.id, task.attempts));
+    let text = std::fs::read_to_string(path).ok()?;
+    let (text, _) = tail_of(text.trim_end(), TAIL_BYTES);
+    let lines: Vec<&str> = text.lines().collect();
+    let tail = lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n");
+    Some(tail).filter(|t| !t.trim().is_empty())
+}
+
 /// Everything the page's task view shows, for a task in any state.
 ///
 /// `/api/tasks/<id>` is the *edit* view: it refuses anything that has already
@@ -558,6 +714,29 @@ pub(super) fn task_view_json(home: &Home, id: &str) -> Result<String> {
         "error": task.error,
         "tokens_in": task.tokens_in,
         "tokens_out": task.tokens_out,
+        "after": task.spec.after,
+        "priority": eff.priority,
+        "base": eff.base,
+        "setup": eff.setup,
+        "waits": (task.status == crate::task::Status::Pending)
+            .then(|| crate::run::blocked_by(home, &task))
+            .flatten(),
+        "pr_url": task.pr_url,
+        "created_by": task.created_by,
+        // The end of what it printed, for a run that didn't end well: the
+        // reason is usually in the last lines, and reading it shouldn't take
+        // another click.
+        "log_tail": log_tail(home, &task),
+        // What it changed, for anything that has run in a git workspace.
+        "changes": (task.attempts > 0 && eff.repo.join(".git").exists())
+            .then(|| {
+                crate::git::changes(
+                    &eff.repo,
+                    eff.worktree.then_some(worktree.as_path()),
+                    task.effective_branch(&config).as_deref(),
+                )
+            })
+            .flatten(),
     });
     Ok(view.to_string())
 }

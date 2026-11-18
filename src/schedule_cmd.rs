@@ -32,13 +32,15 @@ pub enum ScheduleCmd {
     Resume { id: String },
     /// Delete a schedule. Tasks it already queued stay.
     Delete { id: String },
+    /// Queue one run of a schedule now, without waiting for its next slot.
+    Run { id: String },
 }
 
 #[derive(clap::Args)]
 pub struct AddArgs {
     /// What the agent should do each time. Asked for if omitted (or read from
     /// stdin when piped).
-    #[arg(conflicts_with = "prompt")]
+    #[arg(conflicts_with = "prompt", allow_hyphen_values = true)]
     text: Option<String>,
     /// 5-field cron expression in local time, e.g. "0 2 * * *".
     #[arg(long)]
@@ -50,7 +52,7 @@ pub struct AddArgs {
     #[arg(long)]
     id: Option<String>,
     /// The prompt, as an option instead of the positional argument.
-    #[arg(long, short)]
+    #[arg(long, short, allow_hyphen_values = true)]
     prompt: Option<String>,
     /// Enqueue even if the previous run is still pending or running.
     #[arg(long)]
@@ -63,9 +65,9 @@ pub struct AddArgs {
 pub struct EditArgs {
     id: String,
     /// New prompt, as an option instead of the positional argument.
-    #[arg(conflicts_with = "prompt")]
+    #[arg(conflicts_with = "prompt", allow_hyphen_values = true)]
     text: Option<String>,
-    #[arg(long, short)]
+    #[arg(long, short, allow_hyphen_values = true)]
     prompt: Option<String>,
     /// New cron expression, e.g. "0 2 * * *".
     #[arg(long)]
@@ -184,6 +186,13 @@ pub fn run(home: &Home, command: ScheduleCmd) -> Result<()> {
         ScheduleCmd::Delete { id } => {
             edit::delete_schedule(home, &id)?;
             println!("Deleted `{id}`");
+            Ok(())
+        }
+        ScheduleCmd::Run { id } => {
+            home.ensure_initialized()?;
+            let config = crate::config::Config::load(&home.config_path())?;
+            let task = crate::run::run_now(home, &config, &id)?;
+            println!("Queued `{task}` from `{id}`");
             Ok(())
         }
     }

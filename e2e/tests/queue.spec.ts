@@ -15,12 +15,13 @@ test("with the runner off, a banner offers to start it, and it can be stopped ag
   expect(forge.furmi("status")).toContain("runner     running (pid");
 
   // Stopping asks first; declining changes nothing.
-  page.once("dialog", (d) => void d.dismiss());
   await page.locator("#runner").getByRole("button", { name: "Stop" }).click();
+  await expect(page.locator("#ask-title")).toHaveText("Stop the runner?");
+  await page.locator("#ask-cancel").click();
   await expect(page.locator("#runner")).toContainText("Runner on");
 
-  page.once("dialog", (d) => void d.accept());
   await page.locator("#runner").getByRole("button", { name: "Stop" }).click();
+  await page.locator("#ask-ok").click();
   await expect(page.locator("#runner")).toContainText("Runner off");
   await expect(page.locator("#runner-notice")).toBeVisible();
   expect(forge.furmi("status")).toContain("runner     NOT running");
@@ -76,8 +77,10 @@ test("a waiting task can be edited, then cancelled and tried again", async ({ pa
   expect(fs.readFileSync(forge.taskFile(id)!, "utf8")).toContain("echo second version");
   await expect(row(page, id).locator("td").nth(4)).not.toHaveText(/^\s*$/); // it has a start time now
 
-  page.once("dialog", (d) => void d.accept());
+  // It has a start time of its own, which dropping would lose: so it asks.
   await row(page, id).getByRole("button", { name: "Drop it" }).click();
+  await expect(page.locator("#ask-title")).toHaveText(`Drop ${id}?`);
+  await page.locator("#ask-ok").click();
   await expect(count(page, "queue")).toHaveText("0");
   await tab(page, "archive").click();
   await expect(row(page, id).locator(".badge")).toHaveText("Cancelled");

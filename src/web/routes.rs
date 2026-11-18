@@ -6,10 +6,11 @@ use tiny_http::Method;
 
 use super::handlers::{
     agents_json, detail_reply, doctor_json, json_err, json_log_with, models_json, mutation_reply,
-    perform_action, perform_create, perform_create_schedule, perform_create_template,
-    perform_delete_template, perform_duplicate, perform_edit_schedule, perform_edit_task,
-    perform_edit_template, perform_save_template, perform_set_default_agent, perform_set_defaults,
-    perform_set_limits, tail_of, task_view_json, template_detail,
+    perform_action, perform_allow_agent, perform_create, perform_create_schedule,
+    perform_create_template, perform_delete_template, perform_duplicate, perform_edit_schedule,
+    perform_edit_task, perform_edit_template, perform_save_template, perform_set_default_agent,
+    perform_set_defaults, perform_set_limits, perform_set_notify, perform_test_notify,
+    settings_json, tail_of, task_view_json, template_detail,
 };
 use super::state::{capacity, repos_json, state_json};
 use super::{Ctx, Reply, json_reply, reply};
@@ -71,6 +72,16 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
     } else {
         body
     };
+    // "Save as template" on another machine's task: templates are this
+    // machine's own, so the task is read from there and the template is made
+    // here, where the form that uses it is.
+    if !ctx.peer
+        && matches!(method, Method::Post)
+        && let ["api", "tasks", id, "template"] = segments.as_slice()
+        && id.contains(['@', '%'])
+    {
+        return created_reply(template_from_remote(home, id));
+    }
     // A row, or a form, that belongs to another node goes there.
     if !ctx.peer
         && let Some((status, answer)) =
@@ -113,6 +124,10 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
                 }
             }
             ["api", "doctor"] => json_reply(200, doctor_json(home)),
+            ["api", "settings"] => match settings_json(home) {
+                Ok(json) => json_reply(200, json),
+                Err(e) => json_reply(500, json_err(&e)),
+            },
             ["api", "agents"] => match agents_json(home) {
                 Ok(json) => json_reply(200, json),
                 Err(e) => json_reply(500, json_err(&e)),
@@ -201,6 +216,13 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
             ["api", "defaults"] => mutation_reply(perform_set_defaults(home, body)),
             ["api", "runner", "limits"] => mutation_reply(perform_set_limits(home, body)),
             ["api", "agents", "default"] => mutation_reply(perform_set_default_agent(home, body)),
+            ["api", "agents", "allow"] => mutation_reply(perform_allow_agent(home, body)),
+            ["api", "notify"] => mutation_reply(perform_set_notify(home, body)),
+            ["api", "notify", "test"] => mutation_reply(perform_test_notify(home)),
+            ["api", "schedules", id, "run"] => created_reply(
+                crate::config::Config::load(&home.config_path())
+                    .and_then(|config| crate::run::run_now(home, &config, id)),
+            ),
             ["api", "tasks"] => match perform_create(home, ctx.cwd_repo.as_deref(), body) {
                 Ok(id) => json_reply(
                     200,
@@ -221,6 +243,45 @@ pub(super) fn route(ctx: &Ctx, method: &Method, url: &str, body: &str) -> Reply 
         },
         _ => reply(404, "text/plain", "not found"),
     }
+}
+
+fn template_from_remote(home: &crate::home::Home, id: &str) -> anyhow::Result<String> {
+    let view = format!("/api/tasks/{}/view", id.replace("%40", "@"));
+    let (status, body) = crate::nodes::proxy(home, false, &view, "")
+        .ok_or_else(|| anyhow::anyhow!("`{id}` isn't a task of another machine"))?;
+    let task: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+    if status != 200 {
+        anyhow::bail!(
+            "{}",
+            task["error"].as_str().unwrap_or("couldn't read that task")
+        );
+    }
+    if task["command"] == true {
+        anyhow::bail!(
+            "a command task of another machine can't be saved as a template here: \
+             save it on that machine with `furmi template save`"
+        );
+    }
+    let on_finish = match task["on_finish"].as_str() {
+        Some("commit") => Some(crate::spec::OnFinish::Commit),
+        Some("push") => Some(crate::spec::OnFinish::Push),
+        Some("pr") => Some(crate::spec::OnFinish::Pr),
+        Some("none") => Some(crate::spec::OnFinish::None),
+        _ => None,
+    };
+    crate::template::create(
+        home,
+        crate::template::TemplateEdit {
+            description: String::new(),
+            prompt: task["prompt"].as_str().unwrap_or_default().to_string(),
+            // Its folder is a path on that machine: whoever uses the
+            // template here picks the project.
+            repo: String::new(),
+            on_finish,
+            // An agent this machine doesn't have would make the template unusable.
+            agent: None,
+        },
+    )
 }
 
 /// `{"ok":true,"id":...}` for something just made, or the error.

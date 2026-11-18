@@ -184,17 +184,17 @@ test.describe("with the runner off", () => {
     await openDashboard(page, forge);
 
     // Following the system: no choice recorded, nothing set on the document.
-    await expect(page.locator("#theme-toggle")).toHaveText("Auto");
+    await expect(page.locator("#theme-toggle")).toHaveText("Theme: Auto");
     expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBeUndefined();
 
     // Auto -> Light -> Dark -> Auto, and the page really changes colour.
     await page.locator("#theme-toggle").click();
-    await expect(page.locator("#theme-toggle")).toHaveText("Light");
+    await expect(page.locator("#theme-toggle")).toHaveText("Theme: Light");
     expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
       "rgb(242, 242, 243)",
     );
     await page.locator("#theme-toggle").click();
-    await expect(page.locator("#theme-toggle")).toHaveText("Dark");
+    await expect(page.locator("#theme-toggle")).toHaveText("Theme: Dark");
     expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
       "rgb(20, 22, 23)",
     );
@@ -213,12 +213,12 @@ test.describe("with the runner off", () => {
 
     // A reload still knows; the choice is on this machine, in this browser.
     await page.reload();
-    await expect(page.locator("#theme-toggle")).toHaveText("Dark");
+    await expect(page.locator("#theme-toggle")).toHaveText("Theme: Dark");
     await page.locator("#theme-toggle").click();
-    await expect(page.locator("#theme-toggle")).toHaveText("Auto");
+    await expect(page.locator("#theme-toggle")).toHaveText("Theme: Auto");
     await expect(page.locator("#logo")).toHaveAttribute("src", "/logo.png");
     await page.reload();
-    await expect(page.locator("#theme-toggle")).toHaveText("Auto");
+    await expect(page.locator("#theme-toggle")).toHaveText("Theme: Auto");
   });
 
   test("a narrow screen turns rows into labelled cards", async ({ page, forge }) => {

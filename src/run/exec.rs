@@ -32,6 +32,18 @@ pub fn exec(home: &Home, id: &str, status_file: &Path) -> Result<ExitCode> {
         let config = Config::load(&home.config_path())?;
         let task = Task::load(&home.tasks().join(format!("{id}.md")))?;
         let eff = task.spec.resolve(&config.defaults);
+        let log_path = status_file.with_extension("log");
+        let mut logged = false;
+        // The workspace is made ready once, before the first attempt: the
+        // marker outlives a retry, so `npm ci` doesn't run again for one.
+        if let Some(setup) = eff.setup.as_deref().filter(|s| !s.trim().is_empty()) {
+            let marker = home.logs().join(format!("{id}.setup"));
+            if !marker.exists() {
+                logged = true;
+                run_setup(home, &config, &task.id, &eff.repo, setup, &log_path)?;
+                let _ = fsutil::write_atomic(&marker, "");
+            }
+        }
         let argv = match &eff.run {
             Some(command) => shell_argv(command),
             None => {
@@ -41,13 +53,25 @@ pub fn exec(home: &Home, id: &str, status_file: &Path) -> Result<ExitCode> {
                     .get(name)
                     .with_context(|| format!("unknown agent `{name}`"))?;
                 let model = eff.model.as_deref().or(agent.model.as_deref());
-                agent_argv(agent, eff.mode, &task.prompt, model, &task.id)
+                let extra = match eff.mode {
+                    Mode::Headless => config.unattended_args(name),
+                    Mode::Interactive => Vec::new(),
+                };
+                let prompt_file = prompt_file_for(home, agent, eff.mode, &task)?;
+                agent_argv(
+                    agent,
+                    eff.mode,
+                    &task.prompt,
+                    model,
+                    &task.id,
+                    &extra,
+                    prompt_file.as_deref(),
+                )
             }
         };
         let mut cmd = Command::new(&argv[0]);
-        cmd.args(&argv[1..])
-            .env("FURMI_HOME", home.root())
-            .env("FURMI_TASK_ID", &task.id);
+        cmd.args(&argv[1..]);
+        task_env(&mut cmd, home, &config, &task.id, &eff.repo);
         // Headless output is captured (and teed back below) so it can be
         // logged and a final JSON summary parsed for usage. Interactive
         // mode keeps a real, fully inherited tty: it's a live session for a
@@ -63,10 +87,10 @@ pub fn exec(home: &Home, id: &str, status_file: &Path) -> Result<ExitCode> {
         let child = cmd
             .spawn()
             .with_context(|| format!("starting `{}`", argv[0]))?;
-        Ok::<_, anyhow::Error>((child, eff.mode, eff.run.is_none()))
+        Ok::<_, anyhow::Error>((child, eff.mode, eff.run.is_none(), logged))
     })();
     let (exit, usage) = match spawned {
-        Ok((mut child, mode, is_agent)) => {
+        Ok((mut child, mode, is_agent, logged)) => {
             // Ctrl-C / Ctrl-\ in the window are meant for the agent; this
             // process must outlive it to record the status. Ignoring them
             // only after the spawn keeps the child's handlers default.
@@ -78,6 +102,7 @@ pub fn exec(home: &Home, id: &str, status_file: &Path) -> Result<ExitCode> {
             let tees = (mode == Mode::Headless).then(|| {
                 let log = Arc::new(Mutex::new(StreamedLog::create(
                     &status_file.with_extension("log"),
+                    logged,
                 )));
                 let stdout = child.stdout.take().expect("piped for headless mode");
                 let stderr = child.stderr.take().expect("piped for headless mode");
@@ -107,7 +132,14 @@ pub fn exec(home: &Home, id: &str, status_file: &Path) -> Result<ExitCode> {
         }
         Err(e) => {
             eprintln!("error: {e:#}");
-            (Exit::Code(127), None)
+            // 127 is "the program isn't there", which the runner treats as
+            // the machine's fault; a setup command that failed is the task's.
+            let code = if format!("{e:#}").contains("the setup command failed") {
+                1
+            } else {
+                127
+            };
+            (Exit::Code(code), None)
         }
     };
     // Written before the exit record, so a poller that sees the exit record
@@ -140,8 +172,16 @@ struct StreamedLog {
 impl StreamedLog {
     /// A log that can't be created is only a warning: the run goes on, and
     /// the log is captured from the tmux pane at the end instead.
-    fn create(path: &Path) -> Self {
-        let file = std::fs::File::create(path)
+    ///
+    /// With `keep`, what is already there (the setup command's output) stays
+    /// and the attempt's output follows it.
+    fn create(path: &Path, keep: bool) -> Self {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(keep)
+            .truncate(!keep)
+            .open(path)
             .map_err(|e| eprintln!("warning: could not write {}: {e}", path.display()))
             .ok();
         Self { file, written: 0 }
@@ -305,13 +345,33 @@ fn shell_argv(command: &str) -> Vec<String> {
 /// The agent's argv for `mode`, with `model_args` appended if there's a
 /// model. `{prompt}` is filled last so placeholders inside the prompt text
 /// stay literal.
+///
+/// `extra` (the flags that let it act unattended) goes last. `{prompt_file}`
+/// is the path of a file holding the prompt, for a launcher that would rather
+/// read it than take it on its command line.
+///
+/// A prompt that starts with `-` (a Markdown list, say) is one more argument
+/// to the agent's own parser, which would take it for an option: it is given
+/// a leading space, which no agent minds.
 fn agent_argv(
     agent: &Agent,
     mode: Mode,
     prompt: &str,
     model: Option<&str>,
     id: &str,
+    extra: &[String],
+    prompt_file: Option<&Path>,
 ) -> Vec<String> {
+    let guarded;
+    let prompt = if prompt.starts_with('-') {
+        guarded = format!(" {prompt}");
+        guarded.as_str()
+    } else {
+        prompt
+    };
+    let prompt_file = prompt_file
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let template = match mode {
         Mode::Headless => &agent.headless,
         Mode::Interactive => &agent.interactive,
@@ -323,12 +383,90 @@ fn agent_argv(
     template
         .iter()
         .chain(model_args)
+        .chain(extra)
         .map(|a| {
             a.replace("{model}", model.unwrap_or_default())
                 .replace("{id}", id)
+                .replace("{prompt_file}", &prompt_file)
                 .replace("{prompt}", prompt)
         })
         .collect()
+}
+
+/// Writes the prompt to a file only its owner can read, if the agent's argv
+/// asks for one with `{prompt_file}`, and returns its path.
+fn prompt_file_for(home: &Home, agent: &Agent, mode: Mode, task: &Task) -> Result<Option<PathBuf>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let template = match mode {
+        Mode::Headless => &agent.headless,
+        Mode::Interactive => &agent.interactive,
+    };
+    if !template.iter().any(|a| a.contains("{prompt_file}")) {
+        return Ok(None);
+    }
+    let path = home.logs().join(format!("{}.prompt", task.id));
+    let _ = std::fs::remove_file(&path);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .and_then(|mut f| f.write_all(task.prompt.as_bytes()))
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(Some(path))
+}
+
+/// furmi's own secrets: read by the runner to send notifications, and no
+/// business of the agents and commands it starts.
+const OWN_SECRETS: [&str; 2] = ["FURMI_NTFY_TOKEN", "FURMI_TELEGRAM_BOT_TOKEN"];
+
+/// The environment a task's process gets: the runner's, plus where it is
+/// (`FURMI_HOME`, `FURMI_TASK_ID`, `FURMI_REPO`), minus furmi's own secrets
+/// and whatever `[runner] strip_env` names.
+fn task_env(cmd: &mut Command, home: &Home, config: &Config, id: &str, repo: &Path) {
+    cmd.env("FURMI_HOME", home.root())
+        .env("FURMI_TASK_ID", id)
+        .env("FURMI_REPO", repo);
+    for name in OWN_SECRETS
+        .iter()
+        .copied()
+        .chain(config.runner.strip_env.iter().map(String::as_str))
+    {
+        cmd.env_remove(name);
+    }
+}
+
+/// Runs the task's `setup` command in its workspace, its output going to the
+/// pane and to the top of the attempt's log. A failure fails the attempt.
+fn run_setup(
+    home: &Home,
+    config: &Config,
+    id: &str,
+    repo: &Path,
+    setup: &str,
+    log_path: &Path,
+) -> Result<()> {
+    println!("[furmi] setup: {setup}");
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(setup).stdin(Stdio::null());
+    task_env(&mut cmd, home, config, id, repo);
+    let out = cmd.output().context("starting the setup command")?;
+    let mut text = format!("[furmi] setup: {setup}\n").into_bytes();
+    text.extend_from_slice(&out.stdout);
+    text.extend_from_slice(&out.stderr);
+    let _ = std::io::stdout()
+        .write_all(&text[text.iter().position(|b| *b == b'\n').map_or(0, |i| i + 1)..]);
+    let ended = if out.status.success() {
+        "[furmi] setup done\n".to_string()
+    } else {
+        format!("[furmi] setup failed ({})\n", out.status)
+    };
+    text.extend_from_slice(ended.as_bytes());
+    let _ = std::fs::write(log_path, &text);
+    if !out.status.success() {
+        anyhow::bail!("the setup command failed ({}): {setup}", out.status);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -347,11 +485,11 @@ mod tests {
         };
         let prompt = "fix {model}; rm -rf";
         assert_eq!(
-            agent_argv(&agent, Mode::Headless, prompt, Some("big"), "t1"),
+            agent_argv(&agent, Mode::Headless, prompt, Some("big"), "t1", &[], None),
             argv(&["agent", "run", prompt, "x-t1", "-m", "big"])
         );
         assert_eq!(
-            agent_argv(&agent, Mode::Interactive, prompt, None, "t1"),
+            agent_argv(&agent, Mode::Interactive, prompt, None, "t1", &[], None),
             argv(&["agent", prompt])
         );
     }
@@ -375,7 +513,10 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let log = Arc::new(Mutex::new(StreamedLog::create(&dir.path().join("t.log"))));
+        let log = Arc::new(Mutex::new(StreamedLog::create(
+            &dir.path().join("t.log"),
+            false,
+        )));
         let tees = (
             tee(
                 child.stdout.take().unwrap(),
@@ -396,5 +537,57 @@ mod tests {
         );
         let text = String::from_utf8_lossy(&captured);
         assert!(text.contains(r#""agent_settled""#), "{text}");
+    }
+
+    #[test]
+    fn a_prompt_that_starts_with_a_dash_cannot_be_read_as_an_option() {
+        let agent = Agent {
+            headless: vec!["a".into(), "{prompt}".into()],
+            interactive: vec!["a".into()],
+            model_args: vec![],
+            model: None,
+            models_cmd: vec![],
+        };
+        let argv = agent_argv(
+            &agent,
+            Mode::Headless,
+            "--dangerously-skip-permissions",
+            None,
+            "t1",
+            &["--full-auto".to_string()],
+            None,
+        );
+        // The prompt keeps its text but no longer leads with `-`; the
+        // unattended flags come after it, as flags.
+        assert_eq!(
+            argv,
+            ["a", " --dangerously-skip-permissions", "--full-auto"]
+        );
+    }
+
+    #[test]
+    fn a_task_never_inherits_furmis_own_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+        let mut config = Config::default();
+        config.runner.strip_env = vec!["MY_DEPLOY_KEY".into()];
+        let mut cmd = Command::new("env");
+        cmd.env("FURMI_NTFY_TOKEN", "n")
+            .env("FURMI_TELEGRAM_BOT_TOKEN", "t")
+            .env("MY_DEPLOY_KEY", "k")
+            .env("KEPT", "yes");
+        task_env(&mut cmd, &home, &config, "t1", Path::new("/repo"));
+        let out = String::from_utf8(cmd.output().unwrap().stdout).unwrap();
+        assert!(
+            out.contains("KEPT=yes") && out.contains("FURMI_REPO=/repo"),
+            "{out}"
+        );
+        for gone in [
+            "FURMI_NTFY_TOKEN",
+            "FURMI_TELEGRAM_BOT_TOKEN",
+            "MY_DEPLOY_KEY",
+        ] {
+            assert!(!out.contains(gone), "{gone} leaked: {out}");
+        }
     }
 }

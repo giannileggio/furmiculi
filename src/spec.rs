@@ -68,6 +68,21 @@ pub struct TaskSpec {
     /// task: it has no prompt, agent, model or mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
+    /// What a new branch starts from (`origin/main`, a tag, a commit). Unset,
+    /// it starts from whatever the repo has checked out. A base on a remote
+    /// (`origin/...`) is fetched first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// A shell command run in the task's workspace before its first attempt:
+    /// install dependencies, copy an untracked `.env` from `$FURMI_REPO`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<String>,
+    /// Ids of tasks that must finish as `done` before this one starts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after: Vec<String>,
+    /// Higher starts first among tasks that are ready; 0 when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i32>,
 }
 
 fn path_is_empty(path: &std::path::Path) -> bool {
@@ -90,6 +105,10 @@ pub const SPEC_KEYS: &[&str] = &[
     "retry_delay",
     "timeout",
     "run",
+    "base",
+    "setup",
+    "after",
+    "priority",
 ];
 
 /// A spec with all defaults applied.
@@ -108,6 +127,10 @@ pub struct Effective {
     pub timeout: Duration,
     /// The shell command of a command task.
     pub run: Option<String>,
+    pub base: Option<String>,
+    pub setup: Option<String>,
+    pub after: Vec<String>,
+    pub priority: i32,
 }
 
 impl Effective {
@@ -156,6 +179,10 @@ impl TaskSpec {
             retry_delay: self.retry_delay.unwrap_or(defaults.retry_delay),
             timeout: self.timeout.unwrap_or(defaults.timeout),
             run: self.run.clone(),
+            base: self.base.clone().or_else(|| defaults.base.clone()),
+            setup: self.setup.clone().or_else(|| defaults.setup.clone()),
+            after: self.after.clone(),
+            priority: self.priority.unwrap_or(0),
         }
     }
 
@@ -216,6 +243,20 @@ impl TaskSpec {
         }
         if eff.on_finish == OnFinish::Pr && eff.branch.is_none() && !eff.worktree {
             out.push("on_finish: pr needs a branch or a worktree".into());
+        }
+        if let Some(base) = &self.base
+            && (base.trim().is_empty()
+                || base.starts_with('-')
+                || base.contains(char::is_whitespace))
+        {
+            out.push(format!(
+                "invalid base `{base}`: use a branch, tag or commit (e.g. origin/main)"
+            ));
+        }
+        for dep in &self.after {
+            if let Err(e) = validate_id(dep) {
+                out.push(format!("after: {e}"));
+            }
         }
     }
 
@@ -322,6 +363,10 @@ mod tests {
             retry_delay: None,
             timeout: None,
             run: None,
+            base: None,
+            setup: None,
+            after: Vec::new(),
+            priority: None,
         };
         let d = Defaults {
             agent: Some("codex".into()),
@@ -348,6 +393,10 @@ mod tests {
             retry_delay: None,
             timeout: None,
             run: None,
+            base: None,
+            setup: None,
+            after: Vec::new(),
+            priority: None,
         };
         let mut config = Config::default();
         assert!(spec.problems(&config)[0].starts_with("no agent"));
@@ -455,6 +504,10 @@ mod tests {
             retry_delay: None,
             timeout: None,
             run: None,
+            base: None,
+            setup: None,
+            after: Vec::new(),
+            priority: None,
         };
         let config = Config::default();
         assert!(

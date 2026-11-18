@@ -1601,3 +1601,123 @@ fn pause_survives_a_runner_restart_and_needs_no_runner() {
     runner.wait().unwrap();
     assert_eq!(env.field("held", "status").as_deref(), Some("pending"));
 }
+
+#[test]
+fn a_task_waits_for_the_ones_it_runs_after() {
+    let env = Env::new("max_parallel_per_repo = 3");
+    env.add("first", "exit 1", &["--no-worktree", "--retries", "0"]);
+    env.add(
+        "second",
+        "echo second",
+        &["--no-worktree", "--after", "first"],
+    );
+
+    // The first fails, so the second keeps waiting instead of running on a
+    // result that isn't there.
+    assert_eq!(env.run_until_archived("first"), "failed");
+    env.tick();
+    env.tick();
+    assert_eq!(env.field("second", "status").as_deref(), Some("pending"));
+    assert!(!env.archived("second"));
+
+    // Trying the first again, and it working, lets the second go.
+    std::fs::write(
+        env.home.path().join("archive/first.md"),
+        std::fs::read_to_string(env.home.path().join("archive/first.md"))
+            .unwrap()
+            .replace("exit 1", "echo fixed"),
+    )
+    .unwrap();
+    env.furmi_ok(&["retry", "first"]);
+    assert_eq!(env.run_until_archived("first"), "done");
+    assert_eq!(env.run_until_archived("second"), "done");
+}
+
+#[test]
+fn a_higher_priority_starts_first() {
+    // One slot: whichever starts first is the only one running.
+    let env = Env::new("max_parallel = 1");
+    env.add("older", "sleep 30", &["--no-worktree"]);
+    env.add("urgent", "sleep 30", &["--no-worktree", "--priority", "5"]);
+    env.tick();
+    assert_eq!(env.field("urgent", "status").as_deref(), Some("running"));
+    assert_eq!(env.field("older", "status").as_deref(), Some("pending"));
+}
+
+#[test]
+fn a_setup_command_prepares_the_worktree_once_and_its_failure_fails_the_task() {
+    let env = Env::new("");
+    std::fs::write(env.repo.path().join(".env"), "KEY=1").unwrap();
+    env.add(
+        "prepared",
+        "cat .env; cat count; exit 1",
+        &[
+            "--retries",
+            "1",
+            "--setup",
+            r#"cp "$FURMI_REPO/.env" . && echo ran >> count"#,
+        ],
+    );
+    // Two attempts (it always fails), one setup.
+    assert_eq!(env.run_until_archived("prepared"), "failed");
+    let count = std::fs::read_to_string(env.worktree("prepared").join("count")).unwrap();
+    assert_eq!(count, "ran\n");
+    let log = std::fs::read_to_string(env.home.path().join("logs/prepared.1.log")).unwrap();
+    assert!(
+        log.contains("[furmi] setup:") && log.contains("KEY=1"),
+        "{log}"
+    );
+
+    env.add(
+        "broken",
+        "echo never",
+        &["--retries", "0", "--setup", "exit 3"],
+    );
+    assert_eq!(env.run_until_archived("broken"), "failed");
+    assert_eq!(env.field("broken", "exit_code").as_deref(), Some("1"));
+    let log = std::fs::read_to_string(env.home.path().join("logs/broken.1.log")).unwrap();
+    assert!(
+        log.contains("setup failed") && !log.contains("never"),
+        "{log}"
+    );
+}
+
+#[test]
+fn the_queue_is_held_once_todays_token_budget_is_spent() {
+    let env = Env::new("daily_token_budget = 100");
+    // An "agent" that reports its usage the way claude's JSON output does.
+    env.add(
+        "spender",
+        r#"echo '{"result":"ok","usage":{"input_tokens":80,"output_tokens":40}}'"#,
+        &["--no-worktree"],
+    );
+    assert_eq!(env.run_until_archived("spender"), "done");
+    assert_eq!(env.field("spender", "tokens_in").as_deref(), Some("80"));
+
+    env.add("held", "echo held", &["--no-worktree"]);
+    env.tick();
+    env.tick();
+    assert_eq!(env.field("held", "status").as_deref(), Some("pending"));
+    let status = String::from_utf8(env.furmi_ok(&["status"]).stdout).unwrap();
+    assert!(status.contains("budget"), "{status}");
+}
+
+#[test]
+fn on_finish_refuses_to_commit_a_new_secret() {
+    let env = Env::new("");
+    env.add(
+        "leaky",
+        "echo SECRET=1 > .env.production; echo code > a.txt",
+        &["--on-finish", "commit", "--retries", "0"],
+    );
+    assert_eq!(env.run_until_archived("leaky"), "failed");
+    let file = std::fs::read_to_string(env.task_path("leaky").unwrap()).unwrap();
+    assert!(
+        file.contains(".env.production (looks like a secret)"),
+        "{file}"
+    );
+    // The work is still there, uncommitted, for someone to look at.
+    assert!(env.worktree("leaky").join("a.txt").exists());
+    let log = git(&env.worktree("leaky"), &["log", "--oneline"]);
+    assert_eq!(log.lines().count(), 1, "{log}");
+}

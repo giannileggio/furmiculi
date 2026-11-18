@@ -61,6 +61,15 @@ struct Row {
     summary: String,
     /// Why a failed (or otherwise unfinished) task ended up that way.
     error: Option<String>,
+    /// Why a waiting task hasn't started, when it is waiting on other tasks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    waits: Option<String>,
+    /// How many attempts it has had, for the log viewer's picker.
+    attempts: u32,
+    /// Tasks it runs after, and its place in the queue (0 unless set).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    after: Vec<String>,
+    priority: i32,
 }
 
 #[derive(Serialize)]
@@ -72,6 +81,19 @@ struct ScheduleRow {
     cron: String,
     next: String,
     repo: String,
+    /// The task its latest firing made, and how that went.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_run: Option<LastRun>,
+    /// How many of its latest finished runs failed in a row.
+    failing: usize,
+}
+
+#[derive(Serialize)]
+struct LastRun {
+    id: String,
+    status: &'static str,
+    /// RFC 3339, of when it finished, started or was queued.
+    at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -148,6 +170,9 @@ struct State {
     form: FormInfo,
     /// Problems and suggestions from the runner's last housekeeping pass.
     health: Vec<crate::run::Health>,
+    /// Today's token use against the budget, when one is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    budget: Option<crate::run::Budget>,
 }
 
 /// Loads every file in `paths`, setting aside the ones that don't parse
@@ -321,6 +346,25 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
                     cron: s.cron.clone(),
                     next,
                     repo: contract_tilde(&s.spec.resolve(&config.defaults).repo),
+                    last_run: {
+                        let by = format!("schedule:{}", s.id);
+                        running_tasks
+                            .iter()
+                            .chain(&queue_tasks)
+                            .chain(&archive_tasks)
+                            .filter(|t| t.created_by.as_deref() == Some(by.as_str()))
+                            .max_by_key(|t| t.created_at)
+                            .map(|t| LastRun {
+                                id: t.id.clone(),
+                                status: t.status.as_str(),
+                                at: t
+                                    .finished_at
+                                    .or(t.started_at)
+                                    .or(t.created_at)
+                                    .map(|at| at.to_rfc3339()),
+                            })
+                    },
+                    failing: crate::run::failure_streak(home, &s.id),
                 }
             })
             .collect();
@@ -350,7 +394,13 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
         home: contract_tilde(home.root()),
         generated_at: fmt_time(now()),
         counts,
-        queue: queue_tasks.iter().map(|t| to_row(t, &config)).collect(),
+        queue: queue_tasks
+            .iter()
+            .map(|t| Row {
+                waits: crate::run::blocked_by(home, t),
+                ..to_row(t, &config)
+            })
+            .collect(),
         drafts: draft_tasks.iter().map(|t| to_row(t, &config)).collect(),
         running: running_tasks.iter().map(|t| to_row(t, &config)).collect(),
         archive: archive_tasks.iter().map(|t| to_row(t, &config)).collect(),
@@ -366,6 +416,7 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
         },
         form,
         health: crate::run::load_health(home),
+        budget: crate::run::budget(home, &config, now()),
     };
     Ok(serde_json::to_string(&state)?)
 }
@@ -551,6 +602,10 @@ fn to_row(t: &Task, config: &Config) -> Row {
         model,
         model_source,
         error: t.error.clone().filter(|e| !e.trim().is_empty()),
+        waits: None,
+        attempts: t.attempts,
+        after: t.spec.after.clone(),
+        priority: t.spec.priority.unwrap_or(0),
     }
 }
 
@@ -631,6 +686,10 @@ mod tests {
             retry_delay: None,
             timeout: None,
             run: None,
+            base: None,
+            setup: None,
+            after: Vec::new(),
+            priority: None,
         };
         Task::new(id.into(), spec, "do it".into())
     }
@@ -723,6 +782,10 @@ mod tests {
             retry_delay: None,
             timeout: None,
             run: None,
+            base: None,
+            setup: None,
+            after: Vec::new(),
+            priority: None,
         };
         let mut task = Task::new("t".into(), spec, "do it".into());
         let config = Config::default();
@@ -815,6 +878,10 @@ mod tests {
             retry_delay: None,
             timeout: None,
             run: None,
+            base: None,
+            setup: None,
+            after: Vec::new(),
+            priority: None,
         };
         let mut task = Task::new("t".into(), spec, "do it".into());
         let config = Config::default();
@@ -853,6 +920,10 @@ mod tests {
             retry_delay: None,
             timeout: None,
             run: None,
+            base: None,
+            setup: None,
+            after: Vec::new(),
+            priority: None,
         };
         let mut task = Task::new("t".into(), spec, "do it".into());
         let mut config = Config::default();

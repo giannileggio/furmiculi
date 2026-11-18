@@ -208,6 +208,11 @@ impl Home {
 
     /// Where a serving dashboard records itself (pid and address), under a
     /// lock that dies with the process.
+    /// A loopback dashboard's signed-in browsers, kept across restarts (0600).
+    pub fn web_sessions(&self) -> PathBuf {
+        self.root.join(".web-sessions")
+    }
+
     pub fn web_lock(&self) -> PathBuf {
         self.root.join(".web.lock")
     }

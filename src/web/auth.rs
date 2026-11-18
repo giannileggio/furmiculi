@@ -33,6 +33,17 @@ pub(super) const LEGACY_TOKEN_COOKIE: &str = "furmi_token";
 /// cookie and in the server's table.
 pub(super) const SESSION_TTL: Duration = Duration::from_secs(15 * 60);
 
+/// A loopback dashboard's sessions last much longer, and are kept across a
+/// restart (see [`Sessions::kept_in`]): the browser is on the machine the
+/// files are on, so the session is no more exposed than they are, and signing
+/// in again after every `furmi restart` would only teach people to turn the
+/// gate off.
+pub(super) const LOCAL_SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// How stale the saved copy of a kept session's expiry may get before a
+/// request writes it again.
+const SAVE_EVERY: Duration = Duration::from_secs(10 * 60);
+
 /// Sessions kept at once; the soonest to expire makes room for a new one.
 const MAX_SESSIONS: usize = 64;
 
@@ -48,6 +59,15 @@ struct Session {
 pub(super) struct Sessions {
     ttl: Duration,
     map: Mutex<HashMap<String, Session>>,
+    /// Where the sessions are kept across restarts (a loopback dashboard's),
+    /// and when they were last written there.
+    store: Option<(std::path::PathBuf, Mutex<Instant>)>,
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 impl Sessions {
@@ -55,7 +75,86 @@ impl Sessions {
         Sessions {
             ttl,
             map: Mutex::new(HashMap::new()),
+            store: None,
         }
+    }
+
+    /// Sessions that outlive the server: read from `path` now, and written
+    /// back there (0600) as they are opened and used. One line each: the id,
+    /// the page token and when it expires, in Unix seconds.
+    pub(super) fn kept_in(ttl: Duration, path: std::path::PathBuf, now: Instant) -> Self {
+        let mut map = HashMap::new();
+        let wall = unix_now();
+        for line in std::fs::read_to_string(&path).unwrap_or_default().lines() {
+            let mut parts = line.split_whitespace();
+            if let (Some(id), Some(page_token), Some(expires)) =
+                (parts.next(), parts.next(), parts.next())
+                && let Ok(expires) = expires.parse::<u64>()
+                && expires > wall
+            {
+                map.insert(
+                    id.to_string(),
+                    Session {
+                        expires: now + Duration::from_secs((expires - wall).min(ttl.as_secs())),
+                        page_token: page_token.to_string(),
+                    },
+                );
+            }
+        }
+        Sessions {
+            ttl,
+            map: Mutex::new(map),
+            store: Some((path, Mutex::new(now))),
+        }
+    }
+
+    /// Writes the kept sessions out. Best-effort: a session that can't be
+    /// saved still works until the server stops.
+    fn save(&self, map: &HashMap<String, Session>, now: Instant) {
+        use std::os::unix::fs::OpenOptionsExt;
+        let Some((path, saved)) = &self.store else {
+            return;
+        };
+        let wall = unix_now();
+        let text: String = map
+            .iter()
+            .map(|(id, s)| {
+                let left = s.expires.saturating_duration_since(now).as_secs();
+                format!("{id} {} {}\n", s.page_token, wall + left)
+            })
+            .collect();
+        let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)
+            .and_then(|mut f| f.write_all(text.as_bytes()))
+            .and_then(|()| std::fs::rename(&tmp, path));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        *saved.lock().unwrap_or_else(|e| e.into_inner()) = now;
+    }
+
+    /// Ends every session: what "Sign out everywhere" does.
+    pub(super) fn clear(&self, now: Instant) {
+        let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        map.clear();
+        self.save(&map, now);
+    }
+
+    /// Ends one session.
+    pub(super) fn close(&self, id: &str, now: Instant) {
+        let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        map.remove(id);
+        self.save(&map, now);
+    }
+
+    /// The `Set-Cookie` value for one of these sessions.
+    pub(super) fn cookie(&self, id: &str, secure: bool) -> String {
+        cookie_for(id, self.ttl, secure)
     }
 
     /// A fresh session: its id (for the cookie) and its page token.
@@ -80,6 +179,7 @@ impl Sessions {
                 page_token: page_token.clone(),
             },
         );
+        self.save(&map, now);
         Ok((id, page_token))
     }
 
@@ -92,7 +192,16 @@ impl Sessions {
             return None;
         }
         session.expires = now + self.ttl;
-        Some(session.page_token.clone())
+        let page_token = session.page_token.clone();
+        if let Some((_, saved)) = &self.store {
+            let stale = now
+                .saturating_duration_since(*saved.lock().unwrap_or_else(|e| e.into_inner()))
+                >= SAVE_EVERY;
+            if stale {
+                self.save(&map, now);
+            }
+        }
+        Some(page_token)
     }
 }
 
@@ -184,7 +293,7 @@ pub(super) fn ensure_token_file(path: &std::path::Path) -> Result<()> {
 /// request; the allowlist just stops being the second lock.
 pub(super) const ANY_HOST: &str = "*";
 
-pub(super) fn is_any_host(entry: &str) -> bool {
+pub(crate) fn is_any_host(entry: &str) -> bool {
     entry.trim() == ANY_HOST
 }
 
@@ -279,7 +388,7 @@ pub(super) fn authenticate(
     cookie: Option<&str>,
     now: Instant,
 ) -> Access {
-    if !ctx.remote {
+    if !ctx.gated {
         return Access::Open;
     }
     let path = url.split('?').next().unwrap_or("");
@@ -337,12 +446,26 @@ pub(super) fn stripped_location(url: &str) -> String {
 /// The `Set-Cookie` value for a session; `Secure` when the request came in
 /// over TLS (a proxy says so with `X-Forwarded-Proto: https`; the server
 /// itself speaks plain HTTP, so a LAN bind without a proxy can't have it).
+#[cfg(test)]
 pub(super) fn session_cookie(id: &str, secure: bool) -> String {
+    cookie_for(id, SESSION_TTL, secure)
+}
+
+fn cookie_for(id: &str, ttl: Duration, secure: bool) -> String {
     format!(
         "{SESSION_COOKIE}={id}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}{}",
-        SESSION_TTL.as_secs(),
+        ttl.as_secs(),
         if secure { "; Secure" } else { "" }
     )
+}
+
+/// The secret a loopback dashboard asks a browser for, once: a file only you
+/// can read, made the first time it's needed. `furmi open` reads it to open
+/// the dashboard already signed in.
+pub(crate) fn local_token(home: &crate::home::Home) -> Result<String> {
+    let path = home.root().join(".local-token");
+    ensure_token_file(&path)?;
+    read_token_file(&path)
 }
 
 /// Tells the browser to forget the 30-day cookie older versions set.
@@ -475,6 +598,7 @@ mod tests {
             index: String::new(),
             cwd_repo: None,
             remote: true,
+            gated: true,
             allowed_hosts: vec!["*".to_string()],
             peer: false,
             token_from: None,
@@ -545,10 +669,30 @@ mod tests {
         assert_eq!(get(Some("Bearer wrong")), Access::Denied);
         assert_eq!(get(Some("master")), Access::Denied);
 
+        // `[web] trust_local`: a loopback bind that asks nobody to sign in.
         let loopback = Ctx {
             remote: false,
+            gated: false,
             ..remote_ctx(&home, "x")
         };
+        // The default loopback bind is gated like a remote one.
+        let gated = Ctx {
+            remote: false,
+            ..remote_ctx(&home, "local")
+        };
+        let ask = |auth| {
+            authenticate(
+                &gated,
+                &sessions,
+                &Method::Get,
+                "/api/state",
+                auth,
+                None,
+                now,
+            )
+        };
+        assert_eq!(ask(None), Access::Denied);
+        assert_eq!(ask(Some("Bearer local")), Access::Open);
         assert_eq!(
             authenticate(
                 &loopback,
@@ -718,5 +862,26 @@ mod tests {
         assert!(!is_loopback_origin("https://localhost:7433"));
         assert!(!is_loopback_origin("http://evil.com"));
         assert!(!is_loopback_origin("null"));
+    }
+
+    #[test]
+    fn kept_sessions_survive_a_restart_and_signing_out_ends_them() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".web-sessions");
+        let now = Instant::now();
+        let first = Sessions::kept_in(LOCAL_SESSION_TTL, path.clone(), now);
+        let (id, page_token) = first.open(now).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "{mode:o}");
+
+        // A new server reads them back: same id, same page token.
+        let second = Sessions::kept_in(LOCAL_SESSION_TTL, path.clone(), now);
+        assert_eq!(second.touch(&id, now), Some(page_token));
+
+        second.clear(now);
+        assert_eq!(second.touch(&id, now), None);
+        let third = Sessions::kept_in(LOCAL_SESSION_TTL, path, now);
+        assert_eq!(third.touch(&id, now), None);
     }
 }

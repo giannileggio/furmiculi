@@ -29,7 +29,7 @@ pub use finishing::{archive, complete};
 pub use housekeeping::{Health, load_health};
 pub use log::log;
 pub use reaping::{save_log, window_of};
-pub use scheduler::failure_streak;
+pub use scheduler::{failure_streak, run_now};
 pub(crate) use usage::model_from_log;
 
 use std::path::PathBuf;
@@ -197,7 +197,18 @@ fn tick(home: &Home, config: &Config) -> Result<()> {
             enqueue_schedules(home, config, now)?;
         }
         let succeeded = poll_running(home, config, now)?;
-        if !paused {
+        // Over today's token budget: the queue is held, like a pause that
+        // lifts by itself at midnight. What is running still finishes.
+        let over = budget(home, config, now).is_some_and(|b| b.held);
+        if over && !paused {
+            static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                log(
+                    "today's token budget (runner.daily_token_budget) is used up: nothing new starts until tomorrow",
+                );
+            }
+        }
+        if !paused && !over {
             start_pending(home, config, now)?;
         }
         succeeded
@@ -209,6 +220,66 @@ fn tick(home: &Home, config: &Config) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Why a task that names others in `after` can't start yet, or `None` when
+/// they have all finished as done. A dependency that failed keeps this one
+/// waiting rather than failing it: `furmi retry` on the first lets both go on.
+pub fn blocked_by(home: &Home, task: &Task) -> Option<String> {
+    for dep in &task.spec.after {
+        let archived = home.archive().join(format!("{dep}.md"));
+        let queued = home.tasks().join(format!("{dep}.md"));
+        if queued.exists() {
+            return Some(format!("waits for `{dep}` to finish"));
+        }
+        match Task::load(&archived) {
+            Ok(t) if t.status == Status::Done => {}
+            Ok(t) => {
+                return Some(format!(
+                    "waits for `{dep}`, which ended as {}: `furmi retry {dep}` to try it again, \
+                     or edit this task to stop waiting",
+                    t.status.as_str().replace('_', " ")
+                ));
+            }
+            Err(_) => return Some(format!("waits for `{dep}`, and there is no such task")),
+        }
+    }
+    None
+}
+
+/// Today's token use against `[runner] daily_token_budget`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Budget {
+    pub limit: u64,
+    /// Tokens, in and out, of the tasks that finished today (local time).
+    pub spent: u64,
+    /// Whether the queue is held because of it.
+    pub held: bool,
+}
+
+/// `None` when no budget is set.
+pub fn budget(home: &Home, config: &Config, now: DateTime<FixedOffset>) -> Option<Budget> {
+    // 0 is how the dashboard's form says "no budget".
+    let limit = config
+        .runner
+        .daily_token_budget
+        .filter(|limit| *limit > 0)?;
+    let today = now.date_naive();
+    let spent = md_files(&home.archive())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|path| Task::load(path).ok())
+        .filter(|t| {
+            t.finished_at
+                .is_some_and(|at| at.with_timezone(&now.timezone()).date_naive() == today)
+        })
+        .map(|t| t.tokens_in.unwrap_or(0) + t.tokens_out.unwrap_or(0))
+        .sum();
+    Some(Budget {
+        limit,
+        spent,
+        held: spent >= limit,
+    })
 }
 
 // --- helpers -------------------------------------------------------------------

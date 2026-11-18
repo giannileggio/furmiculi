@@ -109,6 +109,10 @@ fall back to `[defaults]`):
 | `--retries <n>`, `--retry-delay 5m`, `--timeout 2h` | |
 | `--at <RFC 3339>` | e.g. `2026-09-28T02:00:00+02:00`. Use the local UTC offset (`date +%:z`). |
 | `--in <duration>` | e.g. `2h`. |
+| `--base <ref>` | What the new branch starts from, e.g. `origin/main` (fetched first). Only when the user names it: otherwise it starts from what the repo has checked out. |
+| `--setup "<cmd>"` | A command run in the workspace before the first attempt, e.g. `npm ci`. `$FURMI_REPO` is the project's folder. Only when the task needs the workspace prepared. |
+| `--after <id>` | Start only once that task has finished as done. Repeatable. For "then do Y" requests; give the first task's id. |
+| `--priority <n>` | Higher starts first. Only when the user says it is more or less urgent than the rest. |
 | `--draft` | Save it as a draft instead of queueing it (see step 1). Add it only when the user chose a draft. |
 | `--template <id>` | Start from a template (section 5): its prompt and options are used, and anything you pass replaces them. |
 

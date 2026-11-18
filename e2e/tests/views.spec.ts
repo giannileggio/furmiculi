@@ -98,8 +98,8 @@ test.describe("with the runner off", () => {
     await row(page, "one").locator("input[data-pick]").check();
     await row(page, "two").locator("input[data-pick]").check();
 
-    page.once("dialog", (d) => void d.accept());
     await page.locator('#bulk button[data-bulk="cancel"]').click();
+    await page.locator("#ask-ok").click();
     await expect(count(page, "queue")).toHaveText("1");
     await expect(row(page, "three")).toBeVisible();
     await expect(page.locator("#bulk")).toContainText("0 selected");

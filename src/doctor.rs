@@ -20,6 +20,52 @@ const STALE_AFTER_POLLS: u32 = 4;
 
 /// What's going on right now: runner liveness, queue counts, tokens used today, and
 /// schedules that keep failing.
+/// `furmi status --json`: what `furmi status` says, for scripts.
+pub fn status_json(home: &Home) -> Result<()> {
+    home.ensure_initialized()?;
+    let config = Config::load(&home.config_path())?;
+    let state = RunnerState::load(home);
+    let count = |dir: std::path::PathBuf, status: crate::task::Status| {
+        md_files(&dir)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|p| Task::load(p).ok())
+            .filter(|t| t.status == status)
+            .count()
+    };
+    use crate::task::Status;
+    let dashboard = home.dashboard();
+    let value = serde_json::json!({
+        "version": CURRENT,
+        "runner": {
+            "running": home.runner_alive(),
+            "pid": state.as_ref().map(|s| s.pid),
+            "paused": home.is_paused(),
+            "last_pass": state.as_ref().and_then(|s| s.last_tick_at).map(|at| at.to_rfc3339()),
+            "last_error": state.and_then(|s| s.last_error),
+        },
+        "dashboard": {
+            "running": dashboard.is_some(),
+            "pid": dashboard.as_ref().map(|(pid, _)| pid),
+            "address": dashboard.map(|(_, addr)| addr),
+        },
+        "queue": {
+            "drafts": count(home.tasks(), Status::Draft),
+            "pending": count(home.tasks(), Status::Pending),
+            "running": count(home.tasks(), Status::Running),
+        },
+        "archive": {
+            "done": count(home.archive(), Status::Done),
+            "failed": count(home.archive(), Status::Failed),
+            "cancelled": count(home.archive(), Status::Cancelled),
+            "needs_review": count(home.archive(), Status::NeedsReview),
+        },
+        "budget": crate::run::budget(home, &config, crate::task::now()),
+    });
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
 pub fn status(home: &Home) -> Result<()> {
     home.ensure_initialized()?;
     let config = Config::load(&home.config_path())?;
@@ -69,6 +115,21 @@ pub fn status(home: &Home) -> Result<()> {
         None => println!(
             "dashboard  not running: `furmi start` serves it, or `furmi start -d` in the background"
         ),
+    }
+
+    if let Ok(config) = Config::load(&home.config_path())
+        && let Some(b) = crate::run::budget(home, &config, crate::task::now())
+    {
+        println!(
+            "budget     {} of {} tokens used today{}",
+            b.spent,
+            b.limit,
+            if b.held {
+                ": the queue is held until tomorrow (runner.daily_token_budget)"
+            } else {
+                ""
+            }
+        );
     }
 
     if let Some(summary) = crate::version::stale_summary(&crate::version::running(home), CURRENT) {
@@ -229,6 +290,19 @@ pub fn checks(home: &Home) -> Vec<Check> {
         ))),
     }
 
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(home.root())
+            && meta.permissions().mode() & 0o077 != 0
+        {
+            add(Check::Warn(format!(
+                "{0} can be read by other users of this machine (prompts, logs, worktrees): \
+                 `chmod 700 {0}`",
+                home.root().display()
+            )));
+        }
+    }
+
     let config = match Config::load(&home.config_path()) {
         Ok(c) => {
             add(Check::Ok("config.toml is valid".into()));
@@ -304,6 +378,12 @@ pub fn checks(home: &Home) -> Vec<Check> {
         match program {
             Some(p) if on_path(p) || std::path::Path::new(p).is_file() => {
                 add(Check::Ok(format!("agent `{name}`: `{p}` is installed")));
+                if config.unattended(name) == crate::config::Unattended::Unset {
+                    add(Check::Warn(format!(
+                        "agent `{name}` will stop at its first permission prompt when it runs \
+                         unattended: `furmi agents allow {name} edits` (or `all`) lets it work"
+                    )));
+                }
             }
             Some(p) => add(Check::Warn(format!(
                 "agent `{name}`: `{p}` is not on $PATH"

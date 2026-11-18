@@ -77,7 +77,7 @@ pub(super) fn finalize(home: &Home, config: &Config, path: &Path, mut task: Task
     // Before `on_finish` commits a clean worktree (which it won't, having
     // nothing to commit): was the base checkout the one that changed?
     let escaped = escape::escaped_paths(home, &task, &eff);
-    let result = run_on_finish(home, config, &task);
+    let result = run_on_finish(home, config, &mut task);
     let _lock = home.lock()?;
     match Task::load(path) {
         Ok(current) if current.status == task.status && current.attempts == task.attempts => {}
@@ -112,12 +112,12 @@ pub fn complete(
     home: &Home,
     config: &Config,
     path: &Path,
-    task: Task,
+    mut task: Task,
     now: DateTime<FixedOffset>,
 ) -> Result<Status> {
     let eff = task.spec.resolve(&config.defaults);
     let escaped = escape::escaped_paths(home, &task, &eff);
-    let result = run_on_finish(home, config, &task);
+    let result = run_on_finish(home, config, &mut task);
     let _lock = home.lock()?;
     match Task::load(path) {
         Ok(current) if current.status == task.status && current.attempts == task.attempts => {}
@@ -135,7 +135,6 @@ pub fn complete(
         }
         Err(e) => return Err(e).with_context(|| format!("re-reading {}", path.display())),
     }
-    let mut task = task;
     record_finish(home, config, &mut task, result);
     let status = task.status;
     if status == Status::Done
@@ -150,13 +149,25 @@ pub fn complete(
     Ok(status)
 }
 
-fn run_on_finish(home: &Home, config: &Config, task: &Task) -> Result<()> {
+/// Runs `on_finish`, and notes the pull request it opened (if it opened one)
+/// on the task, so the dashboard can link to it.
+fn run_on_finish(home: &Home, config: &Config, task: &mut Task) -> Result<()> {
     let eff = task.spec.resolve(&config.defaults);
     let dir = workdir(home, task, &eff);
     if eff.on_finish != OnFinish::None {
         log_finish_changes(&task.id, &dir);
     }
-    git::on_finish(eff.on_finish, &dir, &task.id, task.spec.ask(&task.prompt))
+    let result = git::on_finish_guarded(
+        eff.on_finish,
+        &dir,
+        &task.id,
+        task.spec.ask(&task.prompt),
+        config.defaults.commit_guard,
+    );
+    if result.is_ok() && eff.on_finish == OnFinish::Pr && git::has_commits_ahead(&dir) {
+        task.pr_url = git::pr_url(&dir);
+    }
+    result
 }
 
 /// Says which paths `on_finish` is about to commit, before it commits
