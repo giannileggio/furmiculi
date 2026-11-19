@@ -29,7 +29,7 @@ pub use finishing::{archive, complete};
 pub use housekeeping::{Health, load_health};
 pub use log::log;
 pub use reaping::{save_log, window_of};
-pub use scheduler::{failure_streak, run_now};
+pub use scheduler::{enqueue_now as enqueue_schedule_now, failure_streak, run_now};
 pub(crate) use usage::model_from_log;
 
 use std::path::PathBuf;

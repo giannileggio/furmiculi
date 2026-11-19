@@ -91,6 +91,14 @@ Command line
 - The dashboard's sidebar has two sections: **Queue** for the lists work moves
   through, and **Library** for the ones kept for later. Drafts and Templates
   moved down to Library, where nothing is running and nothing is waiting.
+- Select mode works on **Repeating** and **Templates** too, not only task
+  lists. Tick rows (or the header box for all of them) and the bar offers what
+  they all allow: **Run now**, **Pause** or **Resume**, and **Delete** for
+  repeating tasks; **Run now** and **Delete** for templates.
+- **Run now** adds one task from a repeating task or a template at once, from
+  its row or the bar. A repeating task keeps its own times, and one already
+  queued or running is not doubled unless it allows overlap. A template needs a
+  project to say where to run.
 
 ## 0.8.0
 

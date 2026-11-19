@@ -107,7 +107,7 @@ test.describe("with the runner off", () => {
     await expect(row(page, "nightly").getByText("not yet")).toBeVisible();
 
     await row(page, "nightly").getByRole("button", { name: "Run now" }).click();
-    await expect(page.locator("#toast")).toContainText("Queued nightly-");
+    await expect(page.locator("#toast")).toContainText("Run now: nightly");
     await expect(count(page, "queue")).toHaveText("1");
     await expect(row(page, "nightly").locator("button[data-action=open-task] .badge")).toHaveText("Waiting");
     // The schedule itself is untouched: it still fires at its own time.
