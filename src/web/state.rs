@@ -335,13 +335,7 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
                 };
                 ScheduleRow {
                     id: s.id.clone(),
-                    summary: s
-                        .spec
-                        .ask(&s.prompt)
-                        .lines()
-                        .next()
-                        .unwrap_or_default()
-                        .to_string(),
+                    summary: summary_of(s.spec.display_title(), s.spec.ask(&s.prompt)),
                     enabled: s.enabled,
                     cron: s.cron.clone(),
                     next,
@@ -380,7 +374,7 @@ fn build_state_json(home: &Home, cwd_repo: Option<&str>) -> Result<String> {
         .map(|t| TemplateRow {
             id: t.id.clone(),
             description: t.description.clone().unwrap_or_default(),
-            summary: summary_of(t.spec.ask(&t.prompt)),
+            summary: summary_of(t.spec.display_title(), t.spec.ask(&t.prompt)),
             repo: t.repo().map(contract_tilde).unwrap_or_default(),
             agent: t.spec.resolve(&config.defaults).runner().to_string(),
             command: t.spec.run.is_some(),
@@ -598,7 +592,7 @@ fn to_row(t: &Task, config: &Config) -> Row {
         branch: t.effective_branch(config).unwrap_or_else(|| "-".into()),
         agent: eff.runner().to_string(),
         command: eff.run.is_some(),
-        summary: summary_of(t.spec.ask(&t.prompt)),
+        summary: summary_of(t.spec.display_title(), t.spec.ask(&t.prompt)),
         model,
         model_source,
         error: t.error.clone().filter(|e| !e.trim().is_empty()),
@@ -609,15 +603,22 @@ fn to_row(t: &Task, config: &Config) -> Row {
     }
 }
 
-/// A task's prompt on one line, cut short: the first non-empty line of it,
-/// which for a task written like a message is the ask.
-fn summary_of(prompt: &str) -> String {
-    let line = prompt
+/// What a listing shows on one line: the task's own `title` when it has one,
+/// else the first non-empty line of what it asks — which for a prompt written
+/// like a message is the ask. Cut short: a table cell is not a paragraph.
+fn summary_of(title: Option<&str>, ask: &str) -> String {
+    if let Some(title) = title {
+        return cut(title.trim());
+    }
+    let line = ask
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or_default();
-    let line = line.trim_start_matches(['#', '-', '*', '>', ' ']);
+    cut(line.trim_start_matches(['#', '-', '*', '>', ' ']))
+}
+
+fn cut(line: &str) -> String {
     let mut summary: String = line.chars().take(120).collect();
     if summary.len() < line.len() {
         summary = summary.trim_end().to_string();
@@ -675,6 +676,7 @@ mod tests {
 
     fn task(id: &str) -> Task {
         let spec = crate::spec::TaskSpec {
+            title: None,
             repo: "/tmp".into(),
             branch: None,
             worktree: None,
@@ -771,6 +773,7 @@ mod tests {
     #[test]
     fn a_failed_tasks_reason_reaches_its_row() {
         let spec = TaskSpec {
+            title: None,
             repo: "/tmp".into(),
             branch: None,
             worktree: None,
@@ -809,8 +812,23 @@ mod tests {
     }
 
     #[test]
+    fn a_title_is_what_the_row_shows_instead_of_the_prompts_first_line() {
+        let mut task = task("titled");
+        assert_eq!(to_row(&task, &Config::default()).summary, "do it");
+        task.spec.title = Some("  A short title  ".into());
+        assert_eq!(to_row(&task, &Config::default()).summary, "A short title");
+        // And the longest a row shows is still one line, cut at 120 chars.
+        task.spec.title = Some("x".repeat(130));
+        assert_eq!(
+            to_row(&task, &Config::default()).summary.chars().count(),
+            121
+        );
+    }
+
+    #[test]
     fn a_command_task_shows_as_a_command() {
         let spec = TaskSpec {
+            title: None,
             run: Some("make backup\nmake clean".into()),
             ..crate::edit::blank_spec("/tmp".into())
         };
@@ -867,6 +885,7 @@ mod tests {
     #[test]
     fn a_row_carries_the_time_the_page_sorts_on() {
         let spec = TaskSpec {
+            title: None,
             repo: "/tmp".into(),
             branch: None,
             worktree: None,
@@ -909,6 +928,7 @@ mod tests {
     #[test]
     fn the_model_column_names_what_ran_and_says_where_it_got_the_name() {
         let spec = TaskSpec {
+            title: None,
             repo: "/tmp".into(),
             branch: None,
             worktree: None,

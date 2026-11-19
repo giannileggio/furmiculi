@@ -266,6 +266,7 @@ mod tests {
 
     fn task(repo: &Path, id: &str) -> (Task, Effective) {
         let spec = TaskSpec {
+            title: None,
             repo: repo.to_path_buf(),
             branch: None,
             worktree: Some(true),

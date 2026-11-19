@@ -429,6 +429,7 @@ mod tests {
 
     fn put(dir: PathBuf, id: &str, status: Status) {
         let spec = TaskSpec {
+            title: None,
             repo: std::env::temp_dir(),
             branch: None,
             worktree: Some(false),

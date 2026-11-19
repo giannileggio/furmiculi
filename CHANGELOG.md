@@ -54,6 +54,14 @@ Agents and tasks
   the first attempt), `after` (tasks that must finish as done first) and
   `priority`. `[defaults]` takes `base` and `setup`; the dashboard's form has
   them under More options.
+- A task, schedule or template can carry a `title`: one short line (max 120
+  chars) saying what it is doing, shown in a `TITLE` column in `furmi ls`, at
+  the top of a dashboard row and as the heading of a task's own view. It is
+  optional and falls back to the first line of the prompt, so existing files
+  read as they did. `furmi add --title`, `furmi schedule add|edit --title`, the
+  dashboard's New task and Edit forms write it, and the new `furmi title <id>
+  "<text>"` changes it on any task, waiting or finished (an empty text takes it
+  away). The `furmi-tasks` skill tells agents to always pass one.
 - `[runner] daily_token_budget` holds the queue once today's finished tasks have
   used that many tokens; `furmi status` and Setup show it.
 - A task opened from `on_finish: pr` records its pull request, which the task

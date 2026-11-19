@@ -31,6 +31,11 @@ task it can carry out.
   still ambiguous, ask. Don't guess.
 - **What to do**: if the request is vague ("clean up the auth code"), ask
   one or two questions before you queue it. A vague task wastes a whole run.
+- **Title**: one short line saying what the task is doing, in the words the
+  user used ("Fix the redirect loop after login"), max 120 chars, no line
+  breaks. It is what `furmi ls` and the dashboard show to tell one task from
+  another, so write it even though the prompt already says it. Always pass it
+  with `--title`: a task without one shows the first line of its prompt.
 - **When**: now (the default), at a given time, after a delay, or on a
   recurring schedule (see section 4).
 - **Queue now, queue later, or save a draft?** A queued task starts as soon as
@@ -82,7 +87,8 @@ validates the task before creating it, picks a unique id, and stores
 `created_at`, so `furmi run` never sees a half-written task.
 
 ```sh
-furmi add --repo ~/Projects/myapp --created-by agent --on-finish pr <<'EOF'
+furmi add --repo ~/Projects/myapp --created-by agent --on-finish pr \
+  --title "Fix the loop after login" <<'EOF'
 Fix the redirect loop after login when the session cookie has expired.
 
 Reproduce: log in, delete the `session` cookie, reload /dashboard. The
@@ -100,7 +106,8 @@ fall back to `[defaults]`):
 |--------|---------|
 | `--repo <path>` | The project to run in. Defaults to the git repo you're in. |
 | `--scratch` | No project: run in a new empty folder of its own (`~/.furmiculi/scratch/<id>`, kept until `furmi clean`), for research or drafts. Nothing is committed. Not with `--repo`, `--branch`, `--worktree`, `--no-worktree` or `--on-finish`. |
-| `--id <id>` | File name and id: `a-z`, `0-9`, `-`. Default: derived from the prompt's first line. Pass a short descriptive one. |
+| `--id <id>` | File name and id: `a-z`, `0-9`, `-`. Default: derived from the title, else the prompt's first line. Pass a short descriptive one. |
+| `--title <text>` | One short line saying what the task is doing, shown in `furmi ls` and the dashboard. Always pass it. |
 | `--branch <name>` | Default `furmi/<id>`. |
 | `--worktree`, `--no-worktree` | Run in a dedicated git worktree, or directly in the repo checkout. The second only when the user asks: the agent edits the checkout they may be working in, and `on_finish` commits everything there. |
 | `--agent <name>`, `--model <id>` | See step 1. |
@@ -185,6 +192,9 @@ previous task from the same schedule is still queued or running; add
   `furmi validate <file>`. For a schedule use `furmi schedule edit <id>` with
   just the options to change (`--cron`, `--prompt`, `--run`, ...), `furmi schedule pause <id>`,
   `resume <id>` and `delete <id>`; `furmi schedule ls` lists them.
+- Reword a task's one-line title with `furmi title <id> "<text>"`: it works
+  on waiting and finished tasks alike (an empty text takes it away), unlike
+  the dashboard's edit form, which only opens a task that hasn't started.
 - Change a status only with these commands, and confirm with the user first:
   `furmi cancel <id>` (draft, pending or running; a draft is deleted),
   `furmi retry <id>` (failed,

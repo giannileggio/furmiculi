@@ -48,7 +48,8 @@ pub struct AddArgs {
     /// Repository the tasks run in [default: the git repo you're in].
     #[arg(long)]
     repo: Option<PathBuf>,
-    /// Schedule id (also the file name). Derived from the prompt if omitted.
+    /// Schedule id (also the file name). Derived from the title, else the
+    /// prompt's first line, if omitted.
     #[arg(long)]
     id: Option<String>,
     /// The prompt, as an option instead of the positional argument.
@@ -87,6 +88,9 @@ pub struct EditArgs {
 /// The task options a schedule shares with `furmi add`.
 #[derive(clap::Args)]
 struct SpecArgs {
+    /// One line saying what the tasks it queues are about.
+    #[arg(long)]
+    title: Option<String>,
     /// Run this shell command instead of an agent: a command task, with no
     /// prompt, agent, model or mode. Runs in the repo itself unless --worktree.
     #[arg(long, conflicts_with_all = ["text", "prompt", "agent", "model", "mode"])]
@@ -119,7 +123,8 @@ struct SpecArgs {
 
 impl SpecArgs {
     fn is_empty(&self) -> bool {
-        self.run.is_none()
+        self.title.is_none()
+            && self.run.is_none()
             && self.branch.is_none()
             && !self.worktree
             && !self.no_worktree
@@ -134,6 +139,12 @@ impl SpecArgs {
 
     /// Overwrites the fields that were given.
     fn apply(self, spec: &mut TaskSpec) {
+        if let Some(title) = TaskSpec::clean_title(self.title.as_deref()) {
+            spec.title = Some(title);
+        } else if self.title.is_some() {
+            // An empty --title clears the one the file has.
+            spec.title = None;
+        }
         if self.run.is_some() {
             spec.run = self.run;
         }

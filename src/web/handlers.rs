@@ -12,7 +12,7 @@ use crate::config::Config;
 use crate::control;
 use crate::edit::{self, ScheduleEdit, Start, TaskEdit, on_finish_str};
 use crate::home::{Home, contract_tilde};
-use crate::spec::OnFinish;
+use crate::spec::{OnFinish, TaskSpec};
 use crate::task::Task;
 use crate::template::{self, Template};
 
@@ -80,6 +80,8 @@ pub(super) fn template_detail(home: &Home, id: &str) -> Result<serde_json::Value
     Ok(serde_json::json!({
         "id": t.id,
         "description": t.description,
+        // Carried into the first draft of the new task's form.
+        "title": t.spec.display_title(),
         "prompt": t.spec.ask(&t.prompt),
         "command": t.spec.run.is_some(),
         "repo": t.repo().map(contract_tilde).unwrap_or_default(),
@@ -128,6 +130,10 @@ pub(super) fn perform_delete_template(home: &Home, id: &str) -> Result<()> {
 /// The "New task" form.
 #[derive(Deserialize)]
 struct NewTaskBody {
+    /// One line saying what the task is about; empty means the form left it out
+    /// and the listing shows the prompt's first line instead.
+    #[serde(default)]
+    title: Option<String>,
     prompt: String,
     #[serde(default)]
     repo: String,
@@ -225,6 +231,12 @@ pub(super) fn perform_create(home: &Home, cwd_repo: Option<&str>, body: &str) ->
     if form.on_finish.is_some() {
         spec.on_finish = form.on_finish;
     }
+    if let Some(title) = TaskSpec::clean_title(form.title.as_deref()) {
+        spec.title = Some(title);
+    } else if form.title.is_some() {
+        // An emptied box clears whatever the template carried.
+        spec.title = None;
+    }
     let filled =
         |text: Option<String>| text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
     if let Some(base) = filled(form.base) {
@@ -294,6 +306,9 @@ pub(super) fn mutation_reply(result: Result<()>) -> Reply {
 /// The edit form for a task that hasn't started.
 #[derive(Deserialize)]
 struct EditTaskBody {
+    /// `None` leaves the title as it is; an empty string clears it.
+    #[serde(default)]
+    title: Option<String>,
     prompt: String,
     repo: String,
     /// `keep` (or empty), `asap`, or a delay like `1h`.
@@ -315,6 +330,7 @@ pub(super) fn perform_edit_task(home: &Home, id: &str, body: &str) -> Result<()>
         home,
         id,
         TaskEdit {
+            title: form.title,
             prompt: form.prompt,
             repo: form.repo,
             start: edit::parse_start(form.start.as_deref())?,
@@ -328,6 +344,8 @@ pub(super) fn perform_edit_task(home: &Home, id: &str, body: &str) -> Result<()>
 /// The schedule form, for creating and editing alike.
 #[derive(Deserialize)]
 struct ScheduleBody {
+    #[serde(default)]
+    title: Option<String>,
     prompt: String,
     #[serde(default)]
     repo: String,
@@ -361,6 +379,7 @@ fn schedule_form(
         (repo, _) => repo.to_string(),
     };
     Ok(ScheduleEdit {
+        title: form.title,
         prompt: form.prompt,
         repo,
         cron: form.cron,
@@ -688,6 +707,9 @@ pub(super) fn task_view_json(home: &Home, id: &str) -> Result<String> {
     }
     let view = serde_json::json!({
         "id": task.id,
+        // The task's own one-line title, when it has one: what the drawer's
+        // heading shows above the id.
+        "title": task.spec.display_title(),
         // The whole prompt: this is the one place the page shows it.
         "prompt": task.spec.ask(&task.prompt),
         "command": task.spec.run.is_some(),

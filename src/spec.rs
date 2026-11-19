@@ -32,6 +32,11 @@ pub enum OnFinish {
 /// in config.toml.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskSpec {
+    /// What the task is doing, on one line: the first thing a listing shows.
+    /// Optional, because a task written before this existed has none and the
+    /// prompt's first line is still readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Empty only in a template that leaves the project to whoever uses it.
     #[serde(
         serialize_with = "serialize_repo",
@@ -94,6 +99,7 @@ fn serialize_repo<S: serde::Serializer>(path: &PathBuf, s: S) -> Result<S::Ok, S
 }
 
 pub const SPEC_KEYS: &[&str] = &[
+    "title",
     "repo",
     "branch",
     "worktree",
@@ -145,6 +151,32 @@ impl Effective {
 }
 
 impl TaskSpec {
+    /// The one line a listing shows for this task: its `title`, if it has
+    /// one. A task written before titles existed has none, and listings fall
+    /// back to the first line of what it asks.
+    pub fn display_title(&self) -> Option<&str> {
+        self.title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+    }
+
+    /// The title as it is worth storing: trimmed, one line, and `None` when
+    /// there is nothing to say.
+    pub fn clean_title(title: Option<&str>) -> Option<String> {
+        title
+            .map(|t| t.lines().next().unwrap_or_default().trim())
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+    }
+
+    /// What an id is made of when the caller gave none: the title, else the
+    /// first line of what the task asks (which is usually its point).
+    pub fn id_base<'a>(&'a self, prompt: &'a str) -> &'a str {
+        self.display_title()
+            .unwrap_or_else(|| self.ask(prompt).lines().next().unwrap_or_default())
+    }
+
     /// What the task asks for, given its body: its command, else its prompt.
     pub fn ask<'a>(&'a self, prompt: &'a str) -> &'a str {
         self.run.as_deref().unwrap_or(prompt)
@@ -236,6 +268,7 @@ impl TaskSpec {
     }
 
     fn push_common_problems(&self, eff: &Effective, out: &mut Vec<String>) {
+        self.push_title_problems(out);
         if let Some(b) = &self.branch
             && !git::valid_branch_name(b)
         {
@@ -257,6 +290,14 @@ impl TaskSpec {
             if let Err(e) = validate_id(dep) {
                 out.push(format!("after: {e}"));
             }
+        }
+    }
+
+    /// A title is one line a table can show: longer than a line of text and
+    /// it stops being a quick way to read the row.
+    fn push_title_problems(&self, out: &mut Vec<String>) {
+        if let Some(problem) = title_problems(self.title.as_deref()) {
+            out.push(problem);
         }
     }
 
@@ -284,6 +325,31 @@ impl TaskSpec {
         }
         out
     }
+}
+
+/// How long a title may be: a row in `furmi ls` and the dashboard, not a
+/// paragraph.
+pub const MAX_TITLE_CHARS: usize = 120;
+
+/// Why this title won't do, if it won't: a title is one short line a table can
+/// show, and an empty one is the same as none at all.
+pub fn title_problems(title: Option<&str>) -> Option<String> {
+    let title = title?.trim();
+    if title.is_empty() {
+        return Some(
+            "`title` is empty: give the one line the task is about, or leave the field out".into(),
+        );
+    }
+    if title.lines().count() > 1 {
+        return Some("`title` must be one line".into());
+    }
+    let len = title.chars().count();
+    (len > MAX_TITLE_CHARS).then(|| {
+        format!(
+            "`title` is {len} chars, over the {MAX_TITLE_CHARS} a row can show: keep it to one \
+             short line"
+        )
+    })
 }
 
 /// Ids are used as file names and tmux window names: keep them boring.
@@ -342,6 +408,48 @@ mod tests {
     }
 
     #[test]
+    fn a_title_is_one_short_line() {
+        assert_eq!(TaskSpec::clean_title(None), None);
+        assert_eq!(TaskSpec::clean_title(Some("   ")), None);
+        assert_eq!(
+            TaskSpec::clean_title(Some("  Fix it  ")),
+            Some("Fix it".into())
+        );
+        // A pasted paragraph keeps its first line: a row shows one.
+        assert_eq!(
+            TaskSpec::clean_title(Some("Fix the login\n\nAnd the logout")),
+            Some("Fix the login".into())
+        );
+
+        assert_eq!(title_problems(None), None);
+        assert_eq!(title_problems(Some("Fix the login")), None);
+        assert!(title_problems(Some("")).unwrap().contains("empty"));
+        assert!(
+            title_problems(Some("one\ntwo"))
+                .unwrap()
+                .contains("one line")
+        );
+        let long = "x".repeat(MAX_TITLE_CHARS + 1);
+        assert!(title_problems(Some(&long)).unwrap().contains("chars"));
+        assert_eq!(title_problems(Some(&"x".repeat(MAX_TITLE_CHARS))), None);
+    }
+
+    #[test]
+    fn a_title_that_is_not_a_line_is_a_problem() {
+        let mut config = Config::default();
+        config.defaults.agent = Some("codex".into());
+        let spec = TaskSpec {
+            title: Some("  ".into()),
+            ..command_spec("make")
+        };
+        assert!(
+            spec.problems(&config)[0].contains("`title` is empty"),
+            "{:?}",
+            spec.problems(&config)
+        );
+    }
+
+    #[test]
     fn id_validation() {
         assert!(validate_id("nightly-deps-2").is_ok());
         assert!(validate_id("Bad Id").is_err());
@@ -352,6 +460,7 @@ mod tests {
     #[test]
     fn resolve_applies_defaults() {
         let spec = TaskSpec {
+            title: None,
             repo: "/tmp".into(),
             branch: None,
             worktree: None,
@@ -382,6 +491,7 @@ mod tests {
     #[test]
     fn agent_problems() {
         let spec = TaskSpec {
+            title: None,
             repo: "/tmp".into(),
             branch: None,
             worktree: Some(false),
@@ -403,12 +513,14 @@ mod tests {
 
         config.agents.get_mut("codex").unwrap().model_args.clear();
         let spec = TaskSpec {
+            title: None,
             agent: Some("codex".into()),
             model: Some("m".into()),
             ..spec
         };
         assert!(spec.problems(&config)[0].contains("no `model_args`"));
         let spec = TaskSpec {
+            title: None,
             agent: Some("nope".into()),
             ..spec
         };
@@ -417,6 +529,7 @@ mod tests {
 
     fn command_spec(run: &str) -> TaskSpec {
         TaskSpec {
+            title: None,
             run: Some(run.into()),
             ..crate::edit::blank_spec("/tmp".into())
         }
@@ -442,6 +555,7 @@ mod tests {
 
         // Asked for by name, they apply.
         let spec = TaskSpec {
+            title: None,
             worktree: Some(true),
             on_finish: Some(OnFinish::Commit),
             ..command_spec("make")
@@ -460,6 +574,7 @@ mod tests {
         for (spec, field) in [
             (
                 TaskSpec {
+                    title: None,
                     agent: Some("codex".into()),
                     ..command_spec("make")
                 },
@@ -467,6 +582,7 @@ mod tests {
             ),
             (
                 TaskSpec {
+                    title: None,
                     model: Some("m".into()),
                     ..command_spec("make")
                 },
@@ -474,6 +590,7 @@ mod tests {
             ),
             (
                 TaskSpec {
+                    title: None,
                     mode: Some(Mode::Headless),
                     ..command_spec("make")
                 },
@@ -493,6 +610,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join(".git")).unwrap();
         let spec = TaskSpec {
+            title: None,
             repo: dir.path().into(),
             branch: Some("bad branch".into()),
             worktree: Some(false),
@@ -517,6 +635,7 @@ mod tests {
         );
 
         let spec = TaskSpec {
+            title: None,
             branch: Some("fix/login".into()),
             ..spec
         };

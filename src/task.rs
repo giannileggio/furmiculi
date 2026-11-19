@@ -364,6 +364,29 @@ Fix the redirect loop.
     }
 
     #[test]
+    fn a_title_round_trips_and_stays_optional() {
+        let t = Task::parse(
+            "---\nid: fix-login\nrepo: /tmp\ntitle: Fix the login redirect\n---\n\nFix it.\n",
+        )
+        .unwrap();
+        assert_eq!(t.spec.title.as_deref(), Some("Fix the login redirect"));
+        assert_eq!(t.spec.display_title(), Some("Fix the login redirect"));
+        let again = t.to_markdown().unwrap();
+        assert!(again.contains("title: Fix the login redirect"), "{again}");
+        assert_eq!(Task::parse(&again).unwrap(), t);
+
+        // A task written before titles existed still loads, and shows nothing.
+        let old = Task::parse(SAMPLE).unwrap();
+        assert_eq!(old.spec.title, None);
+        assert_eq!(old.spec.display_title(), None);
+        assert!(
+            !old.to_markdown().unwrap().contains("title:"),
+            "{:?}",
+            old.to_markdown()
+        );
+    }
+
+    #[test]
     fn rejects_unknown_field() {
         let bad = SAMPLE.replace("retries: 3", "retires: 3");
         assert!(Task::parse(&bad).is_err());
