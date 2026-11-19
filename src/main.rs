@@ -3,6 +3,7 @@ mod cmd;
 mod config;
 mod control;
 mod doctor;
+mod duration;
 mod edit;
 mod exe;
 mod frontmatter;
@@ -115,7 +116,7 @@ enum Command {
         #[arg(long)]
         watch: bool,
         /// Refresh interval when watching, e.g. 2s.
-        #[arg(long, value_parser = humantime::parse_duration, default_value = "2s")]
+        #[arg(long, value_parser = crate::duration::parse, default_value = "2s")]
         interval: std::time::Duration,
         /// Print the tasks as JSON, for scripts, instead of a table.
         #[arg(long, conflicts_with_all = ["watch", "schedules"])]
@@ -139,7 +140,7 @@ enum Command {
         #[arg(long, conflicts_with = "delay")]
         at: Option<chrono::DateTime<chrono::FixedOffset>>,
         /// Start after a delay, e.g. 2h.
-        #[arg(long = "in", value_parser = humantime::parse_duration)]
+        #[arg(long = "in", value_parser = crate::duration::parse)]
         delay: Option<std::time::Duration>,
     },
     /// Copy any task (waiting or finished) into a new draft.

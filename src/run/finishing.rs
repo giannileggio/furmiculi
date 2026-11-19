@@ -255,7 +255,7 @@ pub(super) fn fail_attempt(
             task.id,
             task.attempts,
             task.error.as_deref().unwrap_or_default(),
-            humantime::format_duration(eff.retry_delay)
+            crate::duration::format(eff.retry_delay)
         ));
         task.save(path)
     } else {

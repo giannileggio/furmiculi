@@ -110,10 +110,10 @@ struct SpecArgs {
     #[arg(long)]
     retries: Option<u32>,
     /// e.g. 5m, 1h
-    #[arg(long, value_parser = humantime::parse_duration)]
+    #[arg(long, value_parser = crate::duration::parse)]
     retry_delay: Option<Duration>,
     /// e.g. 30m, 2h
-    #[arg(long, value_parser = humantime::parse_duration)]
+    #[arg(long, value_parser = crate::duration::parse)]
     timeout: Option<Duration>,
 }
 

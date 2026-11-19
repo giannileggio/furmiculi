@@ -103,7 +103,7 @@ pub fn run(home: &Home, once: bool) -> Result<()> {
         log(&format!(
             "watching {} every {}",
             home.root().display(),
-            humantime::format_duration(config.runner.poll_interval)
+            crate::duration::format(config.runner.poll_interval)
         ));
     }
     let mut housekeeper = Housekeeper::new();

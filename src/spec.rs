@@ -54,13 +54,13 @@ pub struct TaskSpec {
     pub retries: Option<u32>,
     #[serde(
         default,
-        with = "humantime_serde",
+        with = "crate::duration::serde_optional",
         skip_serializing_if = "Option::is_none"
     )]
     pub retry_delay: Option<Duration>,
     #[serde(
         default,
-        with = "humantime_serde",
+        with = "crate::duration::serde_optional",
         skip_serializing_if = "Option::is_none"
     )]
     pub timeout: Option<Duration>,

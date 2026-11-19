@@ -105,10 +105,7 @@ pub(super) fn poll_running(
             (None, Some(_)) if eff.mode == Mode::Headless && timed_out(&task, &eff, now) => {
                 stop_agent = true;
                 Outcome::Failed {
-                    error: format!(
-                        "timed out after {}",
-                        humantime::format_duration(eff.timeout)
-                    ),
+                    error: format!("timed out after {}", crate::duration::format(eff.timeout)),
                     exit_code: None,
                     retry: true,
                 }
