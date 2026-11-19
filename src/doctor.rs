@@ -82,14 +82,11 @@ pub fn status(home: &Home) -> Result<()> {
         );
         if let Some(last) = state.as_ref().and_then(|s| s.last_tick_at) {
             let age = (now() - last).to_std().unwrap_or_default();
-            println!(
-                "           last pass {} ago",
-                humantime::format_duration(age)
-            );
+            println!("           last pass {} ago", crate::duration::format(age));
             if age > config.runner.poll_interval * STALE_AFTER_POLLS {
                 println!(
                     "           WARNING: polling every {}, so the runner looks stuck (see {})",
-                    humantime::format_duration(config.runner.poll_interval),
+                    crate::duration::format(config.runner.poll_interval),
                     home.runner_log().display()
                 );
             }

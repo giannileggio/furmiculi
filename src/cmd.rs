@@ -313,7 +313,7 @@ pub fn ls(home: &Home, archive: bool, schedules: bool, watch: Option<Duration>) 
         print!("\x1B[2J\x1B[H"); // clear screen, cursor to top-left
         println!(
             "every {} until Ctrl-C, as of {}\n",
-            humantime::format_duration(interval),
+            crate::duration::format(interval),
             fmt_time(now())
         );
         ls_once(home, archive, schedules)?;
@@ -519,16 +519,16 @@ pub struct AddArgs {
     #[arg(long)]
     retries: Option<u32>,
     /// e.g. 5m, 1h
-    #[arg(long, value_parser = humantime::parse_duration)]
+    #[arg(long, value_parser = crate::duration::parse)]
     retry_delay: Option<Duration>,
     /// e.g. 30m, 2h
-    #[arg(long, value_parser = humantime::parse_duration)]
+    #[arg(long, value_parser = crate::duration::parse)]
     timeout: Option<Duration>,
     /// Start time, RFC 3339 (2026-09-28T02:00:00+02:00).
     #[arg(long, conflicts_with = "delay")]
     at: Option<DateTime<FixedOffset>>,
     /// Start after a delay, e.g. 2h.
-    #[arg(long = "in", value_parser = humantime::parse_duration)]
+    #[arg(long = "in", value_parser = crate::duration::parse)]
     delay: Option<Duration>,
     /// Who created the task (e.g. cli, agent).
     #[arg(long, default_value = "cli")]

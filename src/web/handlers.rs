@@ -552,15 +552,15 @@ pub(super) fn agents_json(home: &Home) -> Result<String> {
         "agents": crate::config::agent_statuses(&config),
         "max_parallel": config.runner.max_parallel,
         "max_parallel_per_repo": config.runner.max_parallel_per_repo,
-        "poll_interval": humantime::format_duration(config.runner.poll_interval).to_string(),
+        "poll_interval": crate::duration::format(config.runner.poll_interval),
         "daily_token_budget": config.runner.daily_token_budget.unwrap_or(0),
         "defaults": {
             "mode": config.defaults.mode,
             "worktree": config.defaults.worktree,
             "on_finish": config.defaults.on_finish,
             "retries": config.defaults.retries,
-            "retry_delay": humantime::format_duration(config.defaults.retry_delay).to_string(),
-            "timeout": humantime::format_duration(config.defaults.timeout).to_string(),
+            "retry_delay": crate::duration::format(config.defaults.retry_delay),
+            "timeout": crate::duration::format(config.defaults.timeout),
         },
     })
     .to_string())

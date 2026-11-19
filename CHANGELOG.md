@@ -6,6 +6,15 @@ lists what changed between them.
 
 ## Unreleased
 
+Dependencies
+
+- Durations (`5m` in config.toml, `1h 30m` in a message, `--retry-delay 30s`)
+  are parsed and written by furmi itself now, in `src/duration.rs`, instead of
+  the `humantime` and `humantime-serde` crates, which went unmaintained when
+  chrono did (RUSTSEC-2026-0542). Existing config.toml files and the text
+  furmi prints are unchanged. chrono itself stays, with RUSTSEC-2026-0543
+  ignored in `deny.toml` until it is migrated to jiff or time.
+
 Security
 
 - A dashboard on this machine now asks each browser to sign in once. Its page

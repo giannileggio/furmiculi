@@ -3,6 +3,13 @@
 [advisories]
 # Fail on known vulnerabilities, and warn on unmaintained or yanked crates.
 yanked = "warn"
+# chrono is unmaintained (RUSTSEC-2026-0543; suggested replacements are jiff
+# and time). furmi reads and writes timestamps with it in a dozen places, so
+# the migration is its own change, not a dependency bump. Until then the
+# advisory is ignored here rather than disabling the check.
+ignore = [
+    "RUSTSEC-2026-0543",
+]
 
 [licenses]
 allow = [

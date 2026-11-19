@@ -287,7 +287,7 @@ impl Home {
                     "{} is locked by another furmi process for over {}; if nothing is running, \
                      it may be stuck (see `furmi status`)",
                     path.display(),
-                    humantime::format_duration(LOCK_TIMEOUT)
+                    crate::duration::format(LOCK_TIMEOUT)
                 ),
                 Err(TryLockError::Error(e)) => {
                     return Err(e).with_context(|| format!("locking {}", path.display()));

@@ -91,7 +91,7 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output> {
             stdout,
             stderr,
         }),
-        None => bail!("timed out after {}", humantime::format_duration(timeout)),
+        None => bail!("timed out after {}", crate::duration::format(timeout)),
     }
 }
 

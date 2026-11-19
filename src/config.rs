@@ -338,7 +338,7 @@ pub struct Housekeeping {
     /// The off switch. Off, the runner never tidies and reports no health.
     pub enabled: bool,
     /// How often the pass runs (it also runs when the runner starts).
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "crate::duration::serde_duration")]
     pub interval: Duration,
     /// Log attempts kept per task; older attempts' `.log`/`.exit`/`.usage`
     /// files, and their base-checkout snapshot, are deleted.
@@ -394,7 +394,7 @@ pub struct Runner {
     pub max_parallel: usize,
     pub max_parallel_per_repo: usize,
     pub tmux_session: String,
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "crate::duration::serde_duration")]
     pub poll_interval: Duration,
     /// Environment variables kept from the agents and commands tasks run, on
     /// top of furmi's own secrets (its notification tokens), which never
@@ -413,9 +413,9 @@ pub struct Defaults {
     pub worktree: bool,
     pub on_finish: OnFinish,
     pub retries: u32,
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "crate::duration::serde_duration")]
     pub retry_delay: Duration,
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "crate::duration::serde_duration")]
     pub timeout: Duration,
     /// What a task's new branch starts from when it doesn't say (`origin/main`).
     pub base: Option<String>,

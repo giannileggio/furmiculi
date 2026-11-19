@@ -24,7 +24,7 @@ pub struct CleanArgs {
     #[arg(long)]
     remove_broken: bool,
     /// Only tasks that finished at least this long ago, e.g. 7d.
-    #[arg(long, value_parser = humantime::parse_duration)]
+    #[arg(long, value_parser = crate::duration::parse)]
     older_than: Option<Duration>,
     /// Also delete the archived task file and its logs, for tasks whose
     /// worktree is already gone (or never had one). Loses that task's

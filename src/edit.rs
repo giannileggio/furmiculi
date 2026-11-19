@@ -35,7 +35,7 @@ pub fn parse_start(text: Option<&str>) -> Result<Start> {
         None | Some("") | Some("keep") => Ok(Start::Keep),
         Some("asap") => Ok(Start::Asap),
         Some(delay) => {
-            let delay: Duration = humantime::parse_duration(delay)
+            let delay: Duration = crate::duration::parse(delay)
                 .map_err(|e| anyhow::anyhow!("can't start after `{delay}`: {e}"))?;
             let delay = chrono::Duration::from_std(delay).context("that delay is too long")?;
             Ok(Start::At(now() + delay))
