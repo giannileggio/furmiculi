@@ -482,6 +482,7 @@ mod tests {
 
     fn spec(repo: &Path) -> TaskSpec {
         TaskSpec {
+            title: None,
             repo: repo.to_path_buf(),
             branch: None,
             worktree: Some(true),

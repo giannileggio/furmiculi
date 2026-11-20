@@ -46,6 +46,8 @@ pub fn parse_start(text: Option<&str>) -> Result<Start> {
 /// What the task form edits. `on_finish` and `agent` left as `None` stay as
 /// they are.
 pub struct TaskEdit {
+    /// `None` leaves the title as it is, `Some("")` clears it.
+    pub title: Option<String>,
     pub prompt: String,
     pub repo: String,
     pub start: Start,
@@ -58,6 +60,8 @@ pub struct TaskEdit {
 
 /// What the schedule form edits.
 pub struct ScheduleEdit {
+    /// As `TaskEdit::title`.
+    pub title: Option<String>,
     pub prompt: String,
     pub repo: String,
     pub cron: String,
@@ -95,6 +99,7 @@ pub fn task_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
     let eff = task.spec.resolve(&config.defaults);
     Ok(serde_json::json!({
         "id": task.id,
+        "title": task.spec.display_title(),
         "prompt": task.spec.ask(&task.prompt),
         "command": task.spec.run.is_some(),
         "repo": contract_tilde(&eff.repo),
@@ -150,6 +155,7 @@ pub fn edit_task(home: &Home, id: &str, edit: TaskEdit) -> Result<()> {
     }
     task.spec.repo = repo;
     task.fill_remote();
+    apply_title(&mut task.spec, edit.title);
     set_ask(&mut task.spec, &mut task.prompt, &edit.prompt);
     match edit.start {
         Start::Keep => {}
@@ -179,6 +185,14 @@ pub(crate) fn apply_choices(
     }
     if let Some(agent) = agent.filter(|a| !a.trim().is_empty() && spec.run.is_none()) {
         spec.agent = Some(agent);
+    }
+}
+
+/// The form's title box: `None` (a form that doesn't show it) leaves the
+/// field alone, anything else replaces it — empty meaning "no title".
+fn apply_title(spec: &mut TaskSpec, title: Option<String>) {
+    if let Some(title) = title {
+        spec.title = TaskSpec::clean_title(Some(&title));
     }
 }
 
@@ -234,6 +248,7 @@ pub fn schedule_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
     let eff = s.spec.resolve(&config.defaults);
     Ok(serde_json::json!({
         "id": s.id,
+        "title": s.spec.display_title(),
         "prompt": s.spec.ask(&s.prompt),
         "command": s.spec.run.is_some(),
         "cron": s.cron,
@@ -248,6 +263,7 @@ pub fn schedule_detail(home: &Home, id: &str) -> Result<serde_json::Value> {
 /// Adds a schedule, with an id taken from the first line of its prompt.
 pub fn create_schedule(home: &Home, new: ScheduleEdit) -> Result<String> {
     let mut spec = blank_spec(path_of(&new.repo)?);
+    apply_title(&mut spec, new.title.clone());
     apply_choices(&mut spec, new.on_finish, new.agent);
     apply_model(&mut spec, new.model);
     add_schedule(home, None, new.cron, false, spec, new.prompt)
@@ -255,6 +271,7 @@ pub fn create_schedule(home: &Home, new: ScheduleEdit) -> Result<String> {
 
 pub(crate) fn blank_spec(repo: PathBuf) -> TaskSpec {
     TaskSpec {
+        title: None,
         repo,
         branch: None,
         worktree: None,
@@ -300,7 +317,7 @@ pub fn add_schedule(
             id
         }
         None => {
-            let base = slugify(spec.ask(&prompt).lines().next().unwrap_or_default(), 48);
+            let base = slugify(spec.id_base(&prompt), 48);
             (1..)
                 .map(|n| {
                     if n == 1 {
@@ -342,6 +359,7 @@ fn check_schedule(schedule: &Schedule, config: &Config, path: &std::path::Path) 
 pub fn edit_schedule(home: &Home, id: &str, edit: ScheduleEdit) -> Result<()> {
     update_schedule(home, id, |s| {
         s.cron = edit.cron.trim().to_string();
+        apply_title(&mut s.spec, edit.title);
         set_ask(&mut s.spec, &mut s.prompt, &edit.prompt);
         s.spec.repo = path_of(&edit.repo)?;
         apply_choices(&mut s.spec, edit.on_finish, edit.agent);
@@ -447,6 +465,7 @@ mod tests {
 
     fn spec(repo: &std::path::Path) -> TaskSpec {
         TaskSpec {
+            title: None,
             repo: repo.to_path_buf(),
             branch: Some("keep-me".into()),
             worktree: None,
@@ -484,6 +503,7 @@ mod tests {
 
     fn edit(repo: &std::path::Path, prompt: &str) -> TaskEdit {
         TaskEdit {
+            title: None,
             prompt: prompt.into(),
             repo: repo.display().to_string(),
             start: Start::Keep,
@@ -576,6 +596,40 @@ mod tests {
     }
 
     #[test]
+    fn the_form_sets_and_clears_a_tasks_title() {
+        let (_dir, repo, home, config) = setup();
+        let task = queue(&home, &config, repo.path(), "Prompt");
+        let path = home.tasks().join(format!("{}.md", task.id));
+        assert_eq!(
+            task_detail(&home, &task.id).unwrap()["title"],
+            serde_json::Value::Null
+        );
+
+        let mut change = edit(repo.path(), "Prompt");
+        change.title = Some("  A shorter line  ".into());
+        edit_task(&home, &task.id, change).unwrap();
+        assert_eq!(
+            Task::load(&path).unwrap().spec.title.as_deref(),
+            Some("A shorter line")
+        );
+        assert_eq!(
+            task_detail(&home, &task.id).unwrap()["title"],
+            "A shorter line"
+        );
+
+        // An emptied box takes it away again; a form without the field keeps it.
+        edit_task(&home, &task.id, edit(repo.path(), "Prompt")).unwrap();
+        assert_eq!(
+            Task::load(&path).unwrap().spec.title.as_deref(),
+            Some("A shorter line")
+        );
+        let mut clear = edit(repo.path(), "Prompt");
+        clear.title = Some(String::new());
+        edit_task(&home, &task.id, clear).unwrap();
+        assert_eq!(Task::load(&path).unwrap().spec.title, None);
+    }
+
+    #[test]
     fn the_form_edits_a_command_tasks_command_and_gives_it_no_agent() {
         let (_dir, repo, home, config) = setup();
         let (task, path) = create_task(
@@ -585,6 +639,7 @@ mod tests {
                 prompt: String::new(),
                 id: None,
                 spec: TaskSpec {
+                    title: None,
                     run: Some("make backup".into()),
                     ..blank_spec(repo.path().into())
                 },
@@ -695,6 +750,7 @@ mod tests {
 
     fn schedule_form(repo: &std::path::Path, prompt: &str, cron: &str) -> ScheduleEdit {
         ScheduleEdit {
+            title: None,
             prompt: prompt.into(),
             repo: repo.display().to_string(),
             cron: cron.into(),

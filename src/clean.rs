@@ -372,6 +372,7 @@ mod tests {
 
     fn archive(home: &Home, id: &str, status: Status, finished_at: Option<DateTime<FixedOffset>>) {
         let spec = TaskSpec {
+            title: None,
             repo: std::env::temp_dir(),
             branch: None,
             worktree: Some(false),

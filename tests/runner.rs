@@ -1233,10 +1233,16 @@ fn a_schedule_does_not_fire_twice_for_the_same_slot_after_a_restart() {
     let env = Env::new("");
     // Due: one minute ago, truncated to the second.
     let due = (chrono::Local::now().fixed_offset() - chrono::Duration::minutes(1)).trunc_subsecs(0);
+    // `allow_overlap`: this is about slots, not about the previous run still
+    // going. Without it, two runs that straddle a minute boundary would have
+    // the second firing skipped for overlap, and the count below would depend
+    // on which side of the boundary the clock happened to be (it was flaky
+    // exactly that way on a loaded CI runner).
     std::fs::write(
         env.home.path().join("schedules/minute.md"),
         format!(
-            "---\nid: minute\ncron: \"* * * * *\"\nrepo: {}\nretries: 0\n\
+            "---\nid: minute\ncron: \"* * * * *\"\nallow_overlap: true\n\
+             repo: {}\nretries: 0\n\
              last_enqueued_at: {}\n---\n\nsleep 300\n",
             env.repo.path().display(),
             due.to_rfc3339()

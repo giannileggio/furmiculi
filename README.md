@@ -16,9 +16,11 @@ task, getting the job done while you're away.
 
 - **A queue made of plain Markdown files.** A task is a `.md` file: YAML
   frontmatter says where and how to run (repo, branch, worktree, agent, model,
-  schedule...), and the body is the prompt. Status lives in the file and
-  finished tasks move to `archive/`, so the queue is greppable, versionable and
-  has no database. Write tasks by hand, with `furmi add`, or ask an agent to.
+  schedule...), and the body is the prompt. Its `title` is the one short line
+  the lists show, so a queue of twenty tasks reads at a glance. Status lives in
+  the file and finished tasks move to `archive/`, so the queue is greppable,
+  versionable and has no database. Write tasks by hand, with `furmi add`, or ask
+  an agent to.
 - **Any agent, and plain commands too.** Presets for Claude Code, Codex,
   Gemini CLI, Hermes Agent, opencode and Pi are built in, and others are a few
   lines of config. A task can also be a plain shell command (`--run`), and a
@@ -141,6 +143,8 @@ echo "Update deps and run tests" | furmi add --repo ~/Projects/myapp --agent cod
 furmi add --scratch "Compare the three queue libraries and write up a summary"   # no project
 furmi add --repo ~/Projects/myapp --run "./scripts/backup.sh"   # a shell command, no agent (see below)
 furmi add --draft "Fix the redirect loop"   # saved, not queued: look it over first
+furmi add --title "Fix the login redirect" "Fix the redirect loop after login"   # the line the lists show
+furmi title <id> "A better title"   # change it later, on any task ("" takes it away)
 furmi queue <id>        # ...then let the runner have it (--in 2h / --at ...)
 furmi duplicate <id>    # copy any task into a new draft
 furmi template ls       # tasks to start new ones from (a few come with furmi)
@@ -385,6 +389,12 @@ or an SSH tunnel (`ssh -L 7433:127.0.0.1:7433 your-box`) in front of it. See
 [docs/REMOTE.md](docs/REMOTE.md) for the setup, the flags and the session cookie.
 `furmi node add` (over SSH) shows several machines' queues in one dashboard, and lets you
 queue and manage tasks on any of them (see the same page).
+
+Every task carries a **Title**: the one line the row shows above its id, and
+the heading of its own view. The New task and Edit forms have a box for it; a
+task without one shows the first line of its prompt instead, which is how tasks
+written before titles existed still read. `furmi title <id> "<text>"` changes it
+later, on any task, waiting or finished.
 
 A task that is still *Waiting* has an **Edit** button: change what it does, the
 project, when it starts, or what happens when it's done (not once it has

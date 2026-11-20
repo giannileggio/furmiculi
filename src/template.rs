@@ -111,6 +111,10 @@ impl Template {
             ));
         }
         out.extend(prompt_problems(&self.spec, &self.prompt));
+        // The repo is another machine's business; a title is not.
+        if let Some(problem) = crate::spec::title_problems(self.spec.title.as_deref()) {
+            out.push(problem);
+        }
         out
     }
 
@@ -349,6 +353,15 @@ Review the changes on this branch.
     }
 
     #[test]
+    fn a_template_checks_its_title_like_a_task_does() {
+        let mut t = Template::parse(SAMPLE).unwrap();
+        t.spec.title = Some("Review the diff".into());
+        assert!(t.problems(None).is_empty());
+        t.spec.title = Some("one\ntwo".into());
+        assert!(t.problems(None)[0].contains("one line"));
+    }
+
+    #[test]
     fn a_template_may_name_a_project_and_rejects_typos() {
         let t = Template::parse(&SAMPLE.replace("on_finish", "repo: ~/app\non_finish")).unwrap();
         assert_eq!(t.repo(), Some(Path::new("~/app")));
@@ -408,6 +421,7 @@ Review the changes on this branch.
         let mut task = Task::new(
             "fix-it".into(),
             TaskSpec {
+                title: None,
                 repo: repo.path().to_path_buf(),
                 branch: None,
                 worktree: None,

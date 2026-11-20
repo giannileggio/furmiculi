@@ -365,6 +365,7 @@ pub fn ls_json(home: &Home, archive: bool) -> Result<()> {
             let eff = t.spec.resolve(&config.defaults);
             serde_json::json!({
                 "id": t.id,
+                "title": t.spec.display_title(),
                 "status": t.status.as_str(),
                 "repo": contract_tilde(&eff.repo),
                 "branch": t.effective_branch(&config),
@@ -422,10 +423,39 @@ pub fn load_tasks(dir: &Path) -> Result<(Vec<Task>, Vec<String>)> {
     Ok((tasks, warnings))
 }
 
+/// `furmi title <id> "<text>"`: sets the one line a listing shows for a task.
+/// Works on any task file, waiting or archived, but not on one that is running:
+/// the runner owns that file until it finishes.
+pub fn set_title(home: &Home, id: &str, text: &str) -> Result<()> {
+    home.ensure_initialized()?;
+    validate_id(id).map_err(anyhow::Error::msg)?;
+    let title = TaskSpec::clean_title(Some(text));
+    if let Some(problem) = crate::spec::title_problems(title.as_deref()) {
+        bail!("{problem}");
+    }
+    let _lock = home.lock()?;
+    let path = [home.tasks(), home.archive()]
+        .into_iter()
+        .map(|dir| dir.join(format!("{id}.md")))
+        .find(|path| path.exists())
+        .with_context(|| format!("no task `{id}`"))?;
+    let mut task = Task::load(&path)?;
+    if task.status == Status::Running {
+        bail!("`{id}` is running: set its title when it finishes");
+    }
+    task.spec.title = title.clone();
+    task.save(&path)?;
+    match &title {
+        Some(title) => println!("`{id}`: {title}"),
+        None => println!("`{id}`: no title, the first line of the prompt is shown"),
+    }
+    Ok(())
+}
+
 /// The header row plus one row per task, as `furmi ls` shows them.
 pub fn task_rows(config: &Config, tasks: &[Task]) -> Vec<Vec<String>> {
     let mut rows = vec![row([
-        "ID", "STATUS", "WHEN", "REPO", "BRANCH", "AGENT", "TOKENS",
+        "ID", "TITLE", "STATUS", "WHEN", "REPO", "BRANCH", "AGENT", "TOKENS",
     ])];
     for t in tasks {
         let eff = t.spec.resolve(&config.defaults);
@@ -435,6 +465,7 @@ pub fn task_rows(config: &Config, tasks: &[Task]) -> Vec<Vec<String>> {
         };
         rows.push(vec![
             t.id.clone(),
+            listing_title(t.spec.display_title(), t.spec.ask(&t.prompt)),
             t.status.as_str().into(),
             when,
             shorten_path(&contract_tilde(&eff.repo), 36),
@@ -450,8 +481,28 @@ pub fn task_rows(config: &Config, tasks: &[Task]) -> Vec<Vec<String>> {
     rows
 }
 
+/// What the TITLE column shows: the task's own one-line title, else the first
+/// line of what it asks (the id alone rarely says enough). Cut short, so a
+/// long prompt doesn't push the rest of the row off the screen.
+fn listing_title(title: Option<&str>, ask: &str) -> String {
+    let line = match title {
+        Some(title) => title,
+        None => ask
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default(),
+    };
+    const MAX: usize = 50;
+    if line.chars().count() <= MAX {
+        return line.to_string();
+    }
+    let cut: String = line.chars().take(MAX - 1).collect();
+    format!("{}…", cut.trim_end())
+}
+
 fn ls_schedules(home: &Home, config: &Config) -> Result<()> {
-    let mut rows = vec![row(["ID", "ENABLED", "CRON", "NEXT", "REPO"])];
+    let mut rows = vec![row(["ID", "TITLE", "ENABLED", "CRON", "NEXT", "REPO"])];
     for path in md_files(&home.schedules())? {
         let s = match Schedule::load(&path) {
             Ok(s) => s,
@@ -467,6 +518,7 @@ fn ls_schedules(home: &Home, config: &Config) -> Result<()> {
         };
         rows.push(vec![
             s.id.clone(),
+            listing_title(s.spec.display_title(), s.spec.ask(&s.prompt)),
             if s.enabled { "yes" } else { "no" }.into(),
             s.cron.clone(),
             next,
@@ -490,9 +542,15 @@ pub struct AddArgs {
     /// `furmi clean`), for research, drafts and the like.
     #[arg(long, conflicts_with_all = ["repo", "branch", "no_worktree", "on_finish"])]
     scratch: bool,
-    /// Task id (also the file name). Derived from the prompt if omitted.
+    /// Task id (also the file name). Derived from the title, else the prompt's
+    /// first line, if omitted.
     #[arg(long)]
     id: Option<String>,
+    /// One line saying what the task is about, shown in `furmi ls` and the
+    /// dashboard. Defaults to nothing: the first line of the prompt is shown
+    /// instead.
+    #[arg(long)]
+    title: Option<String>,
     /// The prompt, as an option instead of the positional argument.
     #[arg(long, short, allow_hyphen_values = true)]
     prompt: Option<String>,
@@ -584,10 +642,7 @@ pub fn create_task(home: &Home, config: &Config, new: NewTask) -> Result<(Task, 
             }
             id
         }
-        None => unique_id(
-            home,
-            &slugify(new.spec.ask(&prompt).lines().next().unwrap_or_default(), 48),
-        ),
+        None => unique_id(home, &slugify(new.spec.id_base(&prompt), 48)),
     };
 
     let mut spec = new.spec;
@@ -665,6 +720,8 @@ pub fn add(home: &Home, args: AddArgs) -> Result<()> {
     let base = base.as_ref();
     let command = args.run.is_some();
     let spec = TaskSpec {
+        title: TaskSpec::clean_title(args.title.as_deref())
+            .or_else(|| base.and_then(|s| s.title.clone())),
         repo,
         branch: args.branch.or_else(|| base.and_then(|s| s.branch.clone())),
         worktree: worktree_choice(args.worktree, args.no_worktree)

@@ -168,6 +168,93 @@ fn add_ls_and_validate_roundtrip() {
 }
 
 #[test]
+fn a_task_can_carry_a_one_line_title() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    let task_file = home.path().join("tasks/titled.md");
+
+    ok(run(furmi(home.path()).args([
+        "add",
+        "--repo",
+        &repo.path().display().to_string(),
+        "--no-worktree",
+        "--id",
+        "titled",
+        "--title",
+        "Fix the login redirect",
+        "--prompt",
+        "Fix the redirect loop after login.\n\nThe cookie expires too early.",
+    ])));
+    let text = std::fs::read_to_string(&task_file).unwrap();
+    assert!(text.contains("title: Fix the login redirect\n"), "{text}");
+
+    // `furmi ls` has a column for it, and shows it.
+    let listing = stdout(&ok(run(furmi(home.path()).arg("ls"))));
+    assert!(listing.contains("TITLE"), "{listing}");
+    assert!(listing.contains("Fix the login redirect"), "{listing}");
+    ok(run(furmi(home.path()).args(["validate"])));
+
+    // Changing it later, for any task, waiting or finished.
+    ok(run(furmi(home.path()).args([
+        "title",
+        "titled",
+        "A shorter title",
+    ])));
+    let text = std::fs::read_to_string(&task_file).unwrap();
+    assert!(text.contains("title: A shorter title\n"), "{text}");
+
+    // An empty one clears the field: the prompt's first line is shown instead.
+    ok(run(furmi(home.path()).args(["title", "titled", ""])));
+    let text = std::fs::read_to_string(&task_file).unwrap();
+    assert!(!text.contains("title:"), "{text}");
+    let listing = stdout(&ok(run(furmi(home.path()).arg("ls"))));
+    assert!(
+        listing.contains("Fix the redirect loop after login."),
+        "{listing}"
+    );
+
+    // No such task, and a title that is not one short line.
+    let out = failed(run(furmi(home.path()).args(["title", "nope", "Fine"])));
+    assert!(stderr(&out).contains("no task `nope`"), "{}", stderr(&out));
+    let long = "x".repeat(121);
+    let out = failed(run(furmi(home.path()).args(["title", "titled", &long])));
+    assert!(stderr(&out).contains("over the 120"), "{}", stderr(&out));
+}
+
+#[test]
+fn validate_rejects_a_title_that_is_not_one_short_line() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    let path = home.path().join("tasks/titled.md");
+    let write = |extra: &str| {
+        std::fs::write(
+            &path,
+            format!(
+                "---\nid: titled\nrepo: {}\nworktree: false\n{extra}---\n\nDo it.\n",
+                repo.path().display()
+            ),
+        )
+        .unwrap();
+    };
+
+    write("title: A short line\n");
+    ok(run(furmi(home.path()).args(["validate"])));
+    for (extra, says) in [
+        ("title: \"\"\n", "`title` is empty"),
+        (
+            "title: |\n  first line\n  second line\n",
+            "`title` must be one line",
+        ),
+    ] {
+        write(extra);
+        let out = failed(run(furmi(home.path()).args(["validate"])));
+        assert!(stdout(&out).contains(says), "{}", stdout(&out));
+    }
+}
+
+#[test]
 fn add_reads_the_prompt_from_stdin() {
     let home = tempfile::tempdir().unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -2881,6 +2968,8 @@ fn ls_and_status_can_be_read_by_a_script() {
     assert_eq!(tasks[0]["id"], "a-task");
     assert_eq!(tasks[0]["status"], "pending");
     assert_eq!(tasks[0]["priority"], 0);
+    // No title yet: the listing falls back to the prompt's first line.
+    assert_eq!(tasks[0]["title"], serde_json::Value::Null);
 
     let status = stdout(&ok(run(furmi(home.path()).args(["status", "--json"]))));
     let status: serde_json::Value = serde_json::from_str(&status).expect(&status);

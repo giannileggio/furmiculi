@@ -45,6 +45,7 @@ editing any file.
 ```markdown
 ---
 id: fix-login-redirect
+title: Fix the redirect loop after login
 repo: ~/Projects/myapp
 branch: fix/login-redirect
 on_finish: pr
@@ -61,6 +62,7 @@ Add a regression test.
 | Field          | Required | Default (config `[defaults]`) | Meaning |
 |----------------|----------|-------------------------------|---------|
 | `id`           | yes      | —                 | `a-z`, `0-9`, `-`, max 64 chars. Must equal the file name without `.md`. |
+| `title`        | no       | —                 | One short line saying what the task is doing, for listings — see below. |
 | `repo`         | yes      | —                 | Folder the task runs in: absolute, or starting with `~`. A task with no project has `scratch/<id>` here, with `worktree: false` and `on_finish: none`. |
 | `branch`       | no       | `furmi/<id>` if `worktree` | Branch to work on. |
 | `worktree`     | no       | `true`            | Run in a dedicated git worktree for the branch. `false` runs in your own checkout — see below. |
@@ -80,6 +82,14 @@ Add a regression test.
 | `created_by`   | no       | —                 | Free text: `cli`, `agent`, `schedule:<id>`... |
 | `remote`       | no       | —                 | Written by furmi: the repo's `origin` as `host/owner/name` (`github.com/me/app`), so another machine can find its own clone. Absent without an `origin`. |
 | `created_at`   | no       | —                 | RFC 3339; set by `furmi add`. |
+
+`title` is the line `furmi ls` puts in its `TITLE` column and the one a
+dashboard row shows above the id: what the task is doing, in the words you
+would use to tell it apart from the next one. One line, at most 120 chars, no
+line breaks. Without it, the first line of the prompt is shown instead, so
+tasks written before titles existed read fine. Set it later with `furmi title
+<id> "<text>"` (any task, waiting or finished; an empty text takes it away), in
+the dashboard's form, or in the file, then `furmi validate`.
 
 ### Fields furmiculi writes
 
@@ -213,7 +223,8 @@ What differs from an agent task:
   command is always retried while `retries` allow.
 
 `furmi ls` and the dashboard show `command` where an agent's name would be, and
-the command where a prompt would be. The dashboard edits a waiting one's command
+the command where a prompt would be (its `title` there, if it has one, else the
+command's first line). The dashboard edits a waiting one's command
 but doesn't offer creating one; use `furmi add --run`.
 
 ## Drafts
@@ -235,9 +246,10 @@ its own.
 ## Template — `templates/<id>.md`
 
 A template is a task to start new tasks from. It is written like a task, with
-`id` and the same options (`repo`, `branch`, `worktree`, `agent`, `model`,
-`mode`, `on_finish`, `retries`, `retry_delay`, `timeout`, `run`), and the body
-is the prompt. It has no status, times or cron, and nothing ever runs it. Two
+`id` and the same options (`title`, `repo`, `branch`, `worktree`, `agent`,
+`model`, `mode`, `on_finish`, `retries`, `retry_delay`, `timeout`, `run`), and
+the body is the prompt. A title written on a template becomes the new task's
+title. It has no status, times or cron, and nothing ever runs it. Two
 differences from a task:
 
 | Field         | Required | Meaning |
@@ -266,9 +278,11 @@ written again.
 
 ## Schedule — `schedules/<id>.md`
 
-A schedule has `id` plus the same `repo`/`branch`/`worktree`/`agent`/`model`/
-`mode`/`on_finish`/`retries`/`retry_delay`/`timeout`/`run` fields as a task, so
-it can queue [command tasks](#command-tasks) too (no body, then). It has
+A schedule has `id` plus the same `title`/`repo`/`branch`/`worktree`/`agent`/
+`model`/`mode`/`on_finish`/`retries`/`retry_delay`/`timeout`/`run` fields as a
+task, so it can queue [command tasks](#command-tasks) too (no body, then). Its
+`title` is what `furmi ls --schedules` and the dashboard show; without one,
+the first line of its prompt is shown. It has
 no `scheduled_at`, `created_by` or `created_at`: each firing sets those on
 the task it creates. It also adds:
 

@@ -218,6 +218,12 @@
     padding: 10px 16px; border-bottom: 1px solid var(--border);
   }
   .modal header h2 { font-size: 13px; margin: 0; display: flex; align-items: center; gap: 6px; }
+  /* The task view's heading keeps its id: the title above it, both in one line
+     of the drawer's header, so the id is never more than a glance away. */
+  #task-title { display: block; }
+  #task-title .title { display: block; font-size: 15px; font-weight: 600; margin-bottom: 3px; }
+  #task-title .id { display: flex; align-items: center; gap: 6px; }
+  #task-title .id.under { color: var(--muted); font-size: 12px; }
   .modal header button { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; }
   .modal pre {
     margin: 0; padding: 16px; overflow: auto; font-size: 12px; white-space: pre-wrap;
@@ -694,6 +700,12 @@
       <button id="new-close" aria-label="Close">&times;</button>
     </header>
     <form class="new-task" id="new-form">
+      <label id="f-title-wrap">Title
+        <input id="f-title" autocomplete="off" maxlength="120"
+          placeholder="e.g. Fix the redirect loop after login">
+        <small>One line, shown in the list so you can tell tasks apart. Leave it empty to show
+          the first line of the prompt instead.</small>
+      </label>
       <label id="f-desc-wrap" hidden>What is it for?
         <input id="f-desc" autocomplete="off" placeholder="e.g. Update dependencies and check nothing broke">
         <small>One line, shown in the list of templates.</small>
@@ -2697,9 +2709,11 @@ function fmtUsage(t) {
 }
 
 function renderTaskView(t) {
-  taskTitle.innerHTML = `<span class="mono">${escapeHtml(t.id)}</span>` +
+  const title = (t.title || "").trim();
+  taskTitle.innerHTML = (title ? `<span class="title">${escapeHtml(title)}</span>` : "") +
+    `<span class="id${title ? " under" : ""}"><span class="mono">${escapeHtml(t.id)}</span>` +
     `<button class="copy" data-action="copy" data-text="${escapeHtml(t.id)}" ` +
-    `title="Copy the id" aria-label="Copy the id ${escapeHtml(t.id)}">${COPY_ICON}</button>`;
+    `title="Copy the id" aria-label="Copy the id ${escapeHtml(t.id)}">${COPY_ICON}</button></span>`;
 
   const facts = [
     ["Status", badge(t.status)],
@@ -3367,6 +3381,9 @@ function openForm(kind, v, template) {
     : kind === "template" ? `Edit the template ${v.id}` : kind === "template-new" ? "New template"
     : kind === "schedule" ? "Edit schedule" : template ? `New task from ${template}` : "New task";
   $("f-desc").value = isTemplate ? (v.description || "") : "";
+  // A template's one line is its description; every other kind has a title.
+  $("f-title").value = (v && v.title) || "";
+  $("f-title-wrap").hidden = isTemplate;
 
   $("f-prompt-label").textContent = command ? "What command should it run?" : "What should the agent do?";
   $("f-prompt-hint").textContent = command
@@ -3591,6 +3608,7 @@ newForm.addEventListener("submit", async (e) => {
   const kind = formMode.kind;
   const repeat = kind === "task" ? "once" : $("f-repeat").value;
   const common = {
+    title: $("f-title").value.trim(),
     prompt: $("f-prompt").value,
     repo: $("f-repo").value,
     on_finish: $("f-finish").value,

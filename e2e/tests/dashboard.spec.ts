@@ -3,7 +3,7 @@
 // (narrow screens, dark mode).
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { expect, openDashboard, row, tab, test, type Forge } from "./fixtures";
+import { createdId, expect, openDashboard, row, tab, test, type Forge } from "./fixtures";
 
 /** Rewrites a waiting task's file: status, plus any extra front matter. */
 function rewrite(forge: Forge, id: string, status: string, extra: string[] = []) {
@@ -37,6 +37,54 @@ test.describe("with the runner off", () => {
     await row(page, "fix-login").locator(".copy").click({ force: true });
     await expect(page.locator("#toast")).toHaveText("Copied");
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("fix-login");
+  });
+
+  test("a task's title is what a row and the task's view show", async ({ page, forge }) => {
+    forge.add(
+      "fix-login",
+      "Fix the redirect loop after login, and add a test for it",
+      "--title",
+      "Fix the login redirect loop",
+    );
+    forge.add("docs-typo", "Fix a typo in the README");
+    await openDashboard(page, forge);
+
+    // Its own line, not the prompt's first line, when it has one...
+    await expect(row(page, "fix-login").locator(".summary")).toHaveText("Fix the login redirect loop");
+    // ...and the prompt's first line when it doesn't.
+    await expect(row(page, "docs-typo").locator(".summary")).toHaveText("Fix a typo in the README");
+
+    // The view is headed by it, with the id under it.
+    await row(page, "fix-login").locator(".summary").click();
+    await expect(page.locator("#task-title .title")).toHaveText("Fix the login redirect loop");
+    await expect(page.locator("#task-title .id")).toContainText("fix-login");
+    await page.locator("#task-close").click();
+
+    // A waiting task's form carries it, and an emptied box takes it away.
+    await row(page, "fix-login").getByRole("button", { name: "Edit" }).click();
+    await expect(page.locator("#f-title")).toHaveValue("Fix the login redirect loop");
+    await page.locator("#f-title").fill("A better title");
+    await page.locator("#f-submit").click();
+    await expect(row(page, "fix-login").locator(".summary")).toHaveText("A better title");
+    expect(fs.readFileSync(forge.taskFile("fix-login")!, "utf8")).toContain("title: A better title");
+
+    await row(page, "fix-login").getByRole("button", { name: "Edit" }).click();
+    await page.locator("#f-title").fill("");
+    await page.locator("#f-submit").click();
+    await expect(row(page, "fix-login").locator(".summary")).toHaveText(
+      "Fix the redirect loop after login, and add a test for it",
+    );
+    expect(fs.readFileSync(forge.taskFile("fix-login")!, "utf8")).not.toContain("title:");
+
+    // A new task queued from the form keeps the title it was given.
+    await page.locator("#new-task-open").click();
+    await page.locator("#f-title").fill("  A one-line title  ");
+    await page.locator("#f-prompt").fill("echo hello");
+    await page.locator("#f-repo").fill(forge.repo);
+    await page.locator("#f-submit").click();
+    const id = await createdId(page, "Queued");
+    expect(fs.readFileSync(forge.taskFile(id)!, "utf8")).toContain("title: A one-line title");
+    await expect(row(page, id).locator(".summary")).toHaveText("A one-line title");
   });
 
   test("the search box narrows the tables, and Esc gives them back", async ({ page, forge }) => {

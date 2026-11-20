@@ -55,6 +55,7 @@ Everyday:
 One task:
   queue       Let the runner have a draft
   duplicate   Copy any task into a new draft
+  title       Set the one line a listing shows for a task
   logs        Print a task's output
   attach      Watch a running task in tmux
   done        Finish a task: runs its when-done step and archives it
@@ -149,6 +150,16 @@ enum Command {
         /// Id of the copy [default: derived from the prompt].
         #[arg(long = "as")]
         new_id: Option<String>,
+    },
+    /// Set the one line a listing shows for a task, waiting or finished.
+    ///
+    /// Pass an empty title ("") to stop showing one: the first line of the
+    /// prompt is shown instead.
+    Title {
+        /// The task's id, as `furmi ls` shows it.
+        id: String,
+        /// The title: one short line, no newlines. Pass "" to clear it.
+        text: String,
     },
     /// Check task/schedule files against the format. Checks all if none given.
     Validate { files: Vec<PathBuf> },
@@ -371,6 +382,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let copy = control::duplicate(&home, &id, new_id)?;
             println!("Saved a draft, `{copy}`. `furmi queue {copy}` starts it.");
         }
+        Command::Title { id, text } => cmd::set_title(&home, &id, &text)?,
         Command::Validate { files } => return cmd::validate(&home, files),
         Command::Run { once } => run::run(&home, once)?,
         Command::Done { id } => control::done(&home, id)?,
