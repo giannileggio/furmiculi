@@ -161,14 +161,11 @@ furmi stop              # stop the dashboard and the runner (work already underw
 furmi restart           # stop them and start them again the way they were started, on the installed binary
 furmi agents            # which coding agents are installed, and how to install the rest
 furmi agents use codex   # make one the default for new tasks
-<<<<<<< HEAD
 furmi agents allow claude edits   # how far an agent may go with nobody to ask: ask | edits | all
-=======
 furmi models            # what each configured agent's CLI says it can run (--agent name: one)
                         # and why: no models_cmd, a failed command, the cached answer
 furmi models --refresh  # ask the CLIs again and rewrite models-cache.json, the
                         # list the dashboard's Model box offers
->>>>>>> 95159d9 (Add furmi models to list and refresh an agent's models)
 
 furmi ls                # queue
 furmi ls --schedules    # schedules with their next run

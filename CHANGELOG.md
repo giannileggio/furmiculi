@@ -6,8 +6,6 @@ lists what changed between them.
 
 ## Unreleased
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 Dependencies
 
 - Durations (`5m` in config.toml, `1h 30m` in a message, `--retry-delay 30s`)
@@ -95,6 +93,12 @@ Dashboard
   **Fix all** in the banner runs every one. Branches go with `git branch -d`,
   so git still refuses an unmerged one, and only fixes the last pass offered
   are accepted.
+- The dashboard's task form can set a task's own options, as `furmi add` can:
+  **Mode** (`headless`/`interactive`), **Workspace** (its own worktree, or the
+  project folder itself), **Branch**, **Retries**, **Wait between retries** and
+  **Give up after**. They are there for a new task, an edit of a waiting one
+  and a schedule alike, and a value that doesn't make sense is refused the way
+  the flags are; leaving one empty follows `[defaults]`.
 
 Command line
 
@@ -102,6 +106,13 @@ Command line
   flag is still an error.
 - `furmi ls --json` and `furmi status --json`, `furmi completions <shell>`, a
   `--help` that groups the commands, and shorter project paths in `furmi ls`.
+- `furmi models [--agent X] [--refresh]`: what each configured agent's CLI says
+  it can run, from a terminal. It is the same list the dashboard's task form
+  offers (one report, shared with `GET /api/models`), with a plain reason for
+  the agents that have none: no `models_cmd` in `config.toml`, a command that
+  failed, a name the config doesn't define. `--refresh` asks the CLIs again and
+  rewrites `models-cache.json`; without it a cached answer from the last hour is
+  reused.
 
 - The dashboard's sidebar has two sections: **Queue** for the lists work moves
   through, and **Library** for the ones kept for later. Drafts and Templates
@@ -114,23 +125,6 @@ Command line
   its row or the bar. A repeating task keeps its own times, and one already
   queued or running is not doubled unless it allows overlap. A template needs a
   project to say where to run.
-=======
-- The dashboard's task form can set a task's own options, as `furmi add` can:
-  **Mode** (`headless`/`interactive`), **Workspace** (its own worktree, or the
-  project folder itself), **Branch**, **Retries**, **Wait between retries** and
-  **Give up after**. They are there for a new task, an edit of a waiting one
-  and a schedule alike, and a value that doesn't make sense is refused the way
-  the flags are; leaving one empty follows `[defaults]`.
->>>>>>> 0d9e931 (Set mode, branch, worktree, retries and timeout from the dashboard)
-=======
-- `furmi models [--agent X] [--refresh]`: what each configured agent's CLI says
-  it can run, from a terminal. It is the same list the dashboard's task form
-  offers (one report, shared with `GET /api/models`), with a plain reason for
-  the agents that have none: no `models_cmd` in `config.toml`, a command that
-  failed, a name the config doesn't define. `--refresh` asks the CLIs again and
-  rewrites `models-cache.json`; without it a cached answer from the last hour is
-  reused.
->>>>>>> 95159d9 (Add furmi models to list and refresh an agent's models)
 
 ## 0.8.0
 
