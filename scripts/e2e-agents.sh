@@ -25,7 +25,10 @@
 # Exit status is non-zero if any check fails. Real agents cost tokens and time.
 set -u
 
-FURMI=${FURMI:-furmi}
+# An absolute path, never the bare name: the furmi() wrapper below calls "$FURMI",
+# and a bare "furmi" resolves to that wrapper itself and recurses until bash
+# segfaults.
+FURMI=${FURMI:-$(command -v furmi || true)}
 AGENTS=claude,pi,opencode
 KEEP=0
 while [ $# -gt 0 ]; do
