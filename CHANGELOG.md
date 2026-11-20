@@ -7,6 +7,7 @@ lists what changed between them.
 ## Unreleased
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 Dependencies
 
 - Durations (`5m` in config.toml, `1h 30m` in a message, `--retry-delay 30s`)
@@ -121,6 +122,15 @@ Command line
   and a schedule alike, and a value that doesn't make sense is refused the way
   the flags are; leaving one empty follows `[defaults]`.
 >>>>>>> 0d9e931 (Set mode, branch, worktree, retries and timeout from the dashboard)
+=======
+- `furmi models [--agent X] [--refresh]`: what each configured agent's CLI says
+  it can run, from a terminal. It is the same list the dashboard's task form
+  offers (one report, shared with `GET /api/models`), with a plain reason for
+  the agents that have none: no `models_cmd` in `config.toml`, a command that
+  failed, a name the config doesn't define. `--refresh` asks the CLIs again and
+  rewrites `models-cache.json`; without it a cached answer from the last hour is
+  reused.
+>>>>>>> 95159d9 (Add furmi models to list and refresh an agent's models)
 
 ## 0.8.0
 

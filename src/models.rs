@@ -21,7 +21,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::config::Agent;
+use crate::config::{Agent, Config};
 use crate::home::Home;
 
 /// How long an answer stands before the CLI is asked again.
@@ -41,6 +41,68 @@ pub struct Listed {
     pub source: &'static str,
     /// Why there is no answer, or why the one there is is old.
     pub error: Option<String>,
+}
+
+/// One agent's answer and everything around it: whether config.toml defines the
+/// agent at all, whether a task can pin a model on it, and the model it uses
+/// when a task pins none.
+///
+/// Both the dashboard's form (`GET /api/models`) and `furmi models` read this,
+/// so the two can't disagree about who was asked, what came back, or why it
+/// didn't.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Report {
+    /// The agent named, if any: one config.toml doesn't define included.
+    pub agent: Option<String>,
+    /// Whether config.toml defines that agent (always false with no name).
+    pub known: bool,
+    /// Whether it can be handed a model at all (`model_args` non-empty).
+    pub can_pin: bool,
+    /// The model it uses when a task pins none.
+    pub default: Option<String>,
+    pub listed: Listed,
+}
+
+impl Report {
+    /// The shape `GET /api/models` answers with.
+    pub fn to_json(&self) -> String {
+        serde_json::json!({
+            "agent": self.agent,
+            // An agent with no `model_args` can't be handed a model at all: the
+            // form hides the field rather than let it fail on submit.
+            "can_pin": self.can_pin,
+            "default": self.default,
+            "models": self.listed.models,
+            "source": self.listed.source,
+            "error": self.listed.error,
+        })
+        .to_string()
+    }
+}
+
+/// What `agent` can run, as both the form and `furmi models` want it.
+pub fn report(home: &Home, config: &Config, agent: Option<&str>, refresh: bool) -> Report {
+    let name = agent.map(str::trim).filter(|a| !a.is_empty());
+    let Some((name, agent)) = name.and_then(|n| config.agents.get_key_value(n)) else {
+        return Report {
+            agent: name.map(str::to_string),
+            known: false,
+            can_pin: false,
+            default: None,
+            listed: Listed {
+                models: Vec::new(),
+                source: "none",
+                error: None,
+            },
+        };
+    };
+    Report {
+        agent: Some(name.clone()),
+        known: true,
+        can_pin: !agent.model_args.is_empty(),
+        default: agent.model.clone(),
+        listed: list(home, name, agent, refresh),
+    }
 }
 
 /// The models `agent` can run, asking `agent.models_cmd` unless a fresh answer
@@ -110,8 +172,12 @@ fn ask(cmd: &[String]) -> Result<Vec<String>> {
     let out = crate::fsutil::run_with_timeout(command, TIMEOUT)
         .with_context(|| format!("asking `{}`", cmd.join(" ")))?;
     if !out.status.success() {
+        // `status` prints as "exit status: 1", for a CLI that failed quietly.
         let why = String::from_utf8_lossy(&out.stderr);
         let why = why.lines().next().unwrap_or_default().trim();
+        if why.is_empty() {
+            bail!("`{}` failed ({})", cmd.join(" "), out.status);
+        }
         bail!("`{}` failed: {why}", cmd.join(" "));
     }
     let models = parse(&String::from_utf8_lossy(&out.stdout));
@@ -229,6 +295,54 @@ ollama       hf.co/unsloth/Qwen3   131K     16K      yes       no
         assert_eq!(parse(out), ["a/one", "b/two"]);
     }
 
+    #[test]
+    fn a_report_says_who_was_asked_and_whether_a_model_can_be_pinned() {
+        let (_dir, home) = home_with_cache("{}");
+        let config = crate::config::Config::parse(
+            r#"
+[agents.asks]
+headless = ["printf"]
+interactive = ["printf"]
+model_args = ["--model", "{model}"]
+model = "its/default"
+models_cmd = ["printf", "p/one\np/two\n"]
+
+[agents.mute]
+headless = ["printf"]
+interactive = ["printf"]
+"#,
+        )
+        .unwrap();
+
+        let asks = report(&home, &config, Some("asks"), false);
+        assert_eq!(asks.agent.as_deref(), Some("asks"));
+        assert!(asks.known);
+        assert!(asks.can_pin);
+        assert_eq!(asks.default.as_deref(), Some("its/default"));
+        assert_eq!(asks.listed.models, ["p/one", "p/two"]);
+        assert_eq!(asks.listed.source, "agent");
+
+        // The dashboard reads the same answer, with the same keys it always has.
+        let json: serde_json::Value = serde_json::from_str(&asks.to_json()).unwrap();
+        assert_eq!(json["agent"], "asks");
+        assert_eq!(json["can_pin"], true);
+        assert_eq!(json["default"], "its/default");
+        assert_eq!(json["models"], serde_json::json!(["p/one", "p/two"]));
+        assert_eq!(json["source"], "agent");
+        assert!(json["error"].is_null());
+
+        // No `model_args`: the form hides the box, and the CLI says why.
+        let mute = report(&home, &config, Some("mute"), false);
+        assert!(!mute.can_pin);
+        assert_eq!(mute.listed.source, "none");
+
+        // A name config.toml doesn't define is reported, not invented.
+        let none = report(&home, &config, Some("nonesuch"), false);
+        assert!(!none.known);
+        assert_eq!(none.agent.as_deref(), Some("nonesuch"));
+        assert_eq!(none.listed.source, "none");
+    }
+
     fn home_with_cache(cache: &str) -> (tempfile::TempDir, Home) {
         let dir = tempfile::tempdir().unwrap();
         let home = Home::resolve(Some(dir.path().join("home"))).unwrap();
@@ -274,7 +388,9 @@ ollama       hf.co/unsloth/Qwen3   131K     16K      yes       no
         let listed = list(&home, "x", &agent(&["false"]), false);
         assert_eq!(listed.source, "none");
         assert!(listed.models.is_empty());
-        assert!(listed.error.is_some());
+        // A CLI that fails without a word still says how it failed.
+        let error = listed.error.unwrap();
+        assert!(error.contains("`false` failed (exit status: 1)"), "{error}");
     }
 
     #[test]
