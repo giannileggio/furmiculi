@@ -99,6 +99,14 @@ Dashboard
   **Give up after**. They are there for a new task, an edit of a waiting one
   and a schedule alike, and a value that doesn't make sense is refused the way
   the flags are; leaving one empty follows `[defaults]`.
+- Choosing **Any machine (least busy)** in the dashboard's task form suggests
+  models again. The box used to be left out of it: no machine is picked until
+  the task is queued, so there was no CLI to ask. Now every machine that could
+  take the task is asked for what the agent it would run with can run, all at
+  once (nothing waits on a slow machine, and a project narrows it to the
+  machines that have a clone), and the box offers what they can between them. A
+  machine whose default agent can't be handed a model takes the box away, so a
+  pinned model can't land somewhere it can't be used.
 
 Command line
 
