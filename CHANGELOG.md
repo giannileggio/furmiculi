@@ -6,6 +6,7 @@ lists what changed between them.
 
 ## Unreleased
 
+<<<<<<< HEAD
 Dependencies
 
 - Durations (`5m` in config.toml, `1h 30m` in a message, `--retry-delay 30s`)
@@ -112,6 +113,14 @@ Command line
   its row or the bar. A repeating task keeps its own times, and one already
   queued or running is not doubled unless it allows overlap. A template needs a
   project to say where to run.
+=======
+- The dashboard's task form can set a task's own options, as `furmi add` can:
+  **Mode** (`headless`/`interactive`), **Workspace** (its own worktree, or the
+  project folder itself), **Branch**, **Retries**, **Wait between retries** and
+  **Give up after**. They are there for a new task, an edit of a waiting one
+  and a schedule alike, and a value that doesn't make sense is refused the way
+  the flags are; leaving one empty follows `[defaults]`.
+>>>>>>> 0d9e931 (Set mode, branch, worktree, retries and timeout from the dashboard)
 
 ## 0.8.0
 
