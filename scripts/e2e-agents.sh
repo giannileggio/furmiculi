@@ -79,7 +79,10 @@ echo "fixture" > "$REPO/README.md"
 git -C "$REPO" add -A
 git -C "$REPO" commit -q -m fixture
 
-furmi init >/dev/null 2>&1
+# </dev/null: an agent-type task (the nightly schedule's `shell` agent) has a
+# terminal for stdin, and init then asks which default agent to use, with its
+# output sent to /dev/null: the whole run hangs on a question nobody sees.
+furmi init </dev/null >/dev/null 2>&1
 if [ -f "$SRC_CONFIG" ]; then
   cp "$SRC_CONFIG" "$HOME_DIR/config.toml"
 fi
@@ -181,7 +184,7 @@ echo "running $(ls "$HOME_DIR/tasks" | wc -l) tasks (limit ${LIMIT}s) in $TMP"
 start=$SECONDS
 sched_removed=0
 while :; do
-  furmi run --once >/dev/null 2>&1
+  furmi run --once </dev/null >/dev/null 2>&1
   if [ $sched_removed = 0 ] && grep -ql '^created_by: schedule:e2e-sched' "$HOME_DIR"/tasks/*.md "$HOME_DIR"/archive/*.md 2>/dev/null; then
     rm -f "$HOME_DIR/schedules/e2e-sched.md" # fired once; stop it firing again
     sched_removed=1
