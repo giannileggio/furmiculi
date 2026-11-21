@@ -15,6 +15,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all
 cargo deny check          # dependency policy (deny.toml), if you changed Cargo.toml
 shellcheck --severity=error scripts/*.sh
+shellcheck --severity=warning install.sh
 ```
 
 The code supports the Rust version in `rust-version` in `Cargo.toml` (CI
