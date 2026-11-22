@@ -49,6 +49,11 @@ Agents and tasks
   the default agent may go, `furmi agents allow <agent> <ask|edits|all>` and
   Setup change it, the answer lives under `[unattended]`, and `furmi doctor`
   warns while it is unanswered.
+- An agent preset whose `headless` line names none of `{prompt}` or
+  `{prompt_file}` is a problem: a headless run has no UI to type into, so such
+  a preset runs a task with no instructions and exits 0 having read nothing.
+  `furmi validate` says so and exits non-zero, and `furmi doctor` warns.
+  `interactive` presets are not checked: that agent opens a UI of its own.
 - New task fields, also options of `furmi add`: `base` (what a new branch
   starts from, fetched first), `setup` (a command run in the workspace before
   the first attempt), `after` (tasks that must finish as done first) and

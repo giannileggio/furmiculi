@@ -1041,6 +1041,30 @@ impl Config {
         }
         Ok(())
     }
+
+    /// Presets whose `headless` argv never carries the prompt. A headless run
+    /// has no UI to type into, so `{prompt}` (or `{prompt_file}`) is the only
+    /// way a task's instructions reach the agent; without one the run reads
+    /// nothing, does nothing and exits 0, and the task is filed as done.
+    /// `interactive` is not checked: that agent opens a UI of its own and may
+    /// take no prompt.
+    pub fn preset_problems(&self) -> Vec<String> {
+        self.agents
+            .iter()
+            .filter(|(_, agent)| {
+                !agent
+                    .headless
+                    .iter()
+                    .any(|arg| arg.contains("{prompt}") || arg.contains("{prompt_file}"))
+            })
+            .map(|(name, _)| {
+                format!(
+                    "agent `{name}`: its `headless` line in config.toml has no `{{prompt}}` \
+                     (or `{{prompt_file}}`), so a headless task's prompt is never given to it"
+                )
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -1341,6 +1365,31 @@ mod tests {
         .unwrap();
         assert!(c.agents.contains_key("claude"));
         assert!(c.agents["aider"].model_args.is_empty());
+    }
+
+    #[test]
+    fn a_preset_whose_headless_drops_the_prompt_is_a_problem() {
+        // A headless run has no UI to type into: without a placeholder the
+        // task's prompt never reaches the agent.
+        let config =
+            Config::parse("[agents.mute]\nheadless = [\"sh\"]\ninteractive = [\"claude\"]\n")
+                .unwrap();
+        let problems = config.preset_problems();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].contains("agent `mute`") && problems[0].contains("{prompt}"),
+            "{problems:?}"
+        );
+
+        // The prompt inline, or read from a file: either carries it. An
+        // interactive command may take none, since that agent opens its own UI.
+        for text in [
+            "[agents.mute]\nheadless = [\"claude\", \"-p\", \"{prompt}\"]\ninteractive = [\"claude\"]\n",
+            "[agents.mute]\nheadless = [\"sh\", \"-c\", \"claude -p < {prompt_file}\"]\ninteractive = [\"nvim\"]\n",
+        ] {
+            let config = Config::parse(text).unwrap();
+            assert_eq!(config.preset_problems(), Vec::<String>::new(), "{text}");
+        }
     }
 
     #[test]
