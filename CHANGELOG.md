@@ -120,6 +120,15 @@ Dashboard
   machines that have a clone), and the box offers what they can between them. A
   machine whose default agent can't be handed a model takes the box away, so a
   pinned model can't land somewhere it can't be used.
+- The housekeeping banner can fix the two things it could only report. A done
+  task whose worktree still has changes gets **Commit and remove**: what it
+  holds is committed on the task's own branch (`furmi: work left in the
+  worktree of <id>`) and only then is the worktree removed, so a commit that
+  fails leaves everything where it was. "...and N more merged furmi/*
+  branches", the line that stands in for the ones past the first 20, gets
+  **Delete all merged**, which deletes those with `git branch -d` after
+  checking each is still merged. The list also stays open after a fix instead
+  of snapping shut.
 
 Command line
 

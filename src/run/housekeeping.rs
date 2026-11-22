@@ -66,29 +66,100 @@ impl Health {
 }
 
 /// An action the dashboard can run for a health item. Only things that are safe
-/// to repeat and can't lose work: a retry, and `git branch -d` of a merged branch.
+/// to repeat and can't lose work: a retry, `git branch -d` of a merged branch,
+/// and committing a stray worktree's changes before removing it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Fix {
-    Retry { id: String },
-    DeleteBranch { repo: PathBuf, branch: String },
+    Retry {
+        id: String,
+    },
+    DeleteBranch {
+        repo: PathBuf,
+        branch: String,
+    },
+    /// Commit whatever `dir` still holds onto its own branch, then remove the
+    /// worktree. The commit comes first: if it fails, nothing is removed.
+    CommitWorktree {
+        id: String,
+        dir: PathBuf,
+    },
+    /// The branches of the "...and N more" line, each deleted the way
+    /// [`Fix::DeleteBranch`] does it.
+    DeleteBranches {
+        #[serde(default)]
+        branches: Vec<BranchRef>,
+    },
+}
+
+/// One `repo`'s `branch` in a [`Fix::DeleteBranches`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BranchRef {
+    pub repo: PathBuf,
+    pub branch: String,
 }
 
 impl Fix {
     fn apply(&self, home: &Home) -> anyhow::Result<()> {
         match self {
             Fix::Retry { id } => control::retry(home, id),
-            Fix::DeleteBranch { repo, branch } => {
-                // Checked again now: the branch may have moved on since the pass.
-                let base = git::main_branch(repo)
-                    .ok_or_else(|| anyhow::anyhow!("{} has no main branch", repo.display()))?;
-                if !branch.starts_with("furmi/") || !git::branch_merged_into(repo, branch, &base) {
-                    anyhow::bail!("{branch} is no longer a merged furmi/* branch");
+            Fix::DeleteBranch { repo, branch } => delete_merged(repo, branch),
+            Fix::CommitWorktree { id, dir } => commit_then_remove(home, id, dir),
+            Fix::DeleteBranches { branches } => {
+                let mut errors = Vec::new();
+                for b in branches {
+                    if let Err(e) = delete_merged(&b.repo, &b.branch) {
+                        errors.push(format!("{e:#}"));
+                    }
                 }
-                git::delete_merged_branch(repo, branch)
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    anyhow::bail!("{}", errors.join("; "))
+                }
             }
         }
     }
+}
+
+/// `git branch -d`, checked again now: the branch may have moved on since the
+/// pass that offered it.
+fn delete_merged(repo: &Path, branch: &str) -> anyhow::Result<()> {
+    let base = git::main_branch(repo)
+        .ok_or_else(|| anyhow::anyhow!("{} has no main branch", repo.display()))?;
+    if !branch.starts_with("furmi/") || !git::branch_merged_into(repo, branch, &base) {
+        anyhow::bail!("{branch} is no longer a merged furmi/* branch");
+    }
+    git::delete_merged_branch(repo, branch)
+}
+
+/// Keeps what a done task's worktree still holds, then removes the worktree:
+/// the changes are committed on the worktree's own branch first, so an error
+/// there leaves everything where it was.
+fn commit_then_remove(home: &Home, id: &str, dir: &Path) -> anyhow::Result<()> {
+    // Checked again now: the task may have been retried, and a pass of
+    // housekeeping may have removed the worktree already.
+    let task = Task::load(&home.archive().join(format!("{id}.md")))
+        .map_err(|e| anyhow::anyhow!("{id} is no longer archived: {e:#}"))?;
+    if task.status != Status::Done {
+        anyhow::bail!("{} is now {:?}, not done", id, task.status);
+    }
+    if !dir.is_dir() {
+        anyhow::bail!("{} is gone already", dir.display());
+    }
+    // Keeps `furmi run`/`furmi retry` from using a worktree mid-removal.
+    let _lock = home.lock()?;
+    if home.tasks().join(format!("{id}.md")).exists() {
+        anyhow::bail!("{id} is back in the queue");
+    }
+    if !matches!(inspect(dir), Inspected::Dirty) {
+        anyhow::bail!("{} has no uncommitted changes to save", dir.display());
+    }
+    let committed = git::commit_all(dir, &format!("furmi: work left in the worktree of {id}"))?;
+    if !committed {
+        anyhow::bail!("nothing was committed in {}", dir.display());
+    }
+    git::remove_worktree(dir)
 }
 
 /// Runs the fix of one health item (`only`), or of every item that has one
@@ -232,14 +303,19 @@ fn remove_clean_worktrees(home: &Home, now: DateTime<FixedOffset>) -> Vec<Health
                     format!("could not remove the worktree of {}: {e:#}", task.id),
                 )),
             },
-            Inspected::Dirty => health.push(Health::new(
-                "warn",
-                format!(
+            Inspected::Dirty => health.push(Health {
+                level: "warn".into(),
+                message: format!(
                     "{} is done but its worktree has uncommitted changes, so it was kept: {}",
                     task.id,
                     dir.display()
                 ),
-            )),
+                command: None,
+                fix: Some(Fix::CommitWorktree {
+                    id: task.id.clone(),
+                    dir: dir.clone(),
+                }),
+            }),
             Inspected::Unknown(why) => health.push(Health::new(
                 "warn",
                 format!(
@@ -496,13 +572,23 @@ fn suggest_branch_deletions(home: &Home, config: &Config) -> Vec<Health> {
         })
         .collect();
     if found.len() > MAX_SUGGESTIONS {
-        out.push(Health::new(
-            "info",
-            format!(
-                "...and {} more merged furmi/* branches",
-                found.len() - MAX_SUGGESTIONS
-            ),
-        ));
+        // The ones the list above leaves out still get a button: the same check
+        // (`git branch -d`) refuses any branch that isn't merged after all.
+        let rest = &found[MAX_SUGGESTIONS..];
+        out.push(Health {
+            level: "info".into(),
+            message: format!("...and {} more merged furmi/* branches", rest.len()),
+            command: None,
+            fix: Some(Fix::DeleteBranches {
+                branches: rest
+                    .iter()
+                    .map(|(repo, branch, _)| BranchRef {
+                        repo: repo.clone(),
+                        branch: branch.clone(),
+                    })
+                    .collect(),
+            }),
+        });
     }
     out
 }
@@ -872,6 +958,77 @@ mod tests {
             .unwrap();
         let branches = String::from_utf8_lossy(&branches.stdout);
         assert!(branches.contains("furmi/t1") && branches.contains("furmi/t2"));
+    }
+
+    #[test]
+    fn offers_to_commit_a_dirty_worktree_and_removes_it() {
+        let (_d, home) = home();
+        let repo = repo();
+        let dir = worktree(&home, repo.path(), "t1");
+        archive(&home, repo.path(), "t1", Status::Done, |_| {});
+        std::fs::write(dir.join("left.txt"), "kept\n").unwrap();
+
+        let health = remove_clean_worktrees(&home, now());
+        assert_eq!(health.len(), 1);
+        assert!(health[0].message.contains("uncommitted changes"));
+        let fix = health[0].fix.clone().expect("a dirty worktree has a fix");
+        assert!(matches!(fix, Fix::CommitWorktree { .. }), "{fix:?}");
+        assert!(dir.exists(), "listing a fix removes nothing");
+        std::fs::write(home.health_file(), serde_json::to_string(&health).unwrap()).unwrap();
+
+        assert_eq!(apply_fixes(&home, Some(&fix)), Ok(1));
+
+        assert!(!dir.exists(), "the worktree is gone");
+        // What it held is on the task's own branch, not lost.
+        let shown = Command::new("git")
+            .args(["show", "--stat", "--oneline", "furmi/t1"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        let shown = String::from_utf8_lossy(&shown.stdout);
+        assert!(shown.contains("work left in the worktree of t1"), "{shown}");
+        assert!(shown.contains("left.txt"), "{shown}");
+    }
+
+    #[test]
+    fn the_summary_line_offers_to_delete_the_branches_it_leaves_out() {
+        let (_d, home) = home();
+        let repo = repo();
+        let total = MAX_SUGGESTIONS + 3;
+        for n in 0..total {
+            let id = format!("t{n:02}");
+            git_in(repo.path(), &["branch", &format!("furmi/{id}")]);
+            archive(&home, repo.path(), &id, Status::Done, |_| {});
+        }
+
+        let health = suggest_branch_deletions(&home, &Config::default());
+        assert_eq!(health.len(), MAX_SUGGESTIONS + 1);
+        let summary = health.last().unwrap();
+        assert!(
+            summary.message.contains("3 more merged furmi/* branches"),
+            "{}",
+            summary.message
+        );
+        let fix = summary.fix.clone().expect("the summary has a fix");
+        let Fix::DeleteBranches { branches } = &fix else {
+            panic!("unexpected fix: {fix:?}")
+        };
+        assert_eq!(branches.len(), 3);
+        std::fs::write(home.health_file(), serde_json::to_string(&health).unwrap()).unwrap();
+
+        assert_eq!(apply_fixes(&home, Some(&fix)), Ok(1));
+
+        let listed = Command::new("git")
+            .args(["branch", "--list", "furmi/*"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        let listed = String::from_utf8_lossy(&listed.stdout);
+        for b in branches {
+            assert!(!listed.contains(&b.branch), "{} should be gone", b.branch);
+        }
+        // The ones with a row of their own are left to their own button.
+        assert!(listed.contains("furmi/t00"), "{listed}");
     }
 
     #[test]

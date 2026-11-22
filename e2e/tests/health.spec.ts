@@ -84,3 +84,85 @@ test("the banner's buttons fix the item they belong to", async ({ page, forge })
   expect(branches).toBe("");
   expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual([]);
 });
+
+test("a dirty worktree and a hidden pile of branches have buttons too", async ({
+  page,
+  forge,
+}) => {
+  // A done task whose worktree still holds work.
+  forge.add("left-work", "echo hi");
+  const archived = path.join(forge.home, "archive", "left-work.md");
+  fs.writeFileSync(
+    archived,
+    fs
+      .readFileSync(forge.taskFile("left-work")!, "utf8")
+      .replace(/^status: .*$/m, "status: done"),
+  );
+  fs.rmSync(forge.taskFile("left-work")!);
+  const dir = path.join(forge.home, "worktrees", "left-work");
+  execFileSync("git", ["worktree", "add", "-q", "-b", "furmi/left-work", dir], {
+    cwd: forge.repo,
+  });
+  fs.writeFileSync(path.join(dir, "left.txt"), "kept\n");
+
+  // Two merged branches the banner only summarises.
+  for (const branch of ["furmi/a", "furmi/b"]) {
+    execFileSync("git", ["branch", branch], { cwd: forge.repo });
+  }
+
+  const file = path.join(forge.home, "health.json");
+  fs.writeFileSync(
+    file,
+    JSON.stringify([
+      {
+        level: "warn",
+        message: "left-work is done but its worktree has uncommitted changes, so it was kept",
+        fix: { kind: "commit_worktree", id: "left-work", dir },
+      },
+      {
+        level: "info",
+        message: "...and 2 more merged furmi/* branches",
+        fix: {
+          kind: "delete_branches",
+          branches: [
+            { repo: forge.repo, branch: "furmi/a" },
+            { repo: forge.repo, branch: "furmi/b" },
+          ],
+        },
+      },
+    ]),
+  );
+
+  await openDashboard(page, forge);
+  const banner = page.locator("#health");
+  await banner.locator("summary").click();
+  await expect(banner.locator("li").nth(0).getByRole("button")).toHaveText(
+    "Commit and remove",
+  );
+  await expect(banner.locator("li").nth(1).getByRole("button")).toHaveText(
+    "Delete all merged",
+  );
+
+  // The work is committed on the task's branch before the worktree goes.
+  await banner
+    .locator("li")
+    .nth(0)
+    .getByRole("button", { name: "Commit and remove" })
+    .click();
+  await expect(page.locator("#toast")).toHaveText("Fixed");
+  expect(fs.existsSync(dir)).toBe(false);
+  const shown = execFileSync("git", ["show", "--stat", "furmi/left-work"], {
+    cwd: forge.repo,
+  }).toString();
+  expect(shown).toContain("work left in the worktree of left-work");
+  expect(shown).toContain("left.txt");
+
+  await banner.getByRole("button", { name: "Delete all merged" }).click();
+  await expect(banner).toBeHidden();
+  const branches = execFileSync("git", ["branch", "--list", "furmi/*"], {
+    cwd: forge.repo,
+  }).toString();
+  expect(branches).toContain("furmi/left-work");
+  expect(branches).not.toContain("furmi/a");
+  expect(branches).not.toContain("furmi/b");
+});
