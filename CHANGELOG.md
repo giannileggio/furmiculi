@@ -6,6 +6,8 @@ lists what changed between them.
 
 ## Unreleased
 
+## 0.9.0
+
 Dependencies
 
 - Durations (`5m` in config.toml, `1h 30m` in a message, `--retry-delay 30s`)
