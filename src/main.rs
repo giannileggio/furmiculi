@@ -289,6 +289,11 @@ enum Command {
     },
     /// Check that tasks can run here: tools, config, agents, task files.
     Doctor,
+    /// Rewrite the files furmi owns in the home (FORMAT.md and the
+    /// `furmi-tasks` skill) from this binary, for the ones the home has.
+    /// Hidden: `furmi update` runs it through the release it just installed.
+    #[command(hide = true)]
+    RefreshFiles,
     /// Print systemd or launchd units that keep `furmi run` and the dashboard
     /// (`furmi web`) running.
     Service {
@@ -340,7 +345,13 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     };
     // No point nagging about a new release in the command that installs one.
-    if !matches!(command, Command::Exec { .. } | Command::Update { .. }) {
+    if !matches!(
+        command,
+        // No point nagging about a new release in the command that installs one,
+        // or in the one it runs straight after: both would name the release
+        // just installed as newer than this one.
+        Command::Exec { .. } | Command::Update { .. } | Command::RefreshFiles
+    ) {
         update_check::check(&home);
     }
     // Commands that make sense on a fresh machine set it up themselves.
@@ -461,6 +472,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             update::update(&home, update::UpdateArgs { check, to, restart })?
         }
         Command::Doctor => return doctor::doctor(&home),
+        Command::RefreshFiles => skill::refresh_generated(&home)?,
         Command::Service { manager } => doctor::service(&home, manager)?,
         Command::Exec { id, status_file } => return run::exec(&home, &id, &status_file),
     }

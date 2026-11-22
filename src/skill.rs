@@ -63,6 +63,25 @@ pub fn install_in_home(home: &Home) -> Result<()> {
     Ok(())
 }
 
+/// Rewrites the files furmi owns in the home — FORMAT.md and the skill — to
+/// match this binary, leaving a home that never had them alone: they only
+/// exist after `furmi init`, and `furmi update` isn't the place to make one.
+///
+/// `furmi update` runs this through the release it just installed, because the
+/// binary doing the update still carries the old copies. The global
+/// `~/.agents/skills/furmi-tasks` link points at this file, so it follows.
+pub fn refresh_generated(home: &Home) -> Result<()> {
+    let format = home.root().join("FORMAT.md");
+    if format.exists() {
+        overwrite(&format, &format!("{GENERATED}{FORMAT_MD}"))?;
+    }
+    let skill = home.skill_dir().join("SKILL.md");
+    if skill.exists() {
+        overwrite(&skill, &render_skill(home))?;
+    }
+    Ok(())
+}
+
 /// Where the global skill links go: `~/.agents/skills`, plus the folder of
 /// each agent that has its own and is set up on this machine.
 fn global_links() -> Result<Vec<PathBuf>> {
@@ -252,6 +271,30 @@ mod tests {
                 "@AGENTS.md\n"
             );
         }
+    }
+
+    #[test]
+    fn a_refresh_rewrites_only_the_files_the_home_already_has() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::resolve(Some(dir.path().to_path_buf())).unwrap();
+
+        // A home furmi never set up is not set up by a refresh.
+        refresh_generated(&home).unwrap();
+        assert!(!home.root().join("FORMAT.md").exists());
+        assert!(!home.skill_dir().exists());
+
+        install_in_home(&home).unwrap();
+        let skill = std::fs::read_to_string(home.skill_dir().join("SKILL.md")).unwrap();
+        std::fs::write(home.skill_dir().join("SKILL.md"), "stale").unwrap();
+        std::fs::write(home.root().join("FORMAT.md"), "stale").unwrap();
+
+        refresh_generated(&home).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.skill_dir().join("SKILL.md")).unwrap(),
+            skill
+        );
+        let format = std::fs::read_to_string(home.root().join("FORMAT.md")).unwrap();
+        assert!(format.starts_with(GENERATED) && format.contains(FORMAT_MD.trim()));
     }
 
     #[test]

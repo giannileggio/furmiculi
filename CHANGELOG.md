@@ -6,6 +6,17 @@ lists what changed between them.
 
 ## Unreleased
 
+Command line
+
+- `furmi update` also rewrites the files furmi owns in the home — `FORMAT.md`
+  and the `furmi-tasks` skill — with the release it just installed, so an
+  agent's copy of the instructions catches up with the binary instead of
+  describing the one it replaced. It runs through the new binary (the one doing
+  the update still carries the old copies), the global
+  `~/.agents/skills/furmi-tasks` link follows on its own, and a home that never
+  had these files is left alone. A refresh that fails says so without failing
+  the update.
+
 ## 0.9.0
 
 Dependencies
