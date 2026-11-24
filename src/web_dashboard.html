@@ -3070,6 +3070,9 @@ function renderHealth(items) {
   if (key === healthShown) return;
   healthShown = key;
   const box = document.getElementById("health");
+  // Redrawn from scratch below: remember whether the list was open, so it
+  // doesn't snap shut under the pointer after a fix.
+  const wasOpen = box.querySelector("details")?.open ?? false;
   box.hidden = items.length === 0;
   box.classList.toggle("bad", items.some(h => h.level === "fail"));
   const problems = items.filter(h => h.level !== "info").length;
@@ -3086,6 +3089,8 @@ function renderHealth(items) {
       (h.fix ? `<button class="fix" data-fix="${i}">${FIX_LABELS[h.fix.kind] || "Fix"}</button>` : "") +
       `${h.command ? `<code>${escapeHtml(h.command)}</code>` : ""}</li>`).join("") +
     "</ul></details>";
+  const details = box.querySelector("details");
+  if (details) details.open = wasOpen;
   box.onclick = async e => {
     const one = e.target.closest("[data-fix]"), all = e.target.closest("[data-fix-all]");
     if (!one && !all) return;
@@ -3099,7 +3104,12 @@ function renderHealth(items) {
     refresh();
   };
 }
-const FIX_LABELS = { retry: "Retry", delete_branch: "Delete branch" };
+const FIX_LABELS = {
+  retry: "Retry",
+  delete_branch: "Delete branch",
+  delete_branches: "Delete all merged",
+  commit_worktree: "Commit and remove",
+};
 
 // A banner only when something needs attention; the full list is one click away.
 async function checkSetupQuietly() {
