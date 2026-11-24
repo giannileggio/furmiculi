@@ -281,6 +281,13 @@ it asks systemd or launchd to restart them instead. The dashboard header shows
 the version serving the page, with each online machine's beside its name in the
 sidebar, and a page left open across an upgrade offers a reload.
 
+The update also rewrites the files furmi owns in the home folder — `FORMAT.md`
+and the `furmi-tasks` skill under `.agents/skills/` — with the release it just
+installed, so an agent's copy of the instructions catches up with the binary.
+The global `~/.agents/skills/furmi-tasks` link points at those files, so it
+follows on its own. A home that never had them (`furmi init` was never run) is
+left as it is, and a refresh that fails says so without failing the update.
+
 The runner also tidies up after itself, when it starts and then every hour:
 
 - **Done on its own, and logged to `runner.log`:** it removes the worktree of a

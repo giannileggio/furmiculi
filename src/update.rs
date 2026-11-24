@@ -125,7 +125,29 @@ pub fn update(home: &Home, args: UpdateArgs) -> Result<()> {
         return check(&mut updater);
     }
     let installed = install(&mut updater)?;
+    refresh_generated_files(home);
     after_install(home, &installed, args.restart)
+}
+
+/// Rewrites FORMAT.md and the `furmi-tasks` skill through the binary that was
+/// just installed: this process still carries the old copies, so writing them
+/// here would put the stale ones back. A failure is said out loud and doesn't
+/// fail the update — the binary itself is in place.
+fn refresh_generated_files(home: &Home) {
+    let refresh = || -> Result<()> {
+        let status = std::process::Command::new(crate::exe::path()?)
+            .arg("--home")
+            .arg(home.root())
+            .arg("refresh-files")
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("`furmi refresh-files` failed ({status})");
+        }
+        Ok(())
+    };
+    if let Err(e) = refresh() {
+        println!("Couldn't update FORMAT.md and the skill: {e:#}");
+    }
 }
 
 /// An updater that knows its install, or the reason it doesn't.
