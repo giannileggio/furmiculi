@@ -165,11 +165,14 @@ fn commit_then_remove(home: &Home, id: &str, dir: &Path) -> anyhow::Result<()> {
 /// Runs the fix of one health item (`only`), or of every item that has one
 /// (`None`). A fix is run only if the last pass offered it, so the endpoint
 /// can't be used to delete an arbitrary branch. Fixed items leave the list at
-/// once; the next pass rebuilds it. Returns how many were fixed, or the errors.
+/// once; after a branch is deleted the remaining suggestions are scanned
+/// again, so the "...and N more" line can't outlive the rows it stood in for.
+/// Returns how many were fixed, or the errors.
 pub fn apply_fixes(home: &Home, only: Option<&Fix>) -> Result<usize, Vec<String>> {
     let mut health = load_health(home);
     let mut errors = Vec::new();
     let mut fixed = 0;
+    let mut branch_deleted = false;
     health.retain(|h| {
         let Some(fix) = &h.fix else { return true };
         if only.is_some_and(|o| o != fix) {
@@ -178,6 +181,8 @@ pub fn apply_fixes(home: &Home, only: Option<&Fix>) -> Result<usize, Vec<String>
         match fix.apply(home) {
             Ok(()) => {
                 log(&format!("housekeeping: fixed from the dashboard: {fix:?}"));
+                branch_deleted |=
+                    matches!(fix, Fix::DeleteBranch { .. } | Fix::DeleteBranches { .. });
                 fixed += 1;
                 false
             }
@@ -190,6 +195,9 @@ pub fn apply_fixes(home: &Home, only: Option<&Fix>) -> Result<usize, Vec<String>
     if only.is_some() && fixed == 0 && errors.is_empty() {
         errors.push("that is no longer on the list".into());
     }
+    if branch_deleted {
+        health = refreshed_suggestions(home, health);
+    }
     let _ = fsutil::write_atomic(
         &home.health_file(),
         serde_json::to_string(&health).unwrap_or_else(|_| "[]".into()),
@@ -199,6 +207,28 @@ pub fn apply_fixes(home: &Home, only: Option<&Fix>) -> Result<usize, Vec<String>
     } else {
         Err(errors)
     }
+}
+
+/// The list with its branch suggestions scanned again. They're the only rows
+/// that come in a capped, summarised batch: after a fix, the branches the
+/// "...and N more" line stood for are the next ones due a row and a button of
+/// their own, and leaving the fixed pass's rows in place would offer work
+/// already done. Everything else in the list is left as the pass wrote it,
+/// which is what `furmi doctor` and the worktree warnings are about.
+fn refreshed_suggestions(home: &Home, health: Vec<Health>) -> Vec<Health> {
+    let mut out: Vec<Health> = health
+        .into_iter()
+        .filter(|h| {
+            !matches!(
+                &h.fix,
+                Some(Fix::DeleteBranch { .. } | Fix::DeleteBranches { .. })
+            )
+        })
+        .collect();
+    if let Ok(config) = Config::load(&home.config_path()) {
+        out.extend(suggest_branch_deletions(home, &config));
+    }
+    out
 }
 
 /// Reads the last pass's health list (empty if there is none).
@@ -1029,6 +1059,39 @@ mod tests {
         }
         // The ones with a row of their own are left to their own button.
         assert!(listed.contains("furmi/t00"), "{listed}");
+    }
+
+    #[test]
+    fn a_fix_rescans_the_suggestions_so_the_summary_does_not_linger() {
+        let (_d, home) = home();
+        let repo = repo();
+        // One more than the cap: 20 rows, and a summary standing in for the last.
+        for n in 0..=MAX_SUGGESTIONS {
+            let id = format!("t{n:02}");
+            git_in(repo.path(), &["branch", &format!("furmi/{id}")]);
+            archive(&home, repo.path(), &id, Status::Done, |_| {});
+        }
+        let health = suggest_branch_deletions(&home, &Config::default());
+        assert_eq!(health.len(), MAX_SUGGESTIONS + 1);
+        std::fs::write(home.health_file(), serde_json::to_string(&health).unwrap()).unwrap();
+
+        let one = health[0].fix.clone().unwrap();
+        assert_eq!(apply_fixes(&home, Some(&one)), Ok(1));
+
+        // The branch the summary hid has a row of its own now, and there is
+        // nothing left to summarise.
+        let after = load_health(&home);
+        assert_eq!(after.len(), MAX_SUGGESTIONS);
+        assert!(
+            after.iter().all(|h| !h.message.contains("more merged")),
+            "{after:?}"
+        );
+        assert!(
+            after
+                .iter()
+                .all(|h| matches!(&h.fix, Some(Fix::DeleteBranch { .. }))),
+            "{after:?}"
+        );
     }
 
     #[test]
