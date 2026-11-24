@@ -773,10 +773,21 @@ mod tests {
         remove_worktree(&wt).unwrap();
         assert!(!wt.exists());
         assert!(branch_exists(repo.path(), "furmi/gone"));
+        // The list names the main checkout too, and a temporary directory can
+        // itself contain "wt": read the entries rather than the whole text.
+        let listed = git(repo.path(), &["worktree", "list", "--porcelain"]).unwrap();
+        let registered: Vec<&str> = listed
+            .lines()
+            .filter_map(|line| line.strip_prefix("worktree "))
+            .collect();
+        assert_eq!(
+            registered.len(),
+            1,
+            "only the main checkout is left:\n{listed}"
+        );
         assert!(
-            !git(repo.path(), &["worktree", "list"])
-                .unwrap()
-                .contains("wt")
+            !registered[0].ends_with("/wt"),
+            "the worktree is forgotten:\n{listed}"
         );
     }
 
