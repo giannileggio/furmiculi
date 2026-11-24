@@ -6,6 +6,8 @@ lists what changed between them.
 
 ## Unreleased
 
+## 0.10.0
+
 Dashboard
 
 - The housekeeping banner can fix the two things it could only report. A done
