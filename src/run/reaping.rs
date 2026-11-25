@@ -199,14 +199,23 @@ const TRANSIENT_MARKERS: &[&str] = &[
     "too many requests",
     "overloaded",
     "try again",
+    "retry shortly",
     "temporarily",
     "timed out",
     "timeout",
     "service unavailable",
     "capacity",
+    "prefill_cap_refused",
+    "connection error",
 ];
 
 fn is_transient(line: &str) -> bool {
+    if let Some(code) = status_code(line) {
+        // 429 is a rate limit, 408 a timeout, 5xx the provider's own trouble:
+        // all of them can clear up on their own. 400, 401, 402, 403 and 404
+        // cannot — the same request would be refused the same way.
+        return code == 408 || code == 429 || code >= 500;
+    }
     let lower = line.to_ascii_lowercase();
     TRANSIENT_MARKERS.iter().any(|m| lower.contains(m))
 }
@@ -223,22 +232,77 @@ const PROVIDER_ERROR_MARKERS: &[&str] = &[
     "invalid api key",
     "incorrect api key",
     "authentication_error",
+    "permission_error",
     "insufficient_quota",
     "insufficient quota",
+    "subscription is required",
+    "subscription required",
+    "no active subscription",
+    "not authenticated",
+    "unauthenticated",
+    "payment required",
     "model not found",
     "unknown model",
     "no such model",
 ];
 
+/// The HTTP status an agent printed at the start of a line, if any: pi's JSON
+/// mode reports a provider failure as `403: {"type":"permission_error",…}`.
+/// Only the start of the line counts, so an agent *writing about* a 403 (in a
+/// report, or in code it is fixing) is not mistaken for one.
+fn status_code(line: &str) -> Option<u16> {
+    let rest = line.trim_start();
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.len() != 3 {
+        return None;
+    }
+    let after = rest[3..].chars().next()?;
+    if !(after == ':' || after.is_ascii_whitespace()) {
+        return None;
+    }
+    let code: u16 = digits.parse().ok()?;
+    (400..=599).contains(&code).then_some(code)
+}
+
+/// The provider's own words from a line: pi's JSON mode puts the failure in
+/// an `errorMessage` field, and putting the whole JSON envelope in the task
+/// file would bury the one sentence that matters. Any other line is returned
+/// as it is.
+fn error_text(line: &str) -> String {
+    const KEY: &str = "\"errorMessage\":\"";
+    let Some(start) = line.find(KEY) else {
+        return line.trim().to_string();
+    };
+    let rest = &line[start + KEY.len()..];
+    // The value ends at the first unescaped quote.
+    let mut escaped = false;
+    let mut end = rest.len();
+    for (i, c) in rest.char_indices() {
+        match (escaped, c) {
+            (false, '\\') => escaped = true,
+            (false, '"') => {
+                end = i;
+                break;
+            }
+            _ => escaped = false,
+        }
+    }
+    rest[..end]
+        .replace("\\\"", "\"")
+        .replace("\\\\", "\\")
+        .trim()
+        .to_string()
+}
+
 /// The first provider-error line in `text`, with terminal escapes removed.
 fn provider_error_line(text: &str) -> Option<String> {
-    text.lines().find_map(|line| {
-        let line = strip_ansi(line);
+    text.lines().find_map(|raw| {
+        let line = strip_ansi(raw);
+        let message = error_text(&line);
         let lower = line.to_ascii_lowercase();
-        PROVIDER_ERROR_MARKERS
-            .iter()
-            .any(|m| lower.contains(m))
-            .then(|| line.trim().to_string())
+        (status_code(&message).is_some()
+            || PROVIDER_ERROR_MARKERS.iter().any(|m| lower.contains(m)))
+        .then(|| message.trim().to_string())
     })
 }
 
@@ -379,6 +443,57 @@ mod tests {
     fn no_provider_error_in_ordinary_output() {
         assert!(provider_error_line("all good\nwrote 3 files\n").is_none());
         assert!(provider_error_line("model = \"gpt\"\n").is_none());
+        // An agent that writes *about* a status is not reporting one.
+        assert!(provider_error_line("the page answered with HTTP 403 for /admin\n").is_none());
+    }
+
+    #[test]
+    fn the_subscription_rejection_is_permanent_and_readable() {
+        // Exactly what pi records when the OpenCode Go subscription lapses:
+        // the whole fleet of scheduled runs failed on this for 22 hours and
+        // the archive only said "exited with status 1".
+        let log = concat!(
+            r#"{"type":"message_end","message":{"role":"assistant","#,
+            r#""errorMessage":"403: {\"type\":\"permission_error\",\"message\":\"#,
+            r#"An active OpenCode Go subscription is required to use OpenCode Go models.\"}"}}"#,
+            "\n",
+        );
+        let line = provider_error_line(log).unwrap();
+        assert!(line.starts_with("403: "), "{line}");
+        assert!(line.contains("subscription is required"), "{line}");
+        assert!(
+            !line.contains("message_end"),
+            "the envelope is not the message: {line}"
+        );
+        assert!(
+            !is_transient(&line),
+            "a lapsed subscription will not fix itself"
+        );
+    }
+
+    #[test]
+    fn an_overloaded_provider_is_transient() {
+        let log = concat!(
+            r#"429: {"type":"server_error","message":"Upstream request failed: "#,
+            r#"[overloaded] the server is overloaded; retry shortly"}"#,
+            "\n",
+        );
+        let line = provider_error_line(log).unwrap();
+        assert!(is_transient(&line), "{line}");
+        assert!(is_transient("503: service unavailable"));
+        assert!(is_transient("408: request timeout"));
+        assert!(!is_transient("401: unauthorized"));
+        assert!(!is_transient("400: bad request"));
+    }
+
+    #[test]
+    fn a_status_only_counts_at_the_start_of_a_line() {
+        assert_eq!(status_code("403: {}"), Some(403));
+        assert_eq!(status_code("  429 too many requests"), Some(429));
+        assert_eq!(status_code("200 ok"), None);
+        assert_eq!(status_code("got 403: nope"), None);
+        assert_eq!(status_code("4030: weird"), None);
+        assert_eq!(status_code("403"), None);
     }
     #[test]
     fn strips_common_escape_sequences() {

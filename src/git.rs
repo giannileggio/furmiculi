@@ -491,23 +491,34 @@ pub fn on_finish(action: OnFinish, dir: &Path, id: &str, prompt: &str) -> Result
     if action == OnFinish::None {
         return Ok(());
     }
-    // A task can legitimately change nothing ("remove the watermark if
-    // there is one"). There is then no branch to push and nothing to open a
-    // PR for: `gh pr create` would fail with "No commits between ...",
-    // turning a successful run into a failed one. Nothing to do is success.
     let message = commit_message(id, prompt);
-    if !commit_all(dir, &message)? {
-        return Ok(());
-    }
+    let committed = commit_all(dir, &message)?;
     if action == OnFinish::Commit {
         return Ok(());
     }
-    run(
-        "git",
-        dir,
-        &["push", "-u", "origin", "HEAD"],
-        NETWORK_TIMEOUT,
-    )?;
+    // `commit_all` returning false says only that *this* step had nothing to
+    // commit. The agent may have committed its own work, and for `push` and
+    // `pr` that commit is exactly the work that has to land: pushing only when
+    // we happened to make the commit left finished tasks with a local branch
+    // and no PR, and the task still recorded as done.
+    if !(committed || has_work_of_its_own(dir)?) {
+        // A task can legitimately change nothing ("remove the watermark if
+        // there is one"). There is then nothing to push and no PR to open:
+        // `gh pr create` would fail with "No commits between ...", turning a
+        // successful run into a failed one.
+        return Ok(());
+    }
+    // With no remote and nothing committed by this step there is nowhere to
+    // land anything; with a commit of its own the push still runs, so a
+    // repository that has nowhere to push says so instead of going quiet.
+    if has_remote(dir)? || committed {
+        run(
+            "git",
+            dir,
+            &["push", "-u", "origin", "HEAD"],
+            NETWORK_TIMEOUT,
+        )?;
+    }
     if action == OnFinish::Pr {
         // The push may have worked on an earlier attempt whose `gh` call
         // then failed: don't open a second PR for the same branch. But a
@@ -529,13 +540,31 @@ pub fn on_finish(action: OnFinish, dir: &Path, id: &str, prompt: &str) -> Result
     Ok(())
 }
 
-/// Whether the current branch already has an open PR whose head is the
-/// branch's current commit, so a second one must not be opened. `gh pr
-/// view` alone is not enough: it also succeeds for a stale `furmi/<id>`
-/// branch from an earlier task, whose PR may be closed or point at an
-/// older commit — neither covers this run's work. `gh` failing to answer
-/// (e.g. no PR for the branch at all) counts as no covering PR; the
-/// `pr create` that follows then reports the real problem, if any.
+/// Whether `dir` has any remote configured at all, so `push` means something.
+fn has_remote(dir: &Path) -> Result<bool> {
+    Ok(!git(dir, &["remote"])?.trim().is_empty())
+}
+
+/// Whether the branch in `dir` holds a commit of its own: work a `push` or a
+/// `pr` still has to land. A task's branch starts from the repository's main
+/// branch, so a commit there and not on main is the task's — whether this step
+/// made it or the agent did. Without a main branch to compare against, fall
+/// back to the commits no remote has.
+fn has_work_of_its_own(dir: &Path) -> Result<bool> {
+    let range = match main_branch(dir) {
+        Some(base) => format!("{base}..HEAD"),
+        // `HEAD` first, then `--not --remotes`: the other way round the
+        // negation would swallow `HEAD` and the answer would always be zero.
+        None => String::from("HEAD --not --remotes"),
+    };
+    let count = if range.contains(' ') {
+        git(dir, &["rev-list", "--count", "HEAD", "--not", "--remotes"])?
+    } else {
+        git(dir, &["rev-list", "--count", &range])?
+    };
+    Ok(count.trim() != "0")
+}
+
 /// Whether the branch in `dir` has been pushed with commits of its own: the
 /// cheap local test for "there may be a pull request to ask about".
 pub fn has_commits_ahead(dir: &Path) -> bool {
@@ -901,6 +930,59 @@ mod tests {
         assert_eq!(
             git(p, &["rev-list", "--count", "HEAD"]).unwrap().trim(),
             "1"
+        );
+    }
+
+    /// A repo with a bare `origin`, and a task worktree branched off it.
+    fn repo_with_origin() -> (tempfile::TempDir, tempfile::TempDir) {
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q", "--bare", "-b", "main"]).unwrap();
+        let repo = repo();
+        let p = repo.path();
+        git(
+            p,
+            &["remote", "add", "origin", origin.path().to_str().unwrap()],
+        )
+        .unwrap();
+        git(p, &["push", "-q", "-u", "origin", "main"]).unwrap();
+        (repo, origin)
+    }
+
+    #[test]
+    fn a_commit_the_agent_made_itself_is_still_pushed() {
+        // The agent finishes its own work and commits it, so `on_finish` has
+        // nothing left to commit. The branch must still be pushed: for `push`
+        // and `pr` landing the work is the whole point, and a task marked done
+        // whose branch never left the machine is a lie.
+        let (repo, origin) = repo_with_origin();
+        let wt = repo.path().join("wt");
+        ensure_worktree(repo.path(), &wt, "furmi/landed").unwrap();
+        std::fs::write(wt.join("done.txt"), "x").unwrap();
+        git(&wt, &["add", "-A"]).unwrap();
+        git(&wt, &["commit", "-q", "-m", "the agent's own commit"]).unwrap();
+
+        on_finish(OnFinish::Push, &wt, "t", "Do the thing").unwrap();
+
+        let pushed = git(origin.path(), &["log", "--format=%s", "furmi/landed"]).unwrap();
+        assert!(
+            pushed.contains("the agent's own commit"),
+            "origin has the branch:\n{pushed}"
+        );
+    }
+
+    #[test]
+    fn a_clean_tree_with_nothing_to_push_does_not_call_push() {
+        // Nothing committed and the branch already on the remote: no push, no
+        // failure, even though a push of nothing would be harmless.
+        let (repo, origin) = repo_with_origin();
+        let wt = repo.path().join("wt");
+        ensure_worktree(repo.path(), &wt, "furmi/quiet").unwrap();
+        git(&wt, &["push", "-q", "-u", "origin", "HEAD"]).unwrap();
+        on_finish(OnFinish::Push, &wt, "t", "Nothing to do").unwrap();
+        assert!(
+            git(origin.path(), &["log", "--format=%s", "furmi/quiet"])
+                .unwrap()
+                .contains("init")
         );
     }
 
