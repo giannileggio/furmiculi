@@ -611,6 +611,7 @@
   <div class="runner-pill" id="runner"></div>
   <span class="spacer"></span>
   <button class="ghost" id="setup-open" title="Pick and install your coding agent, and check that tmux and git are set up">Setup</button>
+  <button class="ghost" id="prompt-copy" title="Copy a ready-to-paste prompt about what's on screen, for a coding agent to fix (p)">Copy prompt</button>
   <button class="ghost" id="theme-toggle" title="Light, dark, or whatever this computer is set to">Auto</button>
   <button class="ghost" id="keys-open" title="Keyboard shortcuts (?)">?</button>
   <button class="primary" id="new-task-open" title="Queue a task, or repeat one on a schedule (n)">+ New task</button>
@@ -955,6 +956,7 @@
       <li class="k"><kbd>k</kbd><kbd>j</kbd></li><li>Move up and down the table</li>
       <li class="k"><kbd>Enter</kbd></li><li>Open the highlighted task</li>
       <li class="k"><kbd>o</kbd></li><li>Show what the agent printed</li>
+      <li class="k"><kbd>p</kbd></li><li>Copy a prompt about what's on screen, for a coding agent</li>
       <li class="k"><kbd>n</kbd></li><li>New task</li>
       <li class="k"><kbd>x</kbd></li><li>Select several rows</li>
       <li class="k"><kbd>Esc</kbd></li><li>Close what's open, or clear the search</li>
@@ -3040,10 +3042,103 @@ function renderAgents(agents) {
     : "Run an install command in a terminal (it needs Node.js), then run the agent once there to sign in. This page notices when it's installed.";
 }
 
-async function copyText(text) {
-  try { await navigator.clipboard.writeText(text); toast("Copied", true); }
-  catch (e) { toast("Couldn't copy: select the command and copy it by hand"); }
+async function copyText(text, msg = "Copied") {
+  try { await navigator.clipboard.writeText(text); toast(msg, true); }
+  catch (e) { toast("Couldn't copy: select the text and copy it by hand"); }
 }
+
+// ---- A prompt to paste into a coding agent
+//
+// The person is looking at something on this page; the agent they paste into
+// can't see it. So the page says it in words: the version, the home, the
+// runner, the open list and the task in focus. Everything comes from what the
+// page already holds (no fetch for this), and nothing secret goes in: not the
+// dashboard's token, nothing out of secrets/.
+const PROMPT_LOG_LINES = 60;
+
+// A log as plain text. An agent's tools print escape codes and carriage
+// returns that mean something on a terminal and only get in the way of a
+// prompt.
+function plainLog(text) {
+  return text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")
+    .replace(/\r\n/g, "\n").split("\n")
+    .map(l => l.slice(l.lastIndexOf("\r") + 1)).join("\n");
+}
+
+// A fence longer than any run of backticks in the text: an agent's own output
+// can hold a code block, and that must not close this one early.
+function logFence(text) {
+  const runs = text.match(/`{3,}/g) || [];
+  return "`".repeat(1 + Math.max(2, ...runs.map(r => r.length)));
+}
+
+// One task as the page knows it. `tail` is what the log drawer holds, passed
+// only when the drawer is showing this task.
+function promptTask(row, tail) {
+  const agent = row.command ? "a command, not an agent"
+    : row.agent + (row.model && row.model !== "-" ? ` (model: ${row.model})` : "");
+  const out = [
+    `### ${row.id}`,
+    `- Status: ${STATUS_LABELS[row.status] || row.status} (${row.status})`,
+    `- Project: ${row.repo}`,
+    `- Branch: ${row.branch || "- none -"}`,
+    `- Agent: ${agent}`,
+    `- Error: ${row.error || "none reported"}`,
+  ].join("\n");
+  const text = tail ? plainLog(tail).replace(/\s+$/, "") : "";
+  if (text === "") return out;
+  const lines = text.split("\n");
+  const keep = lines.slice(-PROMPT_LOG_LINES);
+  const fence = logFence(text);
+  return `${out}\n\nIts log${keep.length < lines.length ? `, the last ${keep.length} lines` : ""}:\n` +
+    `${fence}text\n${keep.join("\n")}\n${fence}`;
+}
+
+function buildPrompt() {
+  const state = lastState;
+  const version = document.getElementById("version").textContent.trim();
+  // The same path the sidebar shows (draw() puts the state's home in #home).
+  const home = state ? state.home : document.getElementById("home").textContent.trim();
+  // The drawer is following one task; an open task view is the task that was
+  // clicked. Select mode is about the rows ticked, and only a task has a
+  // status and a log to talk about (a ticked schedule or template does not).
+  const focus = logsId || taskShown;
+  const one = focus ? taskRow(focus) : null;
+  const many = !one && selecting && picked.size > 0
+    ? (state ? allTasks(state) : []).filter(r => picked.has(r.id)) : [];
+  const runner = !state ? "not known yet"
+    : !state.runner.alive ? "off" : state.runner.paused ? "paused" : "on";
+  const narrowed = [
+    project ? `project ${project}` : "",
+    age === "any" ? "" : agePreset(age).phrase,
+    query ? `search “${query}”` : "",
+  ].filter(Boolean);
+  const view = activeView();
+  const parts = [
+    `# Help me fix something in furmi`,
+    "",
+    "furmi is a queue that hands coding tasks to a coding agent, one Markdown file per task. " +
+      "The code is this furmi checkout: the repo you're working in. The queue is not in it — it lives " +
+      `in the furmi home${home ? ` \`${home}\`` : ""}, which holds \`config.toml\`, \`tasks/\` (one file ` +
+      "per task), `schedules/`, `templates/` and `logs/` (one file per attempt, `logs/<id>.log`, and " +
+      "`logs/<id>.<n>.log` for older attempts). A task's error is the `error:` line in its task file; " +
+      "what it printed when it ran is in its log.",
+    "",
+    "Where I was:",
+    `- furmi ${version || "(version unknown)"}, served from ${location.host}`,
+    `- Runner: ${runner}`,
+    `- Looking at: ${view ? view.label : "tasks"}` + (narrowed.length ? ` (${narrowed.join(", ")})` : ""),
+  ];
+  // Only the one task the drawer is following has its log here and now; a
+  // ticked row's log would be another fetch, and this button fetches nothing.
+  if (one) parts.push("", promptTask(one, logsId === one.id && logsLoaded ? logsRaw : ""));
+  else if (many.length > 0) parts.push("", many.map(r => promptTask(r)).join("\n\n"));
+  parts.push("", "What went wrong:", "");
+  return parts.join("\n");
+}
+
+document.getElementById("prompt-copy")
+  .addEventListener("click", () => copyText(buildPrompt(), "Copied a prompt"));
 
 async function useAgent(name, btn) {
   btn.disabled = true;
@@ -3723,6 +3818,11 @@ document.addEventListener("keydown", (e) => {
     showTask(selected);
   } else if (e.key === "o" && selected) {
     showLogs(selected);
+  } else if (e.key === "p") {
+    // A key as well as the header's button: with a task view or a log open the
+    // drawer covers the header, and that is exactly where the person is when
+    // the prompt needs to carry a task and the end of its log.
+    copyText(buildPrompt(), "Copied a prompt");
   }
 });
 // Cmd/Ctrl+Enter submits from the prompt box.

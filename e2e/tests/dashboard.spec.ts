@@ -23,6 +23,17 @@ function finish(forge: Forge, id: string, extra: string[] = []) {
   fs.renameSync(from, to);
 }
 
+/**
+ * Moves a waiting task into the archive as a failed one, with the reason the
+ * runner would have written into its file. One attempt, so the log it printed
+ * is `logs/<id>.1.log`, the file the log drawer reads.
+ */
+function fail(forge: Forge, id: string, error: string) {
+  finish(forge, id, ["attempts: 1", `error: ${error}`]);
+  const file = path.join(forge.home, "archive", `${id}.md`);
+  fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace(/^status: .*$/m, "status: failed"));
+}
+
 test.describe("with the runner off", () => {
   test("a row carries the ask under the id, and the id copies from the row", async ({ page, forge }) => {
     forge.add("fix-login", "Fix the redirect loop after login, and add a test for it");
@@ -324,5 +335,58 @@ test.describe("with the runner off", () => {
     await expect(page.locator("#logs-body")).toContainText("last-line-of-the-log");
     await expect(page.locator("#logs-body")).not.toContainText("first-line-of-the-log");
     await expect(page.locator("#logs-cut")).toBeVisible();
+  });
+
+  test("Copy prompt hands an agent everything the page knows about a failed task", async ({
+    page,
+    forge,
+  }) => {
+    forge.add("fix-login", "Fix the redirect loop after login");
+    fail(forge, "fix-login", "exited with status 1");
+    const log = path.join(forge.home, "logs", "fix-login.1.log");
+    fs.mkdirSync(path.dirname(log), { recursive: true });
+    fs.writeFileSync(log, "why-it-failed: the login post returns 405\nlast-line-of-the-log\n");
+
+    await openDashboard(page, forge);
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.locator("#search").fill("login");
+
+    // From the header, over the list: the facts the page holds, and no task
+    // block, since nothing is in focus.
+    await page.locator("#prompt-copy").click();
+    await expect(page.locator("#toast")).toHaveText("Copied a prompt");
+    const list = await page.evaluate(() => navigator.clipboard.readText());
+    const version = await page.locator("#version").textContent();
+    expect(version).not.toBe("");
+    expect(list).toContain(version!);
+    expect(list).toContain("~/home"); // where the queue lives
+    expect(list).toContain("search “login”"); // what was narrowed
+    expect(list).not.toContain("### fix-login");
+    expect(list.trimEnd().endsWith("What went wrong:")).toBe(true);
+
+    // With the task and its log open, the prompt carries the task and the end
+    // of the log. The key, because an open drawer covers the header's button.
+    await tab(page, "archive").click();
+    await row(page, "fix-login").click();
+    await page.locator("#task-body").getByRole("button", { name: "Output" }).click();
+    await expect(page.locator("#logs-body")).toContainText("last-line-of-the-log");
+    await page.keyboard.press("p");
+    // The write is async: wait for the clipboard itself, not for the click.
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toContain("### fix-login");
+
+    const text = await page.evaluate(() => navigator.clipboard.readText());
+    expect(text).toContain(version!);
+    expect(text).toContain("### fix-login");
+    expect(text).toContain("exited with status 1");
+    // The task's repo reads with `~` for the fixture's $HOME, as every table does.
+    expect(text).toContain("~/repo");
+    expect(text).toContain("why-it-failed: the login post returns 405");
+    expect(text.trimEnd().endsWith("What went wrong:")).toBe(true);
+    // Nothing secret: the dashboard's own token stays out of it.
+    const token = await page.evaluate(() => TOKEN);
+    expect(token).not.toBe("");
+    expect(text).not.toContain(token);
   });
 });
