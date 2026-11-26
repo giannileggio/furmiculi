@@ -293,11 +293,18 @@ pub fn duplicate(home: &Home, id: &str, new_id: Option<String>) -> Result<String
 pub fn retry(home: &Home, id: &str) -> Result<()> {
     home.ensure_initialized()?;
     let _lock = home.lock()?;
-    retry_locked(home, id)
+    retry_locked_inner(home, id, true)
 }
 
 /// [`retry`] for a caller already holding `home.lock()`, which isn't reentrant.
 pub(crate) fn retry_locked(home: &Home, id: &str) -> Result<()> {
+    retry_locked_inner(home, id, false)
+}
+
+/// `reset_budget` is true for a manual retry: the task gets a fresh
+/// interruption/requeue budget, so old counters can't fail it again on the
+/// next attempt. Housekeeping keeps its own count, which is what caps it.
+fn retry_locked_inner(home: &Home, id: &str, reset_budget: bool) -> Result<()> {
     let (path, mut task) = find(home, id)?;
     if !matches!(
         task.status,
@@ -315,6 +322,10 @@ pub(crate) fn retry_locked(home: &Home, id: &str) -> Result<()> {
     task.exit_code = None;
     task.tmux_window = None;
     task.error = None;
+    if reset_budget {
+        task.interruptions = 0;
+        task.auto_requeues = 0;
+    }
     let dest = home.tasks().join(format!("{id}.md"));
     task.create(&dest)?;
     std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
@@ -518,6 +529,22 @@ mod tests {
         let (_, t) = find(&home, "t1").unwrap();
         assert_eq!((t.finished_at, t.error), (None, None));
         assert!(!home.archive().join("t1.md").exists());
+    }
+
+    #[test]
+    fn a_manual_retry_gets_a_fresh_budget() {
+        let (_d, home) = home();
+        put(home.archive(), "t1", Status::Failed);
+        let (path, mut t) = find(&home, "t1").unwrap();
+        t.interruptions = 5;
+        t.auto_requeues = 2;
+        t.save(&path).unwrap();
+
+        retry(&home, "t1").unwrap();
+
+        let (_, t) = find(&home, "t1").unwrap();
+        assert_eq!(t.status, Status::Pending);
+        assert_eq!((t.interruptions, t.auto_requeues), (0, 0));
     }
 
     #[test]
