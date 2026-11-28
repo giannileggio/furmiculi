@@ -491,23 +491,36 @@ pub fn on_finish(action: OnFinish, dir: &Path, id: &str, prompt: &str) -> Result
     if action == OnFinish::None {
         return Ok(());
     }
-    // A task can legitimately change nothing ("remove the watermark if
-    // there is one"). There is then no branch to push and nothing to open a
-    // PR for: `gh pr create` would fail with "No commits between ...",
-    // turning a successful run into a failed one. Nothing to do is success.
     let message = commit_message(id, prompt);
-    if !commit_all(dir, &message)? {
-        return Ok(());
-    }
+    let committed = commit_all(dir, &message)?;
     if action == OnFinish::Commit {
         return Ok(());
     }
-    run(
-        "git",
-        dir,
-        &["push", "-u", "origin", "HEAD"],
-        NETWORK_TIMEOUT,
-    )?;
+    // `commit_all` returning false says only that *this* step had nothing to
+    // commit. The agent may have committed its own work, and for `push` and
+    // `pr` that commit is exactly the work that has to land: pushing only when
+    // we happened to make the commit left finished tasks with a local branch
+    // and no PR, and the task still recorded as done.
+    let has_work = committed || has_work_of_its_own(dir)?;
+    if !has_work {
+        // A task can legitimately change nothing ("remove the watermark if
+        // there is one"). There is then nothing to push and no PR to open:
+        // `gh pr create` would fail with "No commits between ...", turning a
+        // successful run into a failed one.
+        return Ok(());
+    }
+    // A commit this step made is pushed even with no remote configured, so a
+    // repository that has nowhere to push says so instead of going quiet. An
+    // agent's own commit that a remote already has (a retried run whose push
+    // landed, whose `gh` call then failed) costs no network call.
+    if committed || has_remote(dir)? {
+        run(
+            "git",
+            dir,
+            &["push", "-u", "origin", "HEAD"],
+            NETWORK_TIMEOUT,
+        )?;
+    }
     if action == OnFinish::Pr {
         // The push may have worked on an earlier attempt whose `gh` call
         // then failed: don't open a second PR for the same branch. But a
@@ -529,13 +542,33 @@ pub fn on_finish(action: OnFinish, dir: &Path, id: &str, prompt: &str) -> Result
     Ok(())
 }
 
-/// Whether the current branch already has an open PR whose head is the
-/// branch's current commit, so a second one must not be opened. `gh pr
-/// view` alone is not enough: it also succeeds for a stale `furmi/<id>`
-/// branch from an earlier task, whose PR may be closed or point at an
-/// older commit — neither covers this run's work. `gh` failing to answer
-/// (e.g. no PR for the branch at all) counts as no covering PR; the
-/// `pr create` that follows then reports the real problem, if any.
+/// Whether `dir` has any remote configured at all, so `push` means something.
+fn has_remote(dir: &Path) -> Result<bool> {
+    Ok(!git(dir, &["remote"])?.trim().is_empty())
+}
+
+/// Whether the branch in `dir` holds a commit no remote has: work a `push` or
+/// a `pr` still has to land. A task's branch starts from the repository's main
+/// branch, so a commit there is the task's — whether this step made it or the
+/// agent did — but a commit the remote already has is not work left to do,
+/// however far ahead of a stale local `main` it sits.
+fn has_work_of_its_own(dir: &Path) -> Result<bool> {
+    let count = match main_branch(dir) {
+        Some(base) => git(
+            dir,
+            &[
+                "rev-list",
+                "--count",
+                &format!("{base}..HEAD"),
+                "--not",
+                "--remotes",
+            ],
+        )?,
+        None => git(dir, &["rev-list", "--count", "HEAD", "--not", "--remotes"])?,
+    };
+    Ok(count.trim() != "0")
+}
+
 /// Whether the branch in `dir` has been pushed with commits of its own: the
 /// cheap local test for "there may be a pull request to ask about".
 pub fn has_commits_ahead(dir: &Path) -> bool {
@@ -902,6 +935,84 @@ mod tests {
             git(p, &["rev-list", "--count", "HEAD"]).unwrap().trim(),
             "1"
         );
+    }
+
+    /// A repo with a bare `origin`, and a task worktree branched off it.
+    fn repo_with_origin() -> (tempfile::TempDir, tempfile::TempDir) {
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q", "--bare", "-b", "main"]).unwrap();
+        let repo = repo();
+        let p = repo.path();
+        git(
+            p,
+            &["remote", "add", "origin", origin.path().to_str().unwrap()],
+        )
+        .unwrap();
+        git(p, &["push", "-q", "-u", "origin", "main"]).unwrap();
+        (repo, origin)
+    }
+
+    #[test]
+    fn a_commit_the_agent_made_itself_is_still_pushed() {
+        // The agent finishes its own work and commits it, so `on_finish` has
+        // nothing left to commit. The branch must still be pushed: for `push`
+        // and `pr` landing the work is the whole point, and a task marked done
+        // whose branch never left the machine is a lie.
+        let (repo, origin) = repo_with_origin();
+        let wt = repo.path().join("wt");
+        ensure_worktree(repo.path(), &wt, "furmi/landed").unwrap();
+        std::fs::write(wt.join("done.txt"), "x").unwrap();
+        git(&wt, &["add", "-A"]).unwrap();
+        git(&wt, &["commit", "-q", "-m", "the agent's own commit"]).unwrap();
+
+        on_finish(OnFinish::Push, &wt, "t", "Do the thing").unwrap();
+
+        let pushed = git(origin.path(), &["log", "--format=%s", "furmi/landed"]).unwrap();
+        assert!(
+            pushed.contains("the agent's own commit"),
+            "origin has the branch:\n{pushed}"
+        );
+    }
+
+    #[test]
+    fn a_run_whose_push_landed_does_not_push_again() {
+        // The push worked on an earlier attempt whose `gh` call then failed.
+        // The task is retried, finds nothing of its own to commit, and must
+        // not spend another network call: the origin is moved out of reach, so
+        // a push here fails the test.
+        let (repo, _origin) = repo_with_origin();
+        let wt = repo.path().join("wt");
+        ensure_worktree(repo.path(), &wt, "furmi/retried").unwrap();
+        std::fs::write(wt.join("done.txt"), "x").unwrap();
+        git(&wt, &["add", "-A"]).unwrap();
+        git(&wt, &["commit", "-q", "-m", "the agent's own commit"]).unwrap();
+        git(&wt, &["push", "-q", "-u", "origin", "HEAD"]).unwrap();
+
+        let gone = repo.path().join("gone-origin");
+        git(
+            &wt,
+            &["remote", "set-url", "origin", gone.to_str().unwrap()],
+        )
+        .unwrap();
+        on_finish(OnFinish::Push, &wt, "t", "Do the thing").unwrap();
+    }
+
+    #[test]
+    fn a_clean_tree_with_nothing_to_push_does_not_call_push() {
+        // Nothing committed and the branch already on the remote: no push, no
+        // failure, even though a push of nothing would be harmless. The origin
+        // is moved out of reach first, so a push that runs fails the test.
+        let (repo, _origin) = repo_with_origin();
+        let wt = repo.path().join("wt");
+        ensure_worktree(repo.path(), &wt, "furmi/quiet").unwrap();
+        git(&wt, &["push", "-q", "-u", "origin", "HEAD"]).unwrap();
+        let gone = repo.path().join("gone-origin");
+        git(
+            &wt,
+            &["remote", "set-url", "origin", gone.to_str().unwrap()],
+        )
+        .unwrap();
+        on_finish(OnFinish::Push, &wt, "t", "Nothing to do").unwrap();
     }
 
     #[test]
