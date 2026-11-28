@@ -255,6 +255,52 @@ fn validate_rejects_a_title_that_is_not_one_short_line() {
 }
 
 #[test]
+fn validate_and_doctor_refuse_a_headless_preset_that_drops_the_prompt() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init(home.path());
+    // A preset that runs something and never hands over the prompt: the task
+    // would exit 0 having read nothing, and archive as done.
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[defaults]\nagent = \"mute\"\nmode = \"headless\"\n\n\
+         [agents.mute]\nheadless = [\"sh\", \"-c\", \"exit 0\"]\ninteractive = [\"sh\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("tasks/mute.md"),
+        format!(
+            "---\nid: mute\nrepo: {}\nworktree: false\n---\n\nDo the thing.\n",
+            repo.path().display()
+        ),
+    )
+    .unwrap();
+
+    let out = failed(run(furmi(home.path()).args(["validate"])));
+    let report = stdout(&out);
+    assert!(
+        report.contains("`headless`") && report.contains("{prompt}"),
+        "{report}"
+    );
+
+    let report = stdout(&ok(run(furmi(home.path()).arg("doctor"))));
+    assert!(
+        report.contains("`headless`") && report.contains("{prompt}"),
+        "{report}"
+    );
+
+    // Reading the prompt from a file counts as carrying it, and then both pass.
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[defaults]\nagent = \"mute\"\nmode = \"headless\"\n\n\
+         [agents.mute]\nheadless = [\"sh\", \"-c\", \"claude -p < {prompt_file}\"]\ninteractive = [\"sh\"]\n",
+    )
+    .unwrap();
+    ok(run(furmi(home.path()).args(["validate"])));
+    ok(run(furmi(home.path()).arg("doctor")));
+}
+
+#[test]
 fn add_reads_the_prompt_from_stdin() {
     let home = tempfile::tempdir().unwrap();
     let repo = tempfile::tempdir().unwrap();

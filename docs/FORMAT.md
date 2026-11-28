@@ -344,7 +344,12 @@ models_cmd = ["aider", "--list-models"]  # optional: what the form offers
 ```
 
 `headless` and `interactive` are argv lists with `{prompt}` and `{id}`
-placeholders. No shell is involved, so prompts need no quoting. A task's
+placeholders. No shell is involved, so prompts need no quoting. A `headless`
+list has to carry the prompt, with `{prompt}` or `{prompt_file}` (a launcher
+that reads the prompt from a 0600 file): a headless run has no UI to type into,
+so a preset that names neither runs a task with no instructions. `furmi
+validate` reports it and exits non-zero, and `furmi doctor` warns. `interactive`
+may take none, because that agent opens a UI of its own. A task's
 `model` (else the agent's `model`) fills `{model}` in `model_args`; with
 neither, nothing is added and the agent picks its own model.
 

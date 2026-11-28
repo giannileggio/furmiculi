@@ -388,6 +388,17 @@ pub fn checks(home: &Home) -> Vec<Check> {
             None => {}
         }
     }
+    // Whether a headless run can hand the task's prompt to the agent at all.
+    let preset_problems = config.preset_problems();
+    if preset_problems.is_empty() {
+        add(Check::Ok(
+            "every agent preset is given the task's prompt".into(),
+        ));
+    } else {
+        for p in preset_problems {
+            add(Check::Warn(p));
+        }
+    }
     if wants_pr {
         if on_path("gh") {
             add(Check::Ok("gh is installed (for on_finish: pr)".into()));

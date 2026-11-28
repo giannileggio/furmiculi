@@ -924,6 +924,16 @@ pub fn validate(home: &Home, files: Vec<PathBuf>) -> Result<ExitCode> {
             }
         }
     }
+    // A preset that never carries the prompt breaks every headless task that
+    // names it, so it is reported from config.toml, not per file.
+    let presets = config.preset_problems();
+    if !presets.is_empty() {
+        failed += 1;
+        println!("error  {}", contract_tilde(&home.config_path()));
+        for p in &presets {
+            println!("       - {p}");
+        }
+    }
     println!("{} file(s) checked, {failed} with errors", files.len());
     Ok(if failed == 0 {
         ExitCode::SUCCESS
