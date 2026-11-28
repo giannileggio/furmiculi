@@ -25,7 +25,12 @@ pub const NTFY_TOKEN_ENV: &str = "FURMI_NTFY_TOKEN";
 pub const TELEGRAM_TOKEN_ENV: &str = "FURMI_TELEGRAM_BOT_TOKEN";
 
 /// How long one send may take, in seconds, connecting included.
-const MAX_SECONDS: u32 = 5;
+///
+/// Nothing waits for it — the send is a detached `curl` — so the only cost of a
+/// generous bound is a thread that lives a little longer. Five seconds was
+/// enough to lose real messages: two sends on this machine died with curl's
+/// exit 28 (timed out) while Telegram was merely slow to answer.
+const MAX_SECONDS: u32 = 20;
 /// Longest error text put in a message.
 const MAX_ERROR_CHARS: usize = 500;
 
@@ -540,7 +545,7 @@ mod tests {
         };
         let c = curl_config(&r);
         assert!(c.contains("data = \"a \\\"b\\\"\\nc\\\\d\"\n"));
-        assert!(c.contains("max-time = 5"));
+        assert!(c.contains("max-time = 20"));
     }
 
     #[test]
