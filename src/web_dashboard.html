@@ -3058,9 +3058,11 @@ const PROMPT_LOG_LINES = 60;
 
 // A log as plain text. An agent's tools print escape codes and carriage
 // returns that mean something on a terminal and only get in the way of a
-// prompt.
+// prompt: the same two kinds the runner strips, colour and cursor (CSI) and a
+// window title or link (OSC).
 function plainLog(text) {
   return text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")
+    .replace(/\x1b\][^\x07]*\x07/g, "")
     .replace(/\r\n/g, "\n").split("\n")
     .map(l => l.slice(l.lastIndexOf("\r") + 1)).join("\n");
 }

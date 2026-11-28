@@ -389,4 +389,42 @@ test.describe("with the runner off", () => {
     expect(token).not.toBe("");
     expect(text).not.toContain(token);
   });
+
+  test("Copy prompt drops terminal escapes and keeps a log's own code block inside its fence", async ({
+    page,
+    forge,
+  }) => {
+    forge.add("tricky-log", "Fix the parser");
+    fail(forge, "tricky-log", "exited with status 1");
+    const log = path.join(forge.home, "logs", "tricky-log.1.log");
+    fs.mkdirSync(path.dirname(log), { recursive: true });
+    // What an agent's tools really print: an OSC that renames the terminal
+    // window, colour around a line, then a code block of their own. The title
+    // and the colours are the terminal's, and the ``` must not close the fence
+    // the prompt opens for the log.
+    fs.writeFileSync(
+      log,
+      "\x1b]0;agent-window-title\x07\x1b[31mred-line\x1b[0m\n```\ncode-the-agent-printed\n```\n",
+    );
+
+    await openDashboard(page, forge);
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await tab(page, "archive").click();
+    await row(page, "tricky-log").click();
+    await page.locator("#task-body").getByRole("button", { name: "Output" }).click();
+    await expect(page.locator("#logs-body")).toContainText("code-the-agent-printed");
+    await page.keyboard.press("p");
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toContain("code-the-agent-printed");
+
+    const text = await page.evaluate(() => navigator.clipboard.readText());
+    expect(text).not.toContain("\x1b");
+    expect(text).not.toContain("agent-window-title");
+    expect(text).toContain("red-line"); // the line, without its colour
+    // Four backticks around a log whose own longest run is three, so its block
+    // stays inside the fence instead of ending it.
+    expect(text).toContain("\n````text\n");
+    expect(text).toContain("```\ncode-the-agent-printed\n```");
+  });
 });
