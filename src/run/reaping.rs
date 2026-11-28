@@ -266,32 +266,33 @@ fn status_code(line: &str) -> Option<u16> {
 
 /// The provider's own words from a line: pi's JSON mode puts the failure in
 /// an `errorMessage` field, and putting the whole JSON envelope in the task
-/// file would bury the one sentence that matters. Any other line is returned
-/// as it is.
+/// file would bury the one sentence that matters. The provider's sentence is
+/// often a JSON body of its own (`403: {"type":…,"message":"…"}`), so that
+/// `message` is taken too. Any other line is returned as it is.
 fn error_text(line: &str) -> String {
-    const KEY: &str = "\"errorMessage\":\"";
-    let Some(start) = line.find(KEY) else {
+    let Some(message) = error_message(line) else {
         return line.trim().to_string();
     };
-    let rest = &line[start + KEY.len()..];
-    // The value ends at the first unescaped quote.
-    let mut escaped = false;
-    let mut end = rest.len();
-    for (i, c) in rest.char_indices() {
-        match (escaped, c) {
-            (false, '\\') => escaped = true,
-            (false, '"') => {
-                end = i;
-                break;
-            }
-            _ => escaped = false,
-        }
+    let (prefix, body) = match message.split_once('{') {
+        Some((prefix, body)) => (prefix.trim(), Some(body)),
+        None => (message.trim(), None),
+    };
+    let sentence = body
+        .and_then(|body| serde_json::from_str::<serde_json::Value>(&format!("{{{body}")).ok())
+        .and_then(|v| v.get("message")?.as_str().map(str::to_string));
+    match sentence {
+        Some(sentence) => format!("{} {sentence}", prefix.trim()).trim().to_string(),
+        None => message.trim().to_string(),
     }
-    rest[..end]
-        .replace("\\\"", "\"")
-        .replace("\\\\", "\\")
-        .trim()
-        .to_string()
+}
+
+/// The `errorMessage` a pi JSON line carries, decoded. Parsing the line as
+/// JSON keeps every escape (`\n`, `\"`, `\u…`) the way the provider wrote it;
+/// a line that is not JSON has no field to read.
+fn error_message(line: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let inner = v.get("message").unwrap_or(&v);
+    inner.get("errorMessage")?.as_str().map(str::to_string)
 }
 
 /// The first provider-error line in `text`, with terminal escapes removed.
@@ -452,15 +453,26 @@ mod tests {
         // Exactly what pi records when the OpenCode Go subscription lapses:
         // the whole fleet of scheduled runs failed on this for 22 hours and
         // the archive only said "exited with status 1".
-        let log = concat!(
-            r#"{"type":"message_end","message":{"role":"assistant","#,
-            r#""errorMessage":"403: {\"type\":\"permission_error\",\"message\":\"#,
-            r#"An active OpenCode Go subscription is required to use OpenCode Go models.\"}"}}"#,
-            "\n",
+        // Built as JSON rather than typed out, so the fixture is the line pi
+        // really writes: a hand-escaped copy is easy to get wrong, and one
+        // stray backslash makes it a line no parser accepts.
+        let log = format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "errorMessage": r#"403: {"type":"permission_error","message":"An active OpenCode Go subscription is required to use OpenCode Go models."}"#,
+                }
+            })
         );
-        let line = provider_error_line(log).unwrap();
+        let line = provider_error_line(&log).unwrap();
         assert!(line.starts_with("403: "), "{line}");
         assert!(line.contains("subscription is required"), "{line}");
+        assert_eq!(
+            line, "403: An active OpenCode Go subscription is required to use OpenCode Go models.",
+            "the provider's sentence, not its JSON"
+        );
         assert!(
             !line.contains("message_end"),
             "the envelope is not the message: {line}"
