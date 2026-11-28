@@ -107,7 +107,7 @@ fall back to `[defaults]`):
 |--------|---------|
 | `--repo <path>` | The project to run in. Defaults to the git repo you're in. |
 | `--scratch` | No project: run in a new empty folder of its own (`{home}/scratch/<id>`, kept until `furmi clean`), for research or drafts. Nothing is committed. Not with `--repo`, `--branch`, `--worktree`, `--no-worktree` or `--on-finish`. |
-| `--id <id>` | File name and id: `a-z`, `0-9`, `-`. Default: derived from the title, else the prompt's first line. Pass a short descriptive one. |
+| `--id <id>` | File name and id: `a-z`, `0-9`, `-`, starting with a letter or digit. Default: derived from the title, else the prompt's first line. Pass a short descriptive one. |
 | `--title <text>` | One short line saying what the task is doing, shown in `{furmi} ls` and the dashboard. Always pass it. |
 | `--branch <name>` | Default `furmi/<id>`. |
 | `--worktree`, `--no-worktree` | Run in a dedicated git worktree, or directly in the repo checkout. The second only when the user asks: the agent edits the checkout they may be working in, and `on_finish` commits everything there. |
@@ -150,10 +150,11 @@ don't choose either for a command, so by default nothing is committed.
 
 For "every night", "each Monday" and the like, create a schedule with
 `{furmi} schedule add`. It takes the same options as `{furmi} add` (`--repo`,
-`--branch`, `--worktree`, `--no-worktree`, `--agent`, `--model`, `--mode`,
-`--on-finish`, `--retries`, `--retry-delay`, `--timeout`, `--id`, `--prompt` or
-the prompt on stdin) plus a required `--cron`, a 5-field expression in local
-time, and `--allow-overlap`. A schedule has no `--created-by`, `--at`, `--in`,
+`--title`, `--branch`, `--worktree`, `--no-worktree`, `--agent`, `--model`,
+`--mode`, `--on-finish`, `--retries`, `--retry-delay`, `--timeout`, `--id`,
+`--prompt` or the prompt on stdin) plus a required `--cron`, a 5-field
+expression in local time, and `--allow-overlap`; the tasks it queues copy its
+title, so pass one. A schedule has no `--created-by`, `--at`, `--in`,
 `--scratch`, `--draft` or `--template`: each firing sets `created_at` and
 `created_by: schedule:<id>` on the task it creates. The prompt is
 written as in step 2. `--run <command>` works here too, in place of the prompt.
@@ -192,7 +193,8 @@ previous task from the same schedule is still queued or running; add
 - **Pending and draft tasks**: edit the file and run
   `{furmi} validate <file>`. For a schedule use `{furmi} schedule edit <id>` with
   just the options to change (`--cron`, `--prompt`, `--run`, ...), `{furmi} schedule pause <id>`,
-  `resume <id>` and `delete <id>`; `{furmi} schedule ls` lists them.
+  `resume <id>`, `delete <id>` and `run <id>` (one run now, outside its slot);
+  `{furmi} schedule ls` lists them.
 - Reword a task's one-line title with `{furmi} title <id> "<text>"`: it works
   on waiting and finished tasks alike (an empty text takes it away), unlike
   the dashboard's edit form, which only opens a task that hasn't started.
@@ -205,7 +207,7 @@ previous task from the same schedule is still queued or running; add
   says why a task failed; `{furmi} logs <id>` prints its output.
 - Never edit fields furmi writes (`status`, `attempts`, `started_at`,
   `finished_at`, `exit_code`, `tmux_window`, `error`, `interruptions`,
-  `auto_requeues`, `created_at`, `remote`, `tokens_in`, `tokens_out`,
+  `auto_requeues`, `created_at`, `remote`, `tokens_in`, `tokens_out`, `pr_url`,
   `model_used`, and a schedule's `last_enqueued_at`), and never delete task
   files.
 - Don't edit `running` tasks, or anything in `{home}/archive/`, `logs/` or
@@ -216,10 +218,12 @@ previous task from the same schedule is still queued or running; add
 For a draft, give the id and say it will not run until it is queued: they can
 open it in the dashboard, edit it and press Queue, or you can run
 `{furmi} queue <id>` once they say so. Otherwise tell the user the task id, when
-it will start, and what happens when it
-finishes (e.g. "opens a PR on `furmi/fix-login-redirect`"). Tasks only run
-while the runner is up and not paused; `{furmi} status` says which, so check it
-before promising a start time. If the runner is down,
-say that `{furmi} start` starts it and serves the dashboard (`{furmi} start -d`
-leaves both running after the shell closes), that `{furmi} resume` lifts a pause,
-and that `{furmi} doctor` says what's missing when it won't run.
+it will start, and what happens when it finishes (e.g. "opens a PR on
+`furmi/fix-login-redirect`"). Tasks only run while the runner is up, not paused
+and under the day's token budget (see `[runner] daily_token_budget`);
+`{furmi} status` says where it stands, so check it before promising a start
+time. If the runner is down, say that `{furmi} start` starts it and serves the
+dashboard (`{furmi} start -d` leaves both running after the shell closes, and
+`{furmi} service systemd`, or `launchd` on macOS, prints units that keep them up
+across reboots), that `{furmi} pause` holds the queue and `{furmi} resume` lets
+it go again, and that `{furmi} doctor` says what's missing when it won't run.
