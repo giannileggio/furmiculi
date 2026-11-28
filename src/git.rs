@@ -513,7 +513,7 @@ pub fn on_finish(action: OnFinish, dir: &Path, id: &str, prompt: &str) -> Result
     // repository that has nowhere to push says so instead of going quiet. An
     // agent's own commit that a remote already has (a retried run whose push
     // landed, whose `gh` call then failed) costs no network call.
-    if committed || (has_work_of_its_own(dir)? && has_remote(dir)?) {
+    if committed || has_remote(dir)? {
         run(
             "git",
             dir,

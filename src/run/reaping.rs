@@ -212,8 +212,9 @@ const TRANSIENT_MARKERS: &[&str] = &[
 fn is_transient(line: &str) -> bool {
     if let Some(code) = status_code(line) {
         // 429 is a rate limit, 408 a timeout, 5xx the provider's own trouble:
-        // all of them can clear up on their own. 400, 401, 402, 403 and 404
-        // cannot — the same request would be refused the same way.
+        // all of them can clear up on their own. Every other 4xx — 400 through
+        // 404, and 405 to 499 too — cannot: the same request would be refused
+        // the same way.
         return code == 408 || code == 429 || code >= 500;
     }
     let lower = line.to_ascii_lowercase();
